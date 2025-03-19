@@ -291,6 +291,9 @@ public:
     //! Check whether this keypair is valid.
     bool IsValid() const { return !!m_keypair; }
 
+    static void ECC_Start();
+    static void ECC_Stop();
+
 private:
     KeyPair(const CKey& key, const uint256* merkle_root);
 
