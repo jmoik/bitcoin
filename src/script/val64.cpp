@@ -7,7 +7,7 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
-#include <endian.h>
+#include <compat/endian.h>
 #include <iostream>
 
 // For testing.
@@ -216,12 +216,12 @@ void Val64::swap(Val64 &other)
 
 void Val64::set(size_t index, uint64_t v)
 {
-    m_u64span[index] = htole64(v);
+    m_u64span[index] = htole64_internal(v);
 }
 
 uint64_t Val64::get(size_t index) const
 {
-    return le64toh(m_u64span[index]);
+    return le64toh_internal(m_u64span[index]);
 }
 
 uint64_t Val64::get_or_zero(size_t index) const
@@ -288,8 +288,8 @@ int Val64::cmp_span(const Span<le64_t> v1, const Span<le64_t> v2)
     for (ssize_t i = maxlen-1; i >= 0; --i) {
         uint64_t iv1, iv2;
 
-        iv1 = size_t(i) < v1.size() ? le64toh(v1[i]) : 0;
-        iv2 = size_t(i) < v2.size() ? le64toh(v2[i]) : 0;
+        iv1 = size_t(i) < v1.size() ? le64toh_internal(v1[i]) : 0;
+        iv2 = size_t(i) < v2.size() ? le64toh_internal(v2[i]) : 0;
         if (iv1 < iv2)
             return -1;
         if (iv1 > iv2)
@@ -320,13 +320,13 @@ bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
     for (i = 0; i < v2.size(); ++i) {
         uint64_t u1, u2, res;
 
-        u1 = le64toh(v1[i]);
-        u2 = le64toh(v2[i]);
+        u1 = le64toh_internal(v1[i]);
+        u2 = le64toh_internal(v2[i]);
 
         res = u1 + u2 + carry;
         if (res)
             nonzero_len = i + 1;
-        v1[i] = htole64(res);
+        v1[i] = htole64_internal(res);
         if (res > u1)
             carry = false;
         else {
@@ -337,8 +337,8 @@ bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
     /* Carry forwards if required (continue even if not overflowing,
      * to set nonzero_len) */
     while (i < v1.size()) {
-        uint64_t u1 = le64toh(v1[i] + carry);
-        v1[i] = htole64(u1);
+        uint64_t u1 = le64toh_internal(v1[i] + carry);
+        v1[i] = htole64_internal(u1);
         if (u1)
             nonzero_len = i + 1;
         carry = carry && (u1 == 0);
@@ -394,11 +394,11 @@ bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len
     for (i = 0; i < common_len; ++i) {
         uint64_t u1, u2, res;
 
-        u1 = le64toh(v1[i]);
-        u2 = le64toh(v2[i]);
+        u1 = le64toh_internal(v1[i]);
+        u2 = le64toh_internal(v2[i]);
 
         res = u1 - u2 - underflow;
-        v1[i] = htole64(res);
+        v1[i] = htole64_internal(res);
         if (res)
             nonzero_len = i + 1;
         if (res < u1)
@@ -423,8 +423,8 @@ bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len
     /* We have exhausted v2.  Underflow forwards if required: we keep
      * going even if we don't need to, to update nonzero_len. */
     while (i < v1.size()) {
-        uint64_t u1 = le64toh(v1[i]);
-        v1[i] = htole64(u1 - underflow);
+        uint64_t u1 = le64toh_internal(v1[i]);
+        v1[i] = htole64_internal(u1 - underflow);
         if (v1[i] != 0)
             nonzero_len = i + 1;
         underflow = (underflow && u1 == 0);
@@ -682,7 +682,7 @@ void Val64::mul_span(Span<le64_t> res,
     assert(res.size() >= src.size() + 1);
 
     // Calculate this * mul, into res.
-    res[0] = htole64(0);
+    res[0] = htole64_internal(0);
     for (size_t i = 0; i < src.size(); ++i) {
         uint64_t hi, lo, oldhi;
 
@@ -690,17 +690,17 @@ void Val64::mul_span(Span<le64_t> res,
         // has it (otherwise falls back to software)
         unsigned __int128 product;
 
-        product = (__int128)(le64toh(src[i])) * mul;
+        product = (__int128)(le64toh_internal(src[i])) * mul;
         hi = product >> 64;
         lo = product;
 
-        oldhi = le64toh(res[i]);
+        oldhi = le64toh_internal(res[i]);
         /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
          * gives an upper u64 which is < UINT64MAX. */
         if (__builtin_add_overflow(lo, oldhi, &lo))
             hi++;
-        res[i] = htole64(lo);
-        res[i+1] = htole64(hi);
+        res[i] = htole64_internal(lo);
+        res[i+1] = htole64_internal(hi);
     }
 }
 
