@@ -569,7 +569,7 @@ bool ECC_InitSanityCheck() {
 }
 
 /** Initialize the elliptic curve support. May not be called twice without calling ECC_Stop first. */
-static void ECC_Start() {
+void KeyPair::ECC_Start() {
     assert(secp256k1_context_sign == nullptr);
 
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
@@ -587,7 +587,7 @@ static void ECC_Start() {
 }
 
 /** Deinitialize the elliptic curve support. No-op if ECC_Start wasn't called first. */
-static void ECC_Stop() {
+void KeyPair::ECC_Stop() {
     secp256k1_context *ctx = secp256k1_context_sign;
     secp256k1_context_sign = nullptr;
 
@@ -598,10 +598,10 @@ static void ECC_Stop() {
 
 ECC_Context::ECC_Context()
 {
-    ECC_Start();
+    KeyPair::ECC_Start();
 }
 
 ECC_Context::~ECC_Context()
 {
-    ECC_Stop();
+    KeyPair::ECC_Stop();
 }
