@@ -8,7 +8,7 @@
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
-#include <secp256k1.h>
+#include <secp256k1/include/secp256k1.h>
 #include <script/script.h>
 #include <span.h>
 #include <test/util/transaction_utils.h>
@@ -91,7 +91,7 @@ static void VerifyNestedIfScript(benchmark::Bench& bench)
 
 static void VerifySchnorr(benchmark::Bench& bench)
 {
-    ECC_Start();
+    KeyPair::ECC_Start();
 
     // Key pair.
     CKey key;
@@ -116,12 +116,12 @@ static void VerifySchnorr(benchmark::Bench& bench)
         bool res = xpub.VerifySchnorr(hash, sigbytes);
         assert(res);
     });
-    ECC_Stop();
+    KeyPair::ECC_Stop();
 }
 
 static void VerifyTweakAdd(benchmark::Bench& bench)
 {
-    ECC_Start();
+    KeyPair::ECC_Start();
 
     // To be a fair test, the tweak and pubkey have to start serialized
     const unsigned char tweak[] = {
@@ -146,7 +146,7 @@ static void VerifyTweakAdd(benchmark::Bench& bench)
         res = secp256k1_ec_pubkey_tweak_add(secp256k1_context_static, &pubkey, tweak);
         assert(res);
     });
-    ECC_Stop();
+    KeyPair::ECC_Stop();
 }
 
 BENCHMARK(VerifyScriptBench, benchmark::PriorityLevel::HIGH);
