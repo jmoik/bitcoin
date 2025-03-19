@@ -48,6 +48,7 @@ add_executable(bench_bitcoin
   streams_findbyte.cpp
   strencodings.cpp
   util_time.cpp
+  val64.cpp
   verify_script.cpp
   xor.cpp
 )
