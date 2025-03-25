@@ -52,7 +52,7 @@ static void BenchEvalScript(benchmark::Bench& bench,
 		for (size_t i = 0; i < stack[1].size(); i++)
 			stack[1][i] = op1[i];
 
-        uint64_t varops_budget(40000000000000000U);
+        uint64_t* varops_budget = new uint64_t(40000000000000000U);
 
 		if (!EvalScript(stack, script, 0, checker,
 						SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget)) {

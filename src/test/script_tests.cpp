@@ -22,6 +22,7 @@
 #include <test/util/transaction_utils.h>
 #include <util/fs.h>
 #include <util/strencodings.h>
+#include <consensus/validation.h>
 
 #if defined(HAVE_CONSENSUS_LIB)
 #include <script/bitcoinconsensus.h>
@@ -1771,8 +1772,8 @@ static void BenchEvalScript(const CScript &script,
         for (size_t i = 0; i < stack[1].size(); i++)
             stack[1][i] += cooling++;
 
-        uint64_t varops_budget = 1e3;
-		if (!EvalScript(stack, script, 0, checker,
+            uint64_t* varops_budget = new uint64_t(40000000000000000U);
+            if (!EvalScript(stack, script, 0, checker,
 						SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget)) {
 			std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
 			assert(0);
