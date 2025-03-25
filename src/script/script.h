@@ -49,7 +49,7 @@ static const int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4000000;
 static const int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
 
 // Varops cost per byte hashed in Tapscript v2
-static const int VAROPS_COST_PER_BYTE_HASHED = 8;
+static const int VAROPS_COST_PER_BYTE_HASHED = 10;
 
 // BIP#ops: A per-transaction "varops budget" is determined by multiplying the
 // total transaction weight by the fixed factor 5200.

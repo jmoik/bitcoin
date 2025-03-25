@@ -443,7 +443,7 @@ static size_t total_stack_size(const std::vector<std::vector<unsigned char> >& s
     return total;
 }
     
-bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror)
+bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror, uint64_t* varops_budget)
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
@@ -473,8 +473,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
 
-    // FIXME: hand this in based on tx weight not MAX_BLOCK_WEIGHT!
-    uint64_t remaining_budget = UINT64_C(4000000) * VAROPS_BUDGET_PER_BYTE;
+    if (SigVersion::TAPSCRIPT_V2 == sigversion && !varops_budget) {
+        return set_error(serror, SCRIPT_ERR_VAROP_NULL);
+    }
+    
     try
     {
         for (; pc < pend; ++opcode_pos) {
@@ -1158,11 +1160,11 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                             break;
                         case OP_BOOLAND:
                             // Careful: don't shortcut varcost calc!
-                            v1 = Val64(!v1.is_zero(varcost) & !v2.is_zero(varcost));
+                            v1 = Val64(!v1.is_zero(varcost) && !v2.is_zero(varcost));
                             break;
                         case OP_BOOLOR:
                             // Careful: don't shortcut varcost calc!
-                            v1 = Val64(!v1.is_zero(varcost) | !v2.is_zero(varcost));
+                            v1 = Val64(!v1.is_zero(varcost) || !v2.is_zero(varcost));
                             break;
                         case OP_NUMEQUAL:
                             v1 = Val64(v1.cmp(v2, varcost) == 0 ? 1 : 0);
@@ -1255,8 +1257,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
                         // Careful: don't shortcut varcost calc!
-                        Val64 res = Val64((v1.cmp(v2, varcost) >= 0) &
-                                          (v1.cmp(v3, varcost) < 0) ? 1 : 0);
+                        Val64 res = Val64(((v1.cmp(v2, varcost) >= 0) &&
+                                          (v1.cmp(v3, varcost) < 0)) ? 1 : 0);
                         push64(stack, res);
                     } else {
                     // (x min max -- out)
@@ -1645,7 +1647,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
                         varcost = Val64::op_mul_varcost(v64a, v64b);
-                        if (varcost > remaining_budget)
+                        if (varcost > *varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         v64a = Val64::op_mul(v64a, v64b);
                         break;
@@ -1657,7 +1659,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
                         varcost = Val64::op_div_varcost(v64a, v64b);
-                        if (varcost > remaining_budget)
+                        if (varcost > *varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::op_div(v64a, v64b))
                             return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
@@ -1670,7 +1672,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
                         varcost = Val64::op_mod_varcost(v64a, v64b);
-                        if (varcost > remaining_budget)
+                        if (varcost > *varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::op_mod(v64a, v64b)) 
                             return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
@@ -1716,9 +1718,9 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
 
             // Budget limits
-            if (varcost > remaining_budget)
+            if (varcost > *varops_budget)
                 return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
-            remaining_budget -= varcost;
+            *varops_budget -= varcost;
         }
     }
     catch (...)
@@ -1732,10 +1734,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     return set_success(serror);
 }
 
-bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
+bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, uint64_t* varops_budget)
 {
     ScriptExecutionData execdata;
-    return EvalScript(stack, script, flags, checker, sigversion, execdata, serror);
+    return EvalScript(stack, script, flags, checker, sigversion, execdata, serror, varops_budget);
 }
 
 namespace {
@@ -2284,7 +2286,7 @@ bool GenericTransactionSignatureChecker<T>::CheckSequence(const CScriptNum& nSeq
 template class GenericTransactionSignatureChecker<CTransaction>;
 template class GenericTransactionSignatureChecker<CMutableTransaction>;
 
-static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CScript& exec_script, unsigned int flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror)
+static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CScript& exec_script, unsigned int flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror, uint64_t* varops_budget = nullptr)
 {
     std::vector<valtype> stack{stack_span.begin(), stack_span.end()};
 
@@ -2320,7 +2322,7 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
     }
 
     // Run the script interpreter.
-    if (!EvalScript(stack, exec_script, flags, checker, sigversion, execdata, serror)) return false;
+    if (!EvalScript(stack, exec_script, flags, checker, sigversion, execdata, serror, varops_budget)) return false;
 
     // Scripts inside witness implicitly require cleanstack behaviour
     if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
@@ -2380,7 +2382,7 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
 
-static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh)
+static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh, uint64_t* varops_budget = nullptr)
 {
     CScript exec_script; //!< Actually executed script (last stack item in P2WSH; implied P2PKH script in P2WPKH; leaf script in P2TR)
     Span stack{witness.stack};
@@ -2448,6 +2450,13 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 execdata.m_validation_weight_left_init = true;
                 return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::TAPSCRIPT, checker, execdata, serror);
             }
+            if ((control[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2) {
+                // Tapscript v2 (leaf version 0xc1)
+                exec_script = CScript(script.begin(), script.end());
+                execdata.m_validation_weight_left = ::GetSerializeSize(witness.stack) + VALIDATION_WEIGHT_OFFSET;
+                execdata.m_validation_weight_left_init = true;
+                return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::TAPSCRIPT_V2, checker, execdata, serror, varops_budget);
+            }
             if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION) {
                 return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION);
             }
@@ -2465,7 +2474,7 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
-bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror)
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror, uint64_t* varops_budget)
 {
     static const CScriptWitness emptyWitness;
     if (witness == nullptr) {
@@ -2505,7 +2514,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                 // The scriptSig must be _exactly_ CScript(), otherwise we reintroduce malleability.
                 return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED);
             }
-            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false)) {
+            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false, varops_budget)) {
                 return false;
             }
             // Bypass the cleanstack check at the end. The actual stack is obviously not clean
@@ -2550,7 +2559,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                     // reintroduce malleability.
                     return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED_P2SH);
                 }
-                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true)) {
+                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true, varops_budget)) {
                     return false;
                 }
                 // Bypass the cleanstack check at the end. The actual stack is obviously not clean

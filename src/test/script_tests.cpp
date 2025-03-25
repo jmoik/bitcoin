@@ -1771,8 +1771,9 @@ static void BenchEvalScript(const CScript &script,
         for (size_t i = 0; i < stack[1].size(); i++)
             stack[1][i] += cooling++;
 
+        uint64_t varops_budget = 1e3;
 		if (!EvalScript(stack, script, 0, checker,
-						SigVersion::TAPSCRIPT_V2, sdata, &serror)) {
+						SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget)) {
 			std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
 			assert(0);
 		}
