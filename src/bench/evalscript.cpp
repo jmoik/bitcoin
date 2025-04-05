@@ -52,8 +52,10 @@ static void BenchEvalScript(benchmark::Bench& bench,
 		for (size_t i = 0; i < stack[1].size(); i++)
 			stack[1][i] = op1[i];
 
+        uint64_t* varops_budget = new uint64_t(1e10);
+
 		if (!EvalScript(stack, script, 0, checker,
-						SigVersion::TAPSCRIPT_V2, sdata, &serror)) {
+						SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget)) {
 			std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
 			assert(0);
 		}
