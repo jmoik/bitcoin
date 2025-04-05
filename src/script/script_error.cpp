@@ -120,7 +120,9 @@ std::string ScriptErrorString(const ScriptError serror)
         case SCRIPT_ERR_SUB_UNDERFLOW:
             return "OP_SUB or OP_SUB1 result would be negative";
         case SCRIPT_ERR_VAROP_COUNT:
-            return "Too many large variable operations";
+            return "Varops count exceeded";
+        case SCRIPT_ERR_VAROP_NULL:
+            return "Varops must not be null in tapscript v2";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
             break;
