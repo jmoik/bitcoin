@@ -24,6 +24,7 @@
 #include <regex>
 #include <sstream>
 #include <vector>
+#include <ranges>
 
 static const char* DEFAULT_BENCH_FILTER = ".*";
 static constexpr int64_t DEFAULT_MIN_TIME_MS{10};
@@ -44,13 +45,13 @@ static void SetupBenchArgs(ArgsManager& argsman)
 }
 
 // Helpers
-static const std::vector<unsigned char> num_vec(size_t val)
+static std::vector<unsigned char> num_vec(size_t val)
 {
     Val64 v(val);
     return v.move_to_valtype();
 }
 
-static const std::vector<unsigned char> shift_vec(size_t bytes)
+static std::vector<unsigned char> shift_vec(size_t bytes)
 {
     return num_vec(bytes * 8);
 }
@@ -322,7 +323,7 @@ static std::vector<std::vector<unsigned char>> init_stack_within_operands()
     return stack;
 }
 
-static const struct varops_bench varops_benches[] = {
+static const struct std::vector<varops_bench> varops_benches = {
     // Base noop ones for comparison
     {
         "base", "4MBx2 noop", "",
@@ -343,6 +344,13 @@ static const struct varops_bench varops_benches[] = {
     {
         "base", "10kx2 noop", "",
         0, init_stack_two_10K_operands, {OP_NOP}, RESTORE_NONE,
+    },
+
+    // Schnorr, special for comparison (not a script evaluation!)
+    {
+        "Schnorr", "Schnorr sigcheck", "",
+        0, NULL, {},
+        RESTORE_NONE,
     },
 
     //
@@ -994,13 +1002,6 @@ static const struct varops_bench varops_benches[] = {
         {OP_HASH256},
         RESTORE_DROP_AND_DUP_4M,
     },        
-
-    // Schnorr, special for comparison (not a script evaluation!)
-    {
-        "Schnorr", "Schnorr sigcheck", "",
-        0, NULL, {},
-        RESTORE_NONE,
-    },
 };
 
 static const struct varops_bench &find_bench(const std::string &name)
@@ -1016,7 +1017,7 @@ static const struct varops_bench &find_bench(const std::string &name)
 static void run_schnorr(ankerl::nanobench::Bench &benches,
                         const struct varops_bench &bench)
 {
-    ECC_Start();
+    KeyPair::ECC_Start();
 
     // Key pair.
     CKey key;
@@ -1043,7 +1044,7 @@ static void run_schnorr(ankerl::nanobench::Bench &benches,
         assert(res);
     });
 
-    ECC_Stop();
+    KeyPair::ECC_Stop();
 }
 
 static const ankerl::nanobench::Result *find_result(const ankerl::nanobench::Bench &benches,
@@ -1053,7 +1054,7 @@ static const ankerl::nanobench::Result *find_result(const ankerl::nanobench::Ben
         if (r.config().mBenchmarkName == name)
             return &r;
     }
-    return NULL;
+    return nullptr;
 }
 
 struct ByteSize {
@@ -1062,10 +1063,10 @@ struct ByteSize {
 
 struct VaropsCost {
     CScript &m_script;
-    size_t m_total_cost;
+    size_t m_total_cost{0};
     size_t m_bytes;
 
-    explicit VaropsCost(CScript &script, size_t bytes = 0) : m_script(script), m_total_cost(0), m_bytes(bytes) {}
+    explicit VaropsCost(CScript &script, size_t bytes = 0) : m_script(script), m_bytes(bytes) {}
     uint64_t get_bytes() const { assert(m_bytes); return m_bytes; }
 
     VaropsCost& operator<<(struct ByteSize size)
@@ -1326,7 +1327,7 @@ static void append_restore(VaropsCost &vcost, enum restore_style restore_style)
         return;
     }
 }
-    
+
 static void run_bench(ankerl::nanobench::Bench &benches,
                       std::map<std::string, size_t> &varop_costs_map,
                       const struct varops_bench &bench,
@@ -1372,18 +1373,18 @@ static void run_bench(ankerl::nanobench::Bench &benches,
     // This uses weird sizes.
     if (bench.name != "OP_UPSHIFT")
         assert(vcost.m_total_cost == bench.varops_cost);
-
+        
     // Big enough script that a bit of variance in exact length doesn't matter.
     if (!micro) {
-        while (script.size() < 10000) {
+        while (script.size() < 1000) {
             append_restore(vcost, bench.restore_style);
-            for (auto opcode: bench.opcodes)
+            for (auto opcode : bench.opcodes) {
                 vcost << opcode;
+            }
         }
         append_restore(vcost, bench.restore_style);
     }
-    varop_costs_map[bench.name] = vcost.m_total_cost;
-
+        
     if (list_only) {
         std::cout << bench.name << std::endl;
         return;
@@ -1392,12 +1393,18 @@ static void run_bench(ankerl::nanobench::Bench &benches,
     BaseSignatureChecker checker;
     ScriptExecutionData sdata;
     ScriptError serror;
+    uint64_t* varops_budget = new uint64_t(FOUR_MB * VAROPS_BUDGET_PER_BYTE * 1e6);  // arbitrary large (much larger than single block)
+    uint64_t initial_budget = *varops_budget;
+    uint64_t cost = 0;
     benches.run(bench.name, [&] {
         std::vector<std::vector<unsigned char> > stack = master_stack;
         if (!EvalScript(stack, script, 0, checker,
-                        SigVersion::TAPSCRIPT_V2, sdata, &serror)) {
+                        SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget)) {
             std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
             assert(0);
+        }
+        if (*varops_budget != initial_budget && cost == 0) {
+            cost = initial_budget - *varops_budget;
         }
 
         // Empty stack manually for better comparison!
@@ -1405,6 +1412,9 @@ static void run_bench(ankerl::nanobench::Bench &benches,
             stack.pop_back();
         }
     });
+
+    // varop_costs_map[bench.name] = vcost.m_total_cost;
+    varop_costs_map[bench.name] = cost;
 }
 
 static bool per_varop_time(const struct varops_bench &b,
@@ -1421,8 +1431,9 @@ static bool per_varop_time(const struct varops_bench &b,
     if (!base)
         return false;
 
-    time = (r->median(ankerl::nanobench::Result::Measure::elapsed)
-            - base->median(ankerl::nanobench::Result::Measure::elapsed)) / varop_costs_map[b.name];
+    // time = (r->median(ankerl::nanobench::Result::Measure::elapsed)
+            // - base->median(ankerl::nanobench::Result::Measure::elapsed)) / varop_costs_map[b.name];
+    time = r->median(ankerl::nanobench::Result::Measure::elapsed) / varop_costs_map[b.name];  // base is negligible small
     return true;
 }
 
@@ -1493,16 +1504,16 @@ int main(int argc, char** argv)
     bool micro = argsman.GetBoolArg("-micro", false);
 
     ankerl::nanobench::Bench benches;
-
+    
     benches.performanceCounters(100);
     if (!argsman.GetBoolArg("-verbose", false))
         benches.output(nullptr);
-
+    
     if (min_time > 0) {
         std::chrono::nanoseconds min_time_ns = std::chrono::milliseconds(min_time);
         benches.minEpochTime(min_time_ns / benches.epochs());
     }
-
+    
     if (argsman.GetBoolArg("-sanity-check", false)) {
         benches.epochs(1).epochIterations(1);
     } else {
@@ -1512,11 +1523,14 @@ int main(int argc, char** argv)
         else
             benches.warmup(1);
     }
-
+    
     std::map<std::string, size_t> varop_costs_map;
-    for (auto &b: varops_benches)
-        run_bench(benches, varop_costs_map, b, list_only, reFilter, micro);
-
+    int i = 0;
+    for (auto &bench : varops_benches) {
+        std::cout << "Running bench " << bench.name << " (" << ++i << "/" << varops_benches.size() << ")" << std::endl;
+        run_bench(benches, varop_costs_map, bench, list_only, reFilter, micro);
+    }
+    
     fs::path csv = argsman.GetPathArg("-output-csv");
     if (!csv.empty()) {
         std::ofstream fout{csv};
@@ -1525,37 +1539,59 @@ int main(int argc, char** argv)
             exit(1);
         }
         
-        fout << "# Class, name, basis, time, reltime, varops, reltime_per_varop, "
-             << "(version " GIT_VERSION ")"
-             << std::endl;
-
+        fout << "# Class, name, basis, time, reltime, varops, time_per_varop, time_per_block"
+        << std::endl;
+        
         for (auto &b: varops_benches) {
-            const ankerl::nanobench::Result *r = find_result(benches, b.name);
-            if (!r)
+            const ankerl::nanobench::Result *result = find_result(benches, b.name);
+            if (!result)
                 continue;
+
+            if (b.name == "Schnorr sigcheck")
+                continue;
+
             const ankerl::nanobench::Result *base = find_result(benches, b.comparison_benchname);
             double time, reltime, per_vop_time;
-
-            time = r->median(ankerl::nanobench::Result::Measure::elapsed);
+            
+            time = result->median(ankerl::nanobench::Result::Measure::elapsed);
             reltime = time - (base ? base->median(ankerl::nanobench::Result::Measure::elapsed) : 0.0);
-
+            
             fout << b.classname << ","
-                 << b.name << ","
-                 << b.comparison_benchname << ","
-                 << time << ",";
+            << b.name << ","
+            << b.comparison_benchname << ","
+            << time << ",";
             if (base)
                 fout << reltime << ",";
             else 
                 fout << ",";
-
+            
             fout << varop_costs_map[b.name] << ",";
-            if (per_varop_time(b, benches, varop_costs_map, per_vop_time))
+            if (per_varop_time(b, benches, varop_costs_map, per_vop_time)) {
                 fout << per_vop_time;
+                fout << ",";
+                fout << per_vop_time * VAROPS_BUDGET_PER_BYTE * MAX_BLOCK_WEIGHT;
+            }
+            else {
+                fout << ",";
+            }
+
             fout << std::endl;
         }
-    }
 
-    const struct varops_bench *worst = NULL;
+        const ankerl::nanobench::Result *schnorr = find_result(benches, "Schnorr sigcheck");
+        if (schnorr) {
+            fout << "schnorr" << ","
+            << "schnorr" << ","
+            << "schnorr" << ","
+            << ",";
+            fout << ",,,";
+            fout << schnorr->median(ankerl::nanobench::Result::Measure::elapsed) * 80000;
+            fout << std::endl;
+        }
+
+    }
+    
+    const struct varops_bench *worst = nullptr;
     double worst_time = -1000000000.0;
 
     // Get the worst.
@@ -1572,11 +1608,11 @@ int main(int argc, char** argv)
         std::cout << "Slowest per-varop is "
                   << worst->name
                   << " with a per-varop time of "
-                  << worst_time * 1000000000.0
+                  << worst_time * 1e9
                   << "nsec"
                   << std::endl;
         std::cout << "Worst time for an entire block: "
-                  << worst_time * 5200 * 4000000
+                  << worst_time * VAROPS_BUDGET_PER_BYTE * MAX_BLOCK_WEIGHT
                   << " seconds"
                   << std::endl;
     }
