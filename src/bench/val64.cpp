@@ -47,8 +47,6 @@ static void Val64UpShiftSmall(benchmark::Bench& bench)
     bench.run([&] {
         bool ok = Val64::op_upshift(v1, v2, size + n, varcost);
         assert(ok);
-        ok = Val64::op_upshift(v1, v2, size + n, varcost);
-        assert(ok);
         n++;
     });
 }
