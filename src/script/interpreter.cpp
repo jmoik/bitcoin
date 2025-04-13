@@ -1717,10 +1717,12 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             if (largest_element_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
 
-            // Budget limits
-            if (varcost > *varops_budget)
+            if (varops_budget) {
+                // Budget limits
+                if (varcost > *varops_budget)
                 return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
-            *varops_budget -= varcost;
+                *varops_budget -= varcost;
+            }
         }
     }
     catch (...)
