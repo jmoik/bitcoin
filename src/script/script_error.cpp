@@ -33,6 +33,10 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Operation limit exceeded";
         case SCRIPT_ERR_STACK_SIZE:
             return "Stack size limit exceeded";
+        case SCRIPT_ERR_TOTAL_STACK_SIZE:
+            return "Total stack size limit exceeded";
+        case SCRIPT_ERR_STACK_ELEMENT_SIZE:
+            return "Stack element size limit exceeded";
         case SCRIPT_ERR_SIG_COUNT:
             return "Signature count negative or greater than pubkey count";
         case SCRIPT_ERR_PUBKEY_COUNT:

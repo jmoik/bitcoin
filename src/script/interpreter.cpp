@@ -1710,12 +1710,12 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             size_t largest_element_size = 0;
             if (total_stack_size(stack, largest_element_size) +
                 total_stack_size(altstack, largest_element_size) > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
-                return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+                return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
             }
 
             // Note: with all ops so far, violator would have to be top of stack
             if (largest_element_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)
-                return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+                return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
 
             if (varops_budget) {
                 // Budget limits
