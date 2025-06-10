@@ -1059,6 +1059,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     //    fEqual = !fEqual;
                     popstack(stack);
                     popstack(stack);
+                    varcost += std::max(vch1.size(), vch2.size());
                     stack.push_back(fEqual ? vchTrue : vchFalse);
                     if (opcode == OP_EQUALVERIFY)
                     {
