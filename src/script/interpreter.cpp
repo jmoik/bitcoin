@@ -439,14 +439,16 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     {
         for (; pc < pend; ++opcode_pos) {
             bool fExec = vfExec.all_true();
-            size_t varcost = 0;
             //
             // Read instruction
             //
             if (!script.GetOp(pc, opcode, vchPushValue))
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             if (varops_budget) {
-                varcost += Varops::GetCost(opcode, stack);
+                *varops_budget -= Varops::GetCost(opcode, stack);
+                if (*varops_budget < 0) {
+                    return set_error(serror, SCRIPT_ERR_VAROPS_COUNT);
+                }
             }
             if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
@@ -1242,12 +1244,6 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             if (stack.size() + altstack.size() > MAX_STACK_SIZE)
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
 
-            if (varops_budget) {
-                *varops_budget -= varcost;
-                if (*varops_budget < 0) {
-                    return set_error(serror, SCRIPT_ERR_VAROPS_COUNT);
-                }
-            }
         }
     }
     catch (...)
