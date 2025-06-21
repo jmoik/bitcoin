@@ -115,6 +115,7 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   script/interpreter.cpp
   script/script.cpp
   script/script_error.cpp
+  script/varops.cpp
   uint256.cpp
 )
 target_link_libraries(bitcoin_consensus

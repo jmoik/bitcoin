@@ -25,32 +25,42 @@
 #include <vector>
 
 // Maximum number of bytes pushable to the stack
-static const unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
+static constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
 
 // Maximum number of non-push operations per script
-static const int MAX_OPS_PER_SCRIPT = 201;
+static constexpr int MAX_OPS_PER_SCRIPT = 201;
 
 // Maximum number of public keys per multisig
-static const int MAX_PUBKEYS_PER_MULTISIG = 20;
+static constexpr int MAX_PUBKEYS_PER_MULTISIG = 20;
 
 /** The limit of keys in OP_CHECKSIGADD-based scripts. It is due to the stack limit in BIP342. */
 static constexpr unsigned int MAX_PUBKEYS_PER_MULTI_A = 999;
 
 // Maximum script length in bytes
-static const int MAX_SCRIPT_SIZE = 10000;
+static constexpr int MAX_SCRIPT_SIZE = 10000;
 
 // Maximum number of values on script interpreter stack
-static const int MAX_STACK_SIZE = 1000;
+static constexpr int MAX_STACK_SIZE = 1000;
+
+// BIP#ops: A per-transaction "varops budget" is determined by multiplying the
+// total transaction weight by the fixed factor 5200.
+static constexpr int VAROPS_BUDGET_PER_BYTE = 5200;
+
+// Varops cost per signature in Tapscript v2
+static constexpr int VAROPS_COST_SIGOP = 50 * VAROPS_BUDGET_PER_BYTE;
+
+// Varops cost per byte hashed in Tapscript v2
+static constexpr int VAROPS_COST_PER_BYTE_HASHED = 10;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
-static const unsigned int LOCKTIME_THRESHOLD = 500000000; // Tue Nov  5 00:53:20 1985 UTC
+static constexpr unsigned int LOCKTIME_THRESHOLD = 500000000; // Tue Nov  5 00:53:20 1985 UTC
 
 // Maximum nLockTime. Since a lock time indicates the last invalid timestamp, a
 // transaction with this lock time will never be valid unless lock time
 // checking is disabled (by setting all input sequence numbers to
 // SEQUENCE_FINAL).
-static const uint32_t LOCKTIME_MAX = 0xFFFFFFFFU;
+static constexpr uint32_t LOCKTIME_MAX = 0xFFFFFFFFU;
 
 // Tag for input annex. If there are at least two witness elements for a transaction input,
 // and the first byte of the last element is 0x50, this last element is called annex, and
