@@ -123,6 +123,7 @@ add_executable(test_bitcoin
   validation_flush_tests.cpp
   validation_tests.cpp
   validationinterface_tests.cpp
+  varops_tests.cpp
   versionbits_tests.cpp
 )
 
@@ -137,6 +138,7 @@ target_json_data_sources(test_bitcoin
   data/sighash.json
   data/tx_invalid.json
   data/tx_valid.json
+  data/varops_tests.json
 )
 target_raw_data_sources(test_bitcoin NAMESPACE test::data
   data/asmap.raw
