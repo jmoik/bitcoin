@@ -354,8 +354,8 @@ void Val64::op_add(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_ADD
-    // |Greater of two operand lengths * 3
-    varcost += v1.m_realsize * 3;
+    // |Greater of two operand lengths * 4
+    varcost += v1.m_realsize * 4;
 
     size_t nonzero_len;
     bool carry = add_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -439,8 +439,8 @@ bool Val64::op_sub(Val64 &v1, const Val64 &v2, size_t &varcost)
 {
     // BIP#ops:
     // |OP_SUB
-    // |Greater of two operand lengths * 2
-    varcost += std::max(v1.m_realsize, v2.m_realsize) * 2;
+    // |Greater of two operand lengths * 3
+    varcost += std::max(v1.m_realsize, v2.m_realsize) * 3;
     size_t nonzero_len;
 
     bool underflow = sub_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -924,18 +924,18 @@ size_t Val64::op_mul_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_MUL
-    // |Length of A + length of B + (length of A + 7) / 8 * (length of B) * 4
+    // |Length of A + length of B + (length of A + 7) / 8 * (length of B) * 6
     //  (BEWARE OVERFLOW)
-    return v1.m_realsize + v2.m_realsize + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * 4;
+    return v1.m_realsize + v2.m_realsize + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * 6;
 }
 
 size_t Val64::op_div_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_DIV
-    // |Length of A * 9 + length of B * 2 + (length of A)^2 / 4  (BEWARE OVERFLOW)
+    // |Length of A * 9 + length of B * 2 + (length of A)^2 / 3  (BEWARE OVERFLOW)
     return v1.m_realsize * 9 + v2.m_realsize * 2
-        + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) / 4;
+        + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) / 3;
 }
 
 size_t Val64::op_mod_varcost(const Val64 &v1, const Val64 &v2)
