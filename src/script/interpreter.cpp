@@ -1720,8 +1720,9 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 
             if (varops_budget) {
                 // Budget limits
-                if (varcost > *varops_budget)
-                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                if (varcost > *varops_budget) {
+                    return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                }
                 *varops_budget -= varcost;
             }
         }
