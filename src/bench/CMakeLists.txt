@@ -69,21 +69,6 @@ target_link_libraries(bench_varops
   Boost::headers
 )
 
-add_executable(new_bench_varops
-  new_bench_varops.cpp
-  bench_varops_helpers.h
-  bench.cpp
-  nanobench.cpp
-)
-
-target_link_libraries(new_bench_varops
-  core_interface
-  test_util
-  bitcoin_node
-  bitcoin_wallet
-  Boost::headers
-)
-
 include(TargetDataSources)
 target_raw_data_sources(bench_bitcoin NAMESPACE benchmark::data
   data/block413567.raw
