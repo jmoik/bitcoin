@@ -973,7 +973,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     if (opcode == OP_ROLL) {
                         // rotate start, newstart, end.
-                        std::rotate(stack.end()-n-1, stack.end()-n, stack.end());
+                        auto element = std::move(stack[stack.size() - n - 1]);
+                        stack.erase(stack.begin() + stack.size() - n - 1); 
+                        stack.push_back(std::move(element)); 
+                        varcost += n * 30;
                     } else {
                         // Keep safe with references
                         stack.reserve(stack.size() + 1);
@@ -1201,7 +1204,18 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         default:
                             assert(!"invalid opcode"); break;
                         }
+                    if (opcode == OP_NUMEQUALVERIFY)
+                    {
+                        if (v1.is_zero(varcost)) {
+                            return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
+                        }
+                        else {
+                            v1 = Val64(1);
+                        }
+                    }
+                    else {
                         push64(stack, v1);
+                    }
                     } else {
                     // Not TAPSCRIPT_V2:
                     // (x1 x2 -- out)
