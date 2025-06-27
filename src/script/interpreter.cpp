@@ -470,6 +470,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     int nOpCount = 0;
     bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
     uint32_t opcode_pos = 0;
+    std::optional<uint64_t> multiop;
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
 
@@ -519,6 +520,172 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             // With SCRIPT_VERIFY_CONST_SCRIPTCODE, OP_CODESEPARATOR in non-segwit script is rejected even in an unexecuted branch
             if (opcode == OP_CODESEPARATOR && sigversion == SigVersion::BASE && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
                 return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
+
+            if (multiop) {
+                valtype result;
+
+                // If we allow OP_MULTI push, then this would not apply.
+                if (multiop > stack.size())
+                    return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                switch (opcode)
+                {
+                case OP_CAT: {
+                    // Slighly more efficient to allocate up-front.
+                    size_t total_size = 0;
+                    for (int i = 0; i < multiop; i++) {
+                        total_size += stacktop(-1 - i).size();
+                    }
+                    result.reserve(total_size);
+                    for (int i = 0; i < multiop; i++) {
+                        const valtype &src = stacktop(-1 - i);
+                        result.insert(result.end(), src.begin(), src.end());
+                    }
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result);
+                }
+                break;
+
+                case OP_ADD: {
+                    Val64 total;
+                    for (int i = 0; i < multiop; i++) {
+                        Val64 v(stacktop(-1 - i));
+                        Val64::op_add(total, v, varcost);
+                    }
+                    result = total.move_to_valtype();
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result);
+                }
+                break;
+
+                case OP_SHA256: {
+                    CSHA256 h;
+
+                    for (int i = 0; i < multiop; i++) {
+                        const valtype &src = stacktop(-1 - i);
+                        h.Write(src.data(), src.size());
+                        varcost += src.size() * VAROPS_COST_PER_BYTE_HASHED; 
+                    }
+                    result.resize(32);
+                    h.Finalize(result.data());
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result);
+                }
+                break;
+
+                case OP_DUP: {
+                    for (int i = 0; i < multiop; i++) {
+                        const valtype &src = stacktop(-1 - i);
+                        varcost += src.size();
+                    }
+                    stack.insert(stack.end(), stack.end() - *multiop, stack.end());
+                }
+                break;
+
+                case OP_DROP:
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    break;
+
+                case OP_EQUAL: {
+                    if (multiop < 1) 
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype &base = stacktop(-1);
+                    bool fEqual = true;
+                    // Cannot overflow, multiop limited to stack size, base limited to largest element size
+                    varcost += base.size() * *multiop;
+                    for (int i = 1; i < multiop; i++) {
+                        const valtype &src = stacktop(-1 - i);
+                        if (src != base)
+                            fEqual = false;
+                    }
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(fEqual ? vchTrue : vchFalse);
+                }
+                break;
+                    
+                case OP_MIN:
+                case OP_MAX: {
+                    if (multiop == 0) {
+                        // For 0 elements, push 0 (neutral element)
+                        result = Val64(0).move_to_valtype();
+                        stack.push_back(result);
+                        break;
+                    }
+                    
+                    Val64 extremum(stacktop(-1));
+                    for (int i = 1; i < multiop; i++) {
+                        Val64 v(stacktop(-1 - i));
+                        int cmp = extremum.cmp(v, varcost);
+                        if ((opcode == OP_MIN && cmp > 0) || (opcode == OP_MAX && cmp < 0)) {
+                            extremum = std::move(v);
+                        }
+                    }
+                    result = extremum.move_to_valtype();
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result);
+                }
+                break;
+
+                case OP_AND:
+                case OP_OR: {
+                    if (multiop == 0) {
+                        // For 0 elements: AND returns 0 (neutral), OR returns 0 (neutral)
+                        // Since we don't have elements to operate on, return empty result
+                        result = Val64(0).move_to_valtype();
+                        stack.push_back(result);
+                        break;
+                    }
+
+                    Val64 accumulator(stacktop(-1));
+                    for (int i = 1; i < multiop; i++) {
+                        Val64 v(stacktop(-1 - i));
+                        if (opcode == OP_AND) {
+                            Val64::op_and(accumulator, v, varcost);
+                        } else {
+                            Val64::op_or(accumulator, v, varcost);
+                        }
+                    }
+                    result = accumulator.move_to_valtype();
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result);
+                }
+                break;
+
+                case OP_BOOLAND:
+                case OP_BOOLOR: {
+                    if (multiop == 0) {
+                        // For 0 elements: BOOLAND returns true (all true), BOOLOR returns false (none true)
+                        Val64 neutral_val = (opcode == OP_BOOLAND) ? Val64(1) : Val64(0);
+                        result = neutral_val.move_to_valtype();
+                        stack.push_back(result);
+                        break;
+                    }
+
+                    bool result_bool = (opcode == OP_BOOLAND) ? true : false;
+                    for (int i = 0; i < multiop; i++) {
+                        Val64 v(stacktop(-1 - i));
+                        bool is_nonzero = !v.is_zero(varcost);
+                        
+                        if (opcode == OP_BOOLAND) {
+                            result_bool = result_bool && is_nonzero;
+                        } else { // OP_BOOLOR
+                            result_bool = result_bool || is_nonzero;
+                        }
+                    }
+                    stack.erase(stack.end() - *multiop, stack.end());
+                    stack.push_back(result_bool ? vchTrue : vchFalse);
+                }
+                break;
+
+                default:
+                    // Unknown opcodes in multiop context succeed
+                    // No operation is performed, stack remains unchanged
+                    break;
+                }
+                // We only apply multi once.
+                multiop.reset();
+                goto check_limits;
+            }
 
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
                 if (fRequireMinimal && !CheckMinimalPush(vchPushValue, opcode)) {
@@ -660,7 +827,17 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     break;
                 }
 
-                case OP_NOP1: case OP_NOP4: case OP_NOP5:
+                case OP_NOP4: // OP_MULTI
+                    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+                        Val64 v64;
+                        if (!pop64(stack, v64))
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        // You can't specify more than there are stack elements
+                        multiop = v64.to_u64_ceil(MAX_STACK_SIZE + 1, varcost);
+                        break;
+                    }
+                    [[fallthrough]];
+                case OP_NOP1: case OP_NOP5:
                 case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10:
                 {
                     if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS)
@@ -1717,6 +1894,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             }
 
+          check_limits:
             // Size limits
             if (stack.size() + altstack.size() > MAX_STACK_SIZE)
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
