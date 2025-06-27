@@ -40,7 +40,10 @@ static constexpr unsigned int MAX_PUBKEYS_PER_MULTI_A = 999;
 static constexpr int MAX_SCRIPT_SIZE = 10000;
 
 // Maximum number of values on script interpreter stack
-static constexpr int MAX_STACK_SIZE = 32000;
+static constexpr int MAX_STACK_SIZE = 1000;
+
+// Maximum number of values on script interpreter stack (Tapscript v2)
+static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32000;
 
 // BIP#ops: The individual stack entry limit of 520 bytes is increased to the
 // total block weight (4000000) bytes.  An additional gross limit of twice

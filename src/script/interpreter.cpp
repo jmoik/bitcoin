@@ -833,7 +833,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         if (!pop64(stack, v64))
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         // You can't specify more than there are stack elements
-                        multiop = v64.to_u64_ceil(MAX_STACK_SIZE + 1, varcost);
+                        multiop = v64.to_u64_ceil(MAX_TAPSCRIPT_V2_STACK_SIZE + 1, varcost);
                         break;
                     }
                     [[fallthrough]];
@@ -1896,8 +1896,11 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 
           check_limits:
             // Size limits
-            if (stack.size() + altstack.size() > MAX_STACK_SIZE)
+            if (stack.size() + altstack.size() > (sigversion == SigVersion::TAPSCRIPT_V2 
+                              ? MAX_TAPSCRIPT_V2_STACK_SIZE 
+                              : MAX_STACK_SIZE)) {
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+            }
 
             // This is impossible to violate prior to tapscript v2.
             size_t largest_element_size = 0;
