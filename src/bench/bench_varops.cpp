@@ -29,9 +29,9 @@
 #include <sstream>
 
 namespace Timing {
-    constexpr int EPOCHS = 1;
+    constexpr int EPOCHS = 5;
     constexpr int MIN_EPOCH_ITERATIONS = 1;
-    constexpr int MIN_EPOCH_TIME_MS = 10;
+    constexpr int MIN_EPOCH_TIME_MS = 0;
     constexpr int WARMUP = 0;
 }
 
@@ -161,20 +161,33 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     uint64_t varops_budget_per_byte = VAROPS_BUDGET_PER_BYTE;
     uint64_t block_size = MAX_BLOCK_WEIGHT;
 
-    uint64_t* varops_budget = new uint64_t(block_size * varops_budget_per_byte);
-    uint64_t initial_budget = *varops_budget;
+    const uint64_t original_varops_budget = block_size * varops_budget_per_byte;
+    uint64_t working_budget = original_varops_budget;
     bool result = false;
 
-    bench.run(test_case.name, [&] {
-        result = EvalScript(test_case.stack, test_case.script, 0, checker,
-                        SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget);
+    // Pre-create a pool of stack copies to eliminate copy overhead from benchmark timing
+    const size_t stack_pool_size = Timing::EPOCHS;
+    size_t stack_index = 0;
+    std::vector<std::vector<std::vector<unsigned char>>> stack_pool;
+    stack_pool.reserve(stack_pool_size);
     
+    for (size_t i = 0; i < stack_pool_size; ++i) {
+        stack_pool.push_back(test_case.stack);
+    }
+
+    bench.run(test_case.name, [&] {
+        std::vector<std::vector<unsigned char>>& working_stack = stack_pool[stack_index];
+        working_budget = original_varops_budget;
+        result = EvalScript(working_stack, test_case.script, 0, checker,
+                        SigVersion::TAPSCRIPT_V2, sdata, &serror, &working_budget);
+
+        ++stack_index;
     });
     // if (!result) {
     //     printf(" (%s) \n", ScriptErrorString(serror).c_str());
     // }
-    if (*varops_budget != initial_budget && test_case.varops_consumed == 0) {
-        test_case.varops_consumed = initial_budget - *varops_budget;
+    if (working_budget != original_varops_budget && test_case.varops_consumed == 0) {
+        test_case.varops_consumed = original_varops_budget - working_budget;
     }
     // print if no varops_consumed
     if (test_case.varops_consumed == 0) {
@@ -183,6 +196,9 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
 }
 
 static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::string& name) {
+    bench.epochs(5);
+    bench.minEpochTime(std::chrono::seconds(1));
+
     KeyPair::ECC_Start();
 
     // Create key pair
@@ -205,6 +221,9 @@ static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::stri
     });
 
     KeyPair::ECC_Stop();
+
+    bench.epochs(Timing::EPOCHS);
+    bench.minEpochTime(std::chrono::milliseconds(Timing::MIN_EPOCH_TIME_MS));
 }
 
 
