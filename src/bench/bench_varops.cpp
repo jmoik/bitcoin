@@ -49,7 +49,7 @@ struct StackTemplate {
     ValuePattern pattern;
 };
 
-std::vector<StackTemplate> getStackTemplates() {
+std::vector<StackTemplate> GetStackTemplates() {
     return {
         {"1Bx2", 1, 2, ValuePattern::IDENTICAL},
         {"10Bx2", 10, 2, ValuePattern::IDENTICAL},
@@ -59,27 +59,20 @@ std::vector<StackTemplate> getStackTemplates() {
         {"100KBx2", 100000, 2, ValuePattern::IDENTICAL},
         {"1MBx2", 1000000, 2, ValuePattern::IDENTICAL},
         {"2MBx2", 2000000, 2, ValuePattern::IDENTICAL},
-        {"4MBx2", 4000000, 2, ValuePattern::IDENTICAL},
     };
 }
 
 namespace ScriptConfig {
-    
-    // Operations that should skip large inputs due to size limits
-    inline std::map<std::string, std::vector<std::string>> getSizeLimitedOperations() {
-        return {
+    inline bool ShouldSkipCase(const std::string& opname, const std::string& stack_name) {
+        static const std::map<std::string, std::vector<std::string>> size_limited_operations = {
             {"OP_MUL", {"1MBx2", "2MBx2", "4MBx2"}},  // Quadratic cost - only skip very large inputs
             {"OP_DIV", {"1MBx2", "2MBx2", "4MBx2"}},  // Quadratic cost - only skip very large inputs
             {"OP_RIPEMD160", {"1KBx2", "10KBx2", "100KBx2", "1MBx2", "2MBx2", "4MBx2"}},  // 520-byte limit
             {"OP_SHA1", {"1KBx2", "10KBx2", "100KBx2", "1MBx2", "2MBx2", "4MBx2"}}       // 520-byte limit
         };
-    }
-    
-    // Helper function to check if operation should skip large inputs
-    inline bool shouldSkipLargeInput(const std::string& opname, const std::string& stack_name) {
-        auto size_limited = getSizeLimitedOperations();
-        auto it = size_limited.find(opname);
-        if (it != size_limited.end()) {
+        
+        auto it = size_limited_operations.find(opname);
+        if (it != size_limited_operations.end()) {
             for (const auto& limited_stack : it->second) {
                 if (stack_name == limited_stack) return true;
             }
@@ -91,15 +84,14 @@ namespace ScriptConfig {
 namespace SchnorrConfig {
     constexpr int SIGNATURES_PER_BLOCK = 80000;
     
-    // Test key: 32 bytes, all zeros except last byte = 1
-    inline std::vector<unsigned char> getTestKey() {
+    inline std::vector<unsigned char> GetTestKey() {
         std::vector<unsigned char> key(32, 0);
         key[31] = 1;
         return key;
     }
 }
 
-static const ankerl::nanobench::Result* find_result(const ankerl::nanobench::Bench& benches,
+static const ankerl::nanobench::Result* FindResult(const ankerl::nanobench::Bench& benches,
                                                    const std::string& name)
 {
     for (auto& r : benches.results()) {
@@ -114,18 +106,12 @@ struct BenchTestCase {
     std::vector<std::vector<unsigned char>> stack;
     CScript script;
     uint64_t varops_consumed{0};
-    
-    BenchTestCase(const std::string& n,
-                 const std::vector<std::vector<unsigned char>>& s,
-                 const CScript& sc) 
-        : name(n), stack(s), script(sc) {}
 };
 
-static std::vector<std::vector<unsigned char>> init_stack(
+static std::vector<std::vector<unsigned char>> InitStack(
     uint64_t size = 1000000,
     int count = 2,
-    ValuePattern pattern = ValuePattern::STANDARD
-) {
+    ValuePattern pattern = ValuePattern::STANDARD) {
     std::vector<std::vector<unsigned char>> stack;
     
     uint8_t value1, value2;
@@ -146,19 +132,16 @@ static std::vector<std::vector<unsigned char>> init_stack(
         break;
     }
     
-    // First operand 
-    stack.push_back(std::vector<unsigned char>(size, value1));
-    
-    // Add additional operands
+    stack.emplace_back(size, value1);
     for (int i = 1; i < count; i++) {
-        stack.push_back(std::vector<unsigned char>(size, 
-            pattern == ValuePattern::STANDARD ? value2 : value1));
+        stack.emplace_back(size, 
+            pattern == ValuePattern::STANDARD ? value2 : value1);
     }
     
     return stack;
 }
 
-static CScript create_script(const std::vector<opcodetype>& opcodes) {
+static CScript CreateScript(const std::vector<opcodetype>& opcodes) {
     CScript script;
     while (script.size() < MAX_BLOCK_WEIGHT) {
         for (const auto& opcode : opcodes) {
@@ -169,7 +152,7 @@ static CScript create_script(const std::vector<opcodetype>& opcodes) {
     return script;
 }
 
-static void run_benchmark(ankerl::nanobench::Bench& bench, 
+static void RunBenchmark(ankerl::nanobench::Bench& bench, 
                          BenchTestCase& test_case) {
     BaseSignatureChecker checker;
     ScriptExecutionData sdata;
@@ -183,9 +166,9 @@ static void run_benchmark(ankerl::nanobench::Bench& bench,
     bool result = false;
 
     bench.run(test_case.name, [&] {
-        std::vector<std::vector<unsigned char> > stack = test_case.stack;
-        result = EvalScript(stack, test_case.script, 0, checker,
+        result = EvalScript(test_case.stack, test_case.script, 0, checker,
                         SigVersion::TAPSCRIPT_V2, sdata, &serror, varops_budget);
+    
     });
     // if (!result) {
     //     printf(" (%s) \n", ScriptErrorString(serror).c_str());
@@ -199,12 +182,12 @@ static void run_benchmark(ankerl::nanobench::Bench& bench,
     }
 }
 
-static void run_schnorr_benchmark(ankerl::nanobench::Bench &bench, const std::string& name) {
+static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::string& name) {
     KeyPair::ECC_Start();
 
     // Create key pair
     CKey key;
-    auto test_key = SchnorrConfig::getTestKey();
+    auto test_key = SchnorrConfig::GetTestKey();
     key.Set(test_key.begin(), test_key.end(), false);
     CPubKey pubkey = key.GetPubKey();
 
@@ -212,11 +195,10 @@ static void run_schnorr_benchmark(ankerl::nanobench::Bench &bench, const std::st
     const uint256 hash = uint256::ONE;
     key.SignSchnorr(hash, vchSig, NULL, hash);
 
-    XOnlyPubKey xpub{pubkey};
+    XOnlyPubKey xpub(pubkey);
     Span<const unsigned char> sigbytes{vchSig.data(), vchSig.size()};
     assert(sigbytes.size() == 64);
 
-    // Run benchmark
     bench.run(name, [&] {
         bool res = xpub.VerifySchnorr(hash, sigbytes);
         assert(res);
@@ -226,24 +208,12 @@ static void run_schnorr_benchmark(ankerl::nanobench::Bench &bench, const std::st
 }
 
 
-enum class RestorationType {
-    DROP,
-    DUP,
-    DROP_AND_DUP,
-    DUP_OP_DROP_DUP,
-    DUP_DUP_OP_DROP_DUP,
-    DUP_OP_DUP,
-    DROP_DROP,
-    NONE,
-    UNSUPPORTED
-};
-
 struct ScriptTemplate {
     std::string name;
     std::vector<opcodetype> opcodes;
 };
 
-RestorationType getRestorationType(opcodetype opcode) {
+std::vector<opcodetype> GetOpcodes(opcodetype opcode) {
     switch (opcode) {
         // Hash operations (1 in -> 1 out)
         case OP_RIPEMD160:
@@ -251,7 +221,15 @@ RestorationType getRestorationType(opcodetype opcode) {
         case OP_SHA256:
         case OP_HASH160:
         case OP_HASH256:
-            return RestorationType::DROP_AND_DUP;
+        case OP_NOT:
+        case OP_1ADD:
+        case OP_1SUB:
+        case OP_ABS:
+        case OP_NEGATE:
+        case OP_0NOTEQUAL:
+        case OP_2MUL:
+        case OP_2DIV:
+            return {opcode, OP_DROP, OP_DUP};
 
         // Bit operations (2 in -> 1 out)
         case OP_AND:
@@ -276,75 +254,43 @@ RestorationType getRestorationType(opcodetype opcode) {
         case OP_CAT:
         case OP_LSHIFT:
         case OP_RSHIFT:
-            return RestorationType::DUP_OP_DROP_DUP;
+            return {OP_DUP, opcode, OP_DROP, OP_DUP};
 
-        // Single input operations (1 in -> 1 out)
-        case OP_NOT:
-        case OP_1ADD:
-        case OP_1SUB:
-        case OP_ABS:
-        case OP_NEGATE:
-        case OP_0NOTEQUAL:
-            return RestorationType::DROP_AND_DUP;
-
+        // Stack manipulation (1 in -> 1 out)
         case OP_SIZE:
         case OP_OVER:
         case OP_TUCK:
-            return RestorationType::DROP;
+            return {opcode, OP_DROP};
 
+        // Stack manipulation (1 in -> 0 out)
         case OP_ROLL:
-            return RestorationType::DUP;
+            return {opcode, OP_DUP};
 
         // Verify operations (2 in -> 0 out)
         case OP_EQUALVERIFY:
         case OP_NUMEQUALVERIFY:
-            return RestorationType::DUP_OP_DUP;
+            return {OP_DUP, opcode, OP_DUP};
 
-        // Stack manipulation
+        // Stack manipulation (0 in -> 0 out)
         case OP_SWAP:
-            return RestorationType::NONE;
+        case OP_NOP:
+            return {opcode};
 
+        // Stack manipulation (0 in -> 2 out)
         case OP_2DUP:
-            return RestorationType::DROP_DROP;
-        // Special cases
+            return {opcode, OP_DROP, OP_DROP};
+
+        // Special cases (3 in -> 1 out)
         case OP_WITHIN:
         case OP_SUBSTR:
-            return RestorationType::DUP_DUP_OP_DROP_DUP;
-
-        // 2-input operations
-        case OP_2MUL:
-        case OP_2DIV:
-            return RestorationType::DROP_AND_DUP;
-        default:
-            return RestorationType::UNSUPPORTED;
-    }
-}
-
-std::vector<opcodetype> createOpcodes(opcodetype opcode, RestorationType type) {
-    switch (type) {
-        case RestorationType::DROP:
-            return {opcode, OP_DROP};
-        case RestorationType::DUP:
-            return {opcode, OP_DUP};
-        case RestorationType::DROP_AND_DUP:
-            return {opcode, OP_DROP, OP_DUP};
-        case RestorationType::DUP_OP_DROP_DUP:
-            return {OP_DUP, opcode, OP_DROP, OP_DUP};
-        case RestorationType::DUP_DUP_OP_DROP_DUP:
             return {OP_DUP, OP_DUP, opcode, OP_DROP, OP_DUP};
-        case RestorationType::DUP_OP_DUP:
-            return {OP_DUP, opcode, OP_DUP};
-        case RestorationType::DROP_DROP:
-            return {opcode, OP_DROP, OP_DROP};
-        case RestorationType::NONE:
-            return {opcode};
-        case RestorationType::UNSUPPORTED:
-            return {};
+
+        default:
+            return {}; // Unsupported
     }
-    return {opcode}; // Default case
 }
 
-static ankerl::nanobench::Bench setup_benchmark() {
+static ankerl::nanobench::Bench SetupBenchmark() {
     ankerl::nanobench::Bench bench;
         bench.output(nullptr)
             .epochs(Timing::EPOCHS)
@@ -356,32 +302,27 @@ static ankerl::nanobench::Bench setup_benchmark() {
     return bench;
 }
 
-static std::vector<ScriptTemplate> create_script_templates() {
+static std::vector<ScriptTemplate> CreateScriptTemplates() {
     std::vector<ScriptTemplate> script_templates;
     
     // Loop through all opcodes
     for (unsigned int op = 0x4c; op <= 0xba; op++) {
         opcodetype opcode = static_cast<opcodetype>(op);
         std::string opname = GetOpName(opcode);
-        RestorationType type = getRestorationType(opcode);
-        if (type == RestorationType::UNSUPPORTED) {
+        auto opcodes = GetOpcodes(opcode);
+        if (opcodes.empty()) {
             printf("Warning: Skipping unsupported opcode 0x%02x (%s)\n", op, opname.c_str());
             continue;
         }
-        
-        ScriptTemplate template_;
-        template_.name = opname;
-        template_.opcodes = createOpcodes(opcode, type);
-        
-        script_templates.push_back(template_);
+        script_templates.emplace_back(opname, opcodes);
     }
     
     return script_templates;
 }
 
-static std::vector<BenchTestCase> create_test_cases(const std::vector<ScriptTemplate>& script_templates) {
+static std::vector<BenchTestCase> CreateTestCases(const std::vector<ScriptTemplate>& script_templates) {
     // Get stack templates from configuration
-    std::vector<StackTemplate> config_stack_templates = getStackTemplates();
+    std::vector<StackTemplate> config_stack_templates = GetStackTemplates();
     
     // Create test cases by combining script and stack templates
     std::vector<BenchTestCase> test_cases;
@@ -390,19 +331,19 @@ static std::vector<BenchTestCase> create_test_cases(const std::vector<ScriptTemp
     for (const auto& script_template : script_templates) {
         for (auto& stack_config : config_stack_templates) {
             // Use configuration to check if operation should skip large inputs
-            if (ScriptConfig::shouldSkipLargeInput(script_template.name, stack_config.name)) {
+            if (ScriptConfig::ShouldSkipCase(script_template.name, stack_config.name)) {
                 continue;
             }
             
             // Create special minimal stack for shift operations to avoid size explosion
             if (script_template.name == "OP_LSHIFT" || script_template.name == "OP_RSHIFT") {
                 if (stack_config.name == "1MB") {
-                    auto stack = init_stack(stack_config.size, stack_config.count, stack_config.pattern);
+                    auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
                     stack[1] = {1}; // Minimal shift
                     test_cases.emplace_back(
                         script_template.name + "_" + stack_config.name,
                         stack,
-                        create_script(script_template.opcodes)
+                        CreateScript(script_template.opcodes)
                     );
                 }
                 continue;
@@ -412,7 +353,7 @@ static std::vector<BenchTestCase> create_test_cases(const std::vector<ScriptTemp
                 int maximum_size = MAX_STACK_SIZE;
                 std::vector<std::vector<unsigned char>> stack;
 
-                int roll_index = maximum_size - 3;
+                int roll_index = maximum_size - 10;
                 for (int i = 0; i < maximum_size - 1; i++) {
                     std::vector<unsigned char> number = CScriptNum::serialize(roll_index);
                     stack.push_back(number);
@@ -421,15 +362,15 @@ static std::vector<BenchTestCase> create_test_cases(const std::vector<ScriptTemp
                 test_cases.emplace_back(
                     script_template.name + "_MAX_STACK_SIZE",
                     stack,
-                    create_script(script_template.opcodes)
+                    CreateScript(script_template.opcodes)
                 );
                 continue;
             }
 
             test_cases.emplace_back(
                 script_template.name + "_" + stack_config.name,
-                init_stack(stack_config.size, stack_config.count, stack_config.pattern),
-                create_script(script_template.opcodes)
+                InitStack(stack_config.size, stack_config.count, stack_config.pattern),
+                CreateScript(script_template.opcodes)
             );
         }
     }
@@ -446,12 +387,12 @@ static std::vector<BenchTestCase> create_test_cases(const std::vector<ScriptTemp
     return test_cases;
 }
 
-static void run_all_benchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchTestCase>& test_cases) {
+static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchTestCase>& test_cases) {
     std::cout << "Running Schnorr signature benchmark..." << std::endl;
-    run_schnorr_benchmark(bench, "Schnorr signature validation");
+    RunSchnorrBenchmark(bench, "Schnorr signature validation");
     
     double schnorr_median_time = 0.0;
-    if (const auto* schnorr_result = find_result(bench, "Schnorr signature validation")) {
+    if (const auto* schnorr_result = FindResult(bench, "Schnorr signature validation")) {
         schnorr_median_time = schnorr_result->median(ankerl::nanobench::Result::Measure::elapsed);
     }
 
@@ -460,16 +401,14 @@ static void run_all_benchmarks(ankerl::nanobench::Bench& bench, std::vector<Benc
     int bench_count = 0;
     
     for (auto& test_case : test_cases) {
-
-        
-        run_benchmark(bench, test_case);
+        RunBenchmark(bench, test_case);
         
         // Get median time and calculate Schnorr validations
-        if (const auto* result = find_result(bench, test_case.name)) {
+        if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double schnorr_times = median_sec / schnorr_median_time;
             
-            printf("Benchmark %d/%zu: %s\t%.3f seconds (%.0f Schnorr sigs)\n", 
+            printf("Benchmark %d/%zu: %s\t%.5f seconds (%.0f Schnorr sigs)\n", 
                    ++bench_count, test_cases.size(), test_case.name.c_str(), median_sec, schnorr_times);
         }
     }
@@ -482,12 +421,12 @@ struct BenchResult {
     double per_varop_ns;
 };
 
-static std::vector<BenchResult> collect_results(const ankerl::nanobench::Bench& bench, const std::vector<BenchTestCase>& test_cases) {
+static std::vector<BenchResult> CollectResults(const ankerl::nanobench::Bench& bench, const std::vector<BenchTestCase>& test_cases) {
     std::vector<BenchResult> results;
     results.reserve(test_cases.size());
     
     for (const auto& test_case : test_cases) {
-        if (const auto* result = find_result(bench, test_case.name)) {
+        if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double per_varop_ns = test_case.varops_consumed > 0 
                 ? (median_sec * 1e9) / test_case.varops_consumed 
@@ -509,7 +448,7 @@ static std::vector<BenchResult> collect_results(const ankerl::nanobench::Bench& 
     return results;
 }
 
-static void print_worst_cases(std::vector<BenchResult>& results, double schnorr_median_time) {
+static void PrintWorstCases(std::vector<BenchResult>& results, double schnorr_median_time) {
     // print 20 worst cases sorted by median_sec
     std::sort(results.begin(), results.end(), 
         [](const BenchResult& a, const BenchResult& b) { return a.median_sec > b.median_sec; });
@@ -521,7 +460,7 @@ static void print_worst_cases(std::vector<BenchResult>& results, double schnorr_
     for (int i = 0; i < std::min(20, (int)results.size()); i++) {
         double schnorr_times = schnorr_median_time > 0 ? results[i].median_sec / schnorr_median_time : 0;
         
-        printf("%d. %s %.3f seconds (%.0f Schnorr sigs", 
+        printf("%d. %s %.5f seconds (%.0f Schnorr sigs", 
                (i+1), results[i].name.c_str(), results[i].median_sec, schnorr_times);
         
         if (results[i].varops_consumed > 0) {
@@ -533,17 +472,17 @@ static void print_worst_cases(std::vector<BenchResult>& results, double schnorr_
 }
 
 int main() {
-    auto bench = setup_benchmark();
-    auto script_templates = create_script_templates();
-    auto test_cases = create_test_cases(script_templates);
+    auto bench = SetupBenchmark();
+    auto script_templates = CreateScriptTemplates();
+    auto test_cases = CreateTestCases(script_templates);
     
-    run_all_benchmarks(bench, test_cases);
+    RunAllBenchmarks(bench, test_cases);
     
     double schnorr_median_time = 0.0;
-    if (const auto* schnorr_result = find_result(bench, "Schnorr signature validation")) {
+    if (const auto* schnorr_result = FindResult(bench, "Schnorr signature validation")) {
         schnorr_median_time = schnorr_result->median(ankerl::nanobench::Result::Measure::elapsed);
     }
-    auto results = collect_results(bench, test_cases);
+    auto results = CollectResults(bench, test_cases);
     
-    print_worst_cases(results, schnorr_median_time);
-} 
+    PrintWorstCases(results, schnorr_median_time);
+}
