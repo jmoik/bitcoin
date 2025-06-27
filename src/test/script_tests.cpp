@@ -33,6 +33,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <univalue.h>
+#include <script/val64.h>
 
 // Uncomment if you want to output updated JSON tests.
 // #define UPDATE_JSON_TESTS
@@ -1749,7 +1750,7 @@ static void BenchEvalScript(const CScript &script,
 
     using namespace std::chrono;
 
-	auto start = high_resolution_clock::now();
+	// auto start = high_resolution_clock::now();
 	for (int i = 0; i < 10; ++i) {
 		std::vector<std::vector<unsigned char> > stack(2);
 
@@ -1775,11 +1776,11 @@ static void BenchEvalScript(const CScript &script,
 			assert(0);
 		}
 	}
-	auto stop = high_resolution_clock::now();
-	auto msec = duration_cast<milliseconds>(stop - start).count();
+	// auto stop = high_resolution_clock::now();
+	// auto msec = duration_cast<milliseconds>(stop - start).count();
 
     assert(cooling);
-	std::cerr << "Time elapsed for: " << name << "(10x) is " << msec << " ms" << std::endl;
+	// std::cerr << "Time elapsed for: " << name << "(10x) is " << msec << " ms" << std::endl;
 }
 
 BOOST_AUTO_TEST_CASE(invert_cold)
@@ -1800,6 +1801,395 @@ BOOST_AUTO_TEST_CASE(invert_hot)
 	script << OP_INVERT;
 
 	BenchEvalScript(script, op1, op2, "invert_hot");
+}
+
+BOOST_AUTO_TEST_CASE(op_multi)
+{
+    // Test OP_MULTI (OP_NOP4) basic functionality in TAPSCRIPT_V2
+    BaseSignatureChecker checker;
+    ScriptExecutionData sdata;
+    ScriptError serror;
+    uint64_t varops_budget = 1000000;
+    #define OP_MULTI OP_NOP4
+
+    // Test 1: OP_MULTI with OP_CAT - concatenate 10 elements
+    // Stack: "0" "1" "2" "3" "4" "5" "6" "7" "8" "9" 10 OP_MULTI OP_CAT -> "9876543210"
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push 10 single-digit strings onto the stack
+        for (int i = 0; i < 10; i++) {
+            stack.push_back({static_cast<unsigned char>('0' + i)});
+        }
+        
+        CScript script;
+        script << CScriptNum(10) << OP_MULTI << OP_CAT;  // Concatenate 10 elements
+        
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &varops_budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be "9876543210" (concatenated in reverse order from top of stack)
+        std::vector<unsigned char> expected = {'9', '8', '7', '6', '5', '4', '3', '2', '1', '0'};
+        BOOST_CHECK(stack[0] == expected);
+    }
+
+    // Test 2: OP_MULTI with OP_DROP - drop 5 elements
+    // Stack: "a" "b" "c" "d" "e" "f" "g" 5 OP_MULTI OP_DROP -> "a" "b" (only first 2 remain)
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push 7 elements
+        for (char c = 'a'; c <= 'g'; c++) {
+            stack.push_back({static_cast<unsigned char>(c)});
+        }
+        
+        CScript script;
+        script << CScriptNum(5) << OP_MULTI << OP_DROP;  // Drop top 5 elements
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 2);
+        
+        // Should have "a" and "b" remaining (bottom 2 elements)
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{'a'});
+        BOOST_CHECK(stack[1] == std::vector<unsigned char>{'b'});
+    }
+
+    // Test 3: OP_MULTI with OP_ADD - sum multiple numbers
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push numbers 1, 2, 3, 4, 5 (sum = 15)
+        for (int i = 1; i <= 5; i++) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(5) << OP_MULTI << OP_ADD;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 15 (1+2+3+4+5)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 15);
+    }
+
+    // Test 4: OP_MULTI with OP_SHA256 - hash multiple inputs
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        stack.push_back({'a', 'b', 'c'});
+        stack.push_back({'d', 'e', 'f'});
+        stack.push_back({'g', 'h', 'i'});
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_SHA256;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be SHA256 hash of "ghidefabc" (concatenated in reverse order then hashed)
+        BOOST_CHECK_EQUAL(stack[0].size(), 32);  // SHA256 produces 32 bytes
+    }
+
+    // Test 5: OP_MULTI with OP_DUP - duplicate multiple elements
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        stack.push_back({'x'});
+        stack.push_back({'y'});
+        stack.push_back({'z'});
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_DUP;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 6);  // Original 3 + duplicated 3
+        
+        // Should have: x, y, z, x, y, z
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{'x'});
+        BOOST_CHECK(stack[1] == std::vector<unsigned char>{'y'});
+        BOOST_CHECK(stack[2] == std::vector<unsigned char>{'z'});
+        BOOST_CHECK(stack[3] == std::vector<unsigned char>{'x'});
+        BOOST_CHECK(stack[4] == std::vector<unsigned char>{'y'});
+        BOOST_CHECK(stack[5] == std::vector<unsigned char>{'z'});
+    }
+
+    // Test 6: OP_MULTI with OP_EQUAL - check if multiple elements are equal
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push 4 identical elements
+        for (int i = 0; i < 4; i++) {
+            stack.push_back({'s', 'a', 'm', 'e'});
+        }
+        
+        CScript script;
+        script << CScriptNum(4) << OP_MULTI << OP_EQUAL;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be true (1) since all elements are equal
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{1});
+    }
+
+    // Test 7: OP_MULTI with OP_EQUAL - different elements should return false
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        stack.push_back({'a'});
+        stack.push_back({'b'});
+        stack.push_back({'c'});
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_EQUAL;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be false (empty vector) since elements are different
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{});
+    }
+
+    // Test 8: OP_MULTI with insufficient stack elements should fail
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push only 3 elements
+        stack.push_back({'a'});
+        stack.push_back({'b'});
+        stack.push_back({'c'});
+        
+        CScript script;
+        script << CScriptNum(10) << OP_MULTI << OP_CAT;  // Try to multi-operate on 10 elements but only 3 on stack
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(!EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    }
+
+    // Test 9: OP_MULTI with OP_MIN - find minimum value
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push numbers 10, 3, 7, 1, 5 - minimum should be 1
+        for (int i : {10, 3, 7, 1, 5}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(5) << OP_MULTI << OP_MIN;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 1 (minimum value)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 1);
+    }
+
+    // Test 10: OP_MULTI with OP_MAX - find maximum value
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push numbers 10, 3, 7, 1, 5 - maximum should be 10
+        for (int i : {10, 3, 7, 1, 5}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(5) << OP_MULTI << OP_MAX;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 10 (maximum value)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 10);
+    }
+
+    // Test 11: OP_MULTI with OP_AND - bitwise AND operation
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push numbers with specific bit patterns
+        // 15 (1111), 7 (0111), 3 (0011) -> AND result should be 3 (0011)
+        for (int i : {15, 7, 3}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_AND;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 3 (15 & 7 & 3 = 3)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 3);
+    }
+
+    // Test 12: OP_MULTI with OP_OR - bitwise OR operation
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push numbers with specific bit patterns
+        // 1 (0001), 2 (0010), 4 (0100) -> OR result should be 7 (0111)
+        for (int i : {1, 2, 4}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_OR;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 7 (1 | 2 | 4 = 7)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 7);
+    }
+
+    // Test 13: OP_MULTI with OP_BOOLAND - boolean AND operation
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push non-zero values (all should be true)
+        for (int i : {5, 10, 1}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_BOOLAND;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be true (1) since all values are non-zero
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{1});
+    }
+
+    // Test 14: OP_MULTI with OP_BOOLAND with zero - should return false
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push mix of non-zero and zero values
+        for (int i : {5, 0, 1}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_BOOLAND;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be false (empty) since one value is zero
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{});
+    }
+
+    // Test 15: OP_MULTI with OP_BOOLOR - boolean OR operation
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push mix of zero and non-zero values
+        for (int i : {0, 0, 5}) {
+            Val64 v(i);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_BOOLOR;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be true (1) since at least one value is non-zero
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{1});
+    }
+
+    // Test 16: OP_MULTI with OP_BOOLOR with all zeros - should return false
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // Push all zero values
+        for (int i = 0; i < 3; i++) {
+            Val64 v(0);
+            stack.push_back(v.move_to_valtype());
+        }
+        
+        CScript script;
+        script << CScriptNum(3) << OP_MULTI << OP_BOOLOR;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be false (empty) since all values are zero
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{});
+    }
+
+    // Test 17: OP_MULTI with 0 elements - test neutral element behavior
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        // No elements on stack
+        
+        CScript script;
+        script << CScriptNum(0) << OP_MULTI << OP_MIN;
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        
+        // Result should be 0 (neutral element for MIN)
+        Val64 result(stack[0]);
+        size_t cost = 0;
+        BOOST_CHECK_EQUAL(result.to_u64_ceil(UINT64_MAX, cost), 0);
+    }
+
+    // Test 18: OP_MULTI with unknown opcode should succeed
+    {
+        std::vector<std::vector<unsigned char>> stack;
+        stack.push_back({'a'});
+        stack.push_back({'b'});
+        
+        CScript script;
+        script << CScriptNum(2) << OP_MULTI << OP_RESERVED;  // Unknown opcode in multi context
+        
+        uint64_t budget = 1000000;
+        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &budget));
+        BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
+        // Stack should remain unchanged since unknown opcode does nothing
+        BOOST_CHECK_EQUAL(stack.size(), 2);
+        BOOST_CHECK(stack[0] == std::vector<unsigned char>{'a'});
+        BOOST_CHECK(stack[1] == std::vector<unsigned char>{'b'});
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
