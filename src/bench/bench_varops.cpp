@@ -8,6 +8,7 @@
 #include <consensus/consensus.h>
 #include <script/interpreter.h>
 #include <script/script.h>
+#include <script/valtype_stack.h>
 #include <script/val64.h>
 #include <util/translation.h>
 #include <common/args.h>
@@ -27,9 +28,11 @@
 #include <string>
 #include <limits>
 #include <sstream>
+#include <random>
 
 // Global variables that can be modified by CLI flags
 std::set<opcodetype> SELECTED_OPCODES;  // Empty set means run all opcodes
+bool SILENT_MODE = false;  // Suppress output when true
 constexpr uint64_t MAX_BLOCK_WEIGHT_UINT64 = MAX_BLOCK_WEIGHT;
 constexpr uint64_t VAROPS_BUDGET_PER_BYTE_UINT64 = VAROPS_BUDGET_PER_BYTE;
 constexpr uint64_t TOTAL_VAROPS_BUDGET = MAX_BLOCK_WEIGHT_UINT64 * VAROPS_BUDGET_PER_BYTE_UINT64;
@@ -81,6 +84,12 @@ namespace ScriptConfig {
             {"OP_2ROT", {"2MBx2", "4MBx2"}},
             {"OP_2OVER", {"2MBx2", "4MBx2"}},
             {"OP_2SWAP", {"2MBx2", "4MBx2"}},
+
+            // skip large inputs for OP_Swap, OP_2SWAP, OP_2OVER, OP_2ROT
+            {"OP_SWAP", {"2MBx2", "4MBx2"}},
+            {"OP_2SWAP", {"2MBx2", "4MBx2"}},
+            {"OP_2OVER", {"2MBx2", "4MBx2"}},
+            {"OP_2ROT", {"2MBx2", "4MBx2"}},
         };
         
         auto it = size_limited_operations.find(opname);
@@ -115,16 +124,16 @@ static const ankerl::nanobench::Result* FindResult(const ankerl::nanobench::Benc
 
 struct BenchTestCase {
     std::string name;
-    std::vector<std::vector<unsigned char>> stack;
+    ValtypeStack stack;
     CScript script;
     uint64_t varops_consumed{0};
 };
 
-static std::vector<std::vector<unsigned char>> InitStack(
+static ValtypeStack InitStack(
     uint64_t size,
     int count,
     ValuePattern pattern) {
-    std::vector<std::vector<unsigned char>> stack;
+    ValtypeStack stack;
     
     uint8_t value1, value2;
     
@@ -144,9 +153,9 @@ static std::vector<std::vector<unsigned char>> InitStack(
         break;
     }
     
-    stack.emplace_back(size, value1);
+    stack.push_back(std::vector<unsigned char>(size, value1));
     for (int i = 1; i < count; i++) {
-        stack.emplace_back(size, value2);
+        stack.push_back(std::vector<unsigned char>(size, value2));
     }
     
     return stack;
@@ -176,7 +185,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     // Pre-create a pool of stack copies to eliminate copy overhead from benchmark timing
     const size_t stack_pool_size = Timing::EPOCHS * 1;
     size_t stack_index = 0;
-    std::vector<std::vector<std::vector<unsigned char>>> stack_pool;
+    std::vector<ValtypeStack> stack_pool;
     stack_pool.reserve(stack_pool_size);
     
     for (size_t i = 0; i < stack_pool_size; ++i) {
@@ -185,7 +194,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
 
     bench.run(test_case.name, [&] {
         assert(stack_index < stack_pool_size);
-        std::vector<std::vector<unsigned char>>& working_stack = stack_pool[stack_index];
+        ValtypeStack& working_stack = stack_pool[stack_index];
         working_budget = varops_block_budget;
         result = EvalScript(working_stack, test_case.script, 0, checker,
                         SigVersion::TAPSCRIPT_V2, sdata, &serror, &working_budget);
@@ -196,7 +205,6 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
         std::string error_msg = ScriptErrorString(serror);
         if (error_msg.find("Varops count exceeded") == std::string::npos) {
             printf("Script error: %s\n", error_msg.c_str());
-            exit(1);
         }
     }
     if (working_budget != varops_block_budget && test_case.varops_consumed == 0) {
@@ -240,9 +248,10 @@ static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::stri
 struct ScriptTemplate {
     std::string name;
     std::vector<opcodetype> opcodes;
+    std::string sequence_name;  // To identify which sequence this is
 };
 
-std::vector<opcodetype> GetOpcodes(opcodetype opcode) {
+std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
     switch (opcode) {
         // Hash operations (1 in -> 1 out)
         case OP_RIPEMD160:
@@ -258,13 +267,15 @@ std::vector<opcodetype> GetOpcodes(opcodetype opcode) {
         case OP_0NOTEQUAL:
         case OP_2MUL:
         case OP_2DIV:
-            return {opcode, OP_DROP, OP_DUP};
+            return {{opcode, OP_DROP, OP_DUP}};
 
         // Bit operations (2 in -> 1 out)
         case OP_AND:
         case OP_OR:
         case OP_XOR:
         case OP_EQUAL:
+            return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
+
         case OP_ADD:
         case OP_SUB:
         case OP_MUL:
@@ -283,32 +294,38 @@ std::vector<opcodetype> GetOpcodes(opcodetype opcode) {
         case OP_CAT:
         case OP_LSHIFT:
         case OP_RSHIFT:
-            return {OP_DUP, opcode, OP_DROP, OP_DUP};
-
+            return {
+                {OP_DUP, opcode, OP_DROP, OP_DUP},
+                {opcode, OP_DUP},
+            };
         // Stack manipulation (0 in -> 1 out)
         case OP_SIZE:
         case OP_OVER:
         case OP_TUCK:
         case OP_DEPTH:
         case OP_DUP:
-            return {opcode, OP_DROP};
+        case OP_IFDUP:
+            return {{opcode, OP_DROP}};
+
+        case OP_CHECKLOCKTIMEVERIFY:
+            return {{opcode}};
 
         case OP_2DROP:
-            return {OP_DUP, OP_DUP, opcode};
+            return {{OP_DUP, OP_DUP, opcode}};
 
         case OP_2OVER:
-            return {opcode, OP_DROP, OP_DROP};
+            return {{opcode, OP_DROP, OP_DROP}};
 
         // Stack manipulation (1 in -> 0 out)
         case OP_ROLL:
         case OP_VERIFY:
         case OP_NIP:
-            return {opcode, OP_DUP};
+            return {{opcode, OP_DUP}};
 
         // Verify operations (2 in -> 0 out)
         case OP_EQUALVERIFY:
         case OP_NUMEQUALVERIFY:
-            return {OP_DUP, opcode, OP_DUP};
+            return {{OP_DUP, opcode, OP_DUP}};
 
         // Stack manipulation (0 in -> 0 out)
         case OP_NOP:
@@ -318,22 +335,22 @@ std::vector<opcodetype> GetOpcodes(opcodetype opcode) {
         case OP_2ROT:
         case OP_INVERT:
         // case OP_PICK: 
-            return {opcode};
+            return {{opcode}};
 
         // Stack manipulation (0 in -> 2 out)
         case OP_2DUP:
-            return {opcode, OP_DROP, OP_DROP};
+            return {{opcode, OP_DROP, OP_DROP}};
 
         // Special cases (3 in -> 1 out)
         case OP_WITHIN:
         case OP_SUBSTR:
-            return {OP_DUP, OP_DUP, opcode, OP_DROP, OP_DUP};
+            return {{OP_DUP, OP_DUP, opcode, OP_DROP, OP_DUP}};
 
         case OP_TOALTSTACK:
-            return {opcode, OP_FROMALTSTACK};
+            return {{opcode, OP_FROMALTSTACK}};
 
         case OP_DROP:
-            return {opcode, OP_DUP};
+            return {{opcode, OP_DUP}};
 
         default:
             return {}; // Unsupported
@@ -350,6 +367,44 @@ static ankerl::nanobench::Bench SetupBenchmark() {
     return bench;
 }
 
+static ValtypeStack CreateRandomStack(int num_elements) {
+    ValtypeStack stack;
+    stack.reserve(num_elements);
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> size_dist(1, 300);  // Random size between 1-100 bytes
+    std::uniform_int_distribution<> value_dist(0, 255); // Random byte values
+    
+    for (int i = 0; i < num_elements; i++) {
+        int element_size = size_dist(gen);
+        std::vector<unsigned char> element;
+        element.reserve(element_size);
+        
+        for (int j = 0; j < element_size; j++) {
+            element.push_back(static_cast<unsigned char>(value_dist(gen)));
+        }
+        stack.push_back(element);
+    }
+
+    return stack;
+}
+
+// Infer sequence name from opcode vector pattern
+std::string InferSequenceName(const std::vector<opcodetype>& opcodes) {
+  std::string name = "";
+  for (const auto& opcode : opcodes) {
+    auto opname = GetOpName(opcode);
+    // remove OP_ prefix
+    if (opname.find("OP_") == 0) {
+      opname = opname.substr(3);
+    }
+    name += opname + "_";
+  }
+  name.pop_back();
+  return name;
+}
+
 static std::vector<ScriptTemplate> CreateScriptTemplates() {
     std::vector<ScriptTemplate> script_templates;
     
@@ -362,12 +417,19 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
         }
         
         std::string opname = GetOpName(opcode);
-        auto opcodes = GetOpcodes(opcode);
-        if (opcodes.empty()) {
+        auto sequences = GetOpcodes(opcode);
+        
+        if (sequences.empty()) {
             printf("Warning: Skipping unsupported opcode 0x%02x (%s)\n", op, opname.c_str());
             continue;
         }
-        script_templates.emplace_back(opname, opcodes);
+        
+        // Create a template for each sequence
+        for (const auto& opcodes : sequences) {
+            std::string sequence_name = InferSequenceName(opcodes);
+            std::string template_name = sequence_name;
+            script_templates.emplace_back(template_name, opcodes, sequence_name);
+        }
     }
     
     return script_templates;
@@ -379,7 +441,8 @@ static std::vector<BenchTestCase> CreateTestCases() {
     
     std::vector<BenchTestCase> test_cases;
     test_cases.reserve(script_templates.size() * config_stack_templates.size());
-    
+    ValtypeStack random_stack = CreateRandomStack(32000);
+
     for (const auto& script_template : script_templates) {
         for (auto& stack_config : config_stack_templates) {
             // Use configuration to check if operation should skip large inputs
@@ -388,56 +451,62 @@ static std::vector<BenchTestCase> CreateTestCases() {
             }
             
             // Create special minimal stack for shift operations to avoid size explosion
-            if (script_template.name == "OP_LSHIFT" || script_template.name == "OP_RSHIFT") {
+            if (script_template.name.find("LSHIFT") != std::string::npos || script_template.name.find("RSHIFT") != std::string::npos) {
                 if (stack_config.name == "1MB") {
                     auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
-                    stack[1] = {1}; // Minimal shift
+                    stack.push_back(std::vector<unsigned char>(1, 10));
+                    stack.push_back(std::vector<unsigned char>(1, 10));
                     test_cases.emplace_back(
-                        script_template.name + "_" + stack_config.name,
+                        script_template.name + "_10",
                         stack,
                         CreateScript(script_template.opcodes)
                     );
                 }
                 continue;
             }
-            if (script_template.name == "OP_ROLL") {
-                // Create a stack with maximum size minus 1 and push the roll index
-                int maximum_size = MAX_TAPSCRIPT_V2_STACK_SIZE;
-                std::vector<std::vector<unsigned char>> stack;
+            if (script_template.name.find("ROLL") != std::string::npos) {
+                    // Create a stack with maximum size minus 1 and push the roll index
+                    int maximum_size = MAX_TAPSCRIPT_V2_STACK_SIZE;
+                    std::vector<std::vector<unsigned char>> stack;
 
-                int roll_index = MAX_TAPSCRIPT_V2_STACK_SIZE - 5;
-                for (int i = 0; i < maximum_size - 1; i++) {
-                    std::vector<unsigned char> number = Val64(roll_index).move_to_valtype();
-                    stack.push_back(number);
-                }
+                    int roll_index = MAX_TAPSCRIPT_V2_STACK_SIZE - 5;
+                    for (int i = 0; i < maximum_size - 1; i++) {
+                        std::vector<unsigned char> number = Val64(roll_index).move_to_valtype();
+                        stack.push_back(number);
+                    }
+
+                    test_cases.emplace_back(
+                        script_template.name + "_MAX_STACK_SIZE",
+                        stack,
+                        CreateScript(script_template.opcodes)
+                    );
+                continue;
+            }
+            if (script_template.name.find("ROT") != std::string::npos || script_template.name.find("OVER") != std::string::npos || script_template.name.find("2OVER") != std::string::npos || script_template.name.find("2ROT") != std::string::npos || script_template.name.find("2SWAP") != std::string::npos) {
+                    auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
+                    test_cases.emplace_back(
+                        script_template.name + "_" + stack_config.name,
+                        stack,
+                    CreateScript(script_template.opcodes));
 
                 test_cases.emplace_back(
-                    script_template.name + "_MAX_STACK_SIZE",
+                    script_template.name + "_" + stack_config.name,
                     stack,
+                    CreateScript(script_template.opcodes));
+                continue;
+            }
+                test_cases.emplace_back(
+                    script_template.name + "_" + stack_config.name,
+                    InitStack(stack_config.size, stack_config.count, stack_config.pattern),
                     CreateScript(script_template.opcodes)
                 );
-                continue;
-            }
-            if (script_template.name == "OP_ROT" || script_template.name == "OP_OVER" || script_template.name == "OP_2OVER" || script_template.name == "OP_2ROT" || script_template.name == "OP_2SWAP") {
-                auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
-                test_cases.emplace_back(
-                    script_template.name + "_" + stack_config.name,
-                    stack,
-                    CreateScript(script_template.opcodes));
-
-                test_cases.emplace_back(
-                    script_template.name + "_" + stack_config.name,
-                    stack,
-                    CreateScript(script_template.opcodes));
-                continue;
-            }
-            test_cases.emplace_back(
-                script_template.name + "_" + stack_config.name,
-                InitStack(stack_config.size, stack_config.count, stack_config.pattern),
-                CreateScript(script_template.opcodes)
-            );
             continue;
         }
+        test_cases.emplace_back(
+            script_template.name + "_RANDOM_32000_ELEMENTS",
+            random_stack,
+            CreateScript(script_template.opcodes)
+        );
     }
 
     // remove duplicates
@@ -468,7 +537,9 @@ static void PrintBenchmarkResult(int index, size_t total_count, const std::strin
 }
 
 static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchTestCase>& test_cases) {
-    printf("Running Schnorr signature benchmark...\n");
+        printf("Running Schnorr signature benchmark...\n");
+    if (!SILENT_MODE) {
+    }
     RunSchnorrBenchmark(bench, "Schnorr signature validation");
     
     double schnorr_median_time = 0.0;
@@ -477,7 +548,9 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
     }
 
     double schnorr_block_time = schnorr_median_time * SchnorrConfig::SIGNATURES_PER_BLOCK;
-    printf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
+    if (!SILENT_MODE) {
+        printf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
+    }
     int bench_count = 0;
     
     for (BenchTestCase& test_case : test_cases) {
@@ -488,8 +561,12 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double schnorr_times = median_sec / schnorr_median_time;
             
-            PrintBenchmarkResult(++bench_count, test_cases.size(), test_case.name, 
-                               median_sec, schnorr_times, test_case.varops_consumed, true);
+            if (!SILENT_MODE) {
+                PrintBenchmarkResult(++bench_count, test_cases.size(), test_case.name, 
+                                   median_sec, schnorr_times, test_case.varops_consumed, true);
+            } else {
+                ++bench_count;
+            }
         }
     }
 }
@@ -650,17 +727,23 @@ static void ParseArguments(int argc, char* argv[]) {
                 exit(1);
             }
             i++; // Skip next argument as it's the epoch count
+        } else if (arg == "--silent" || arg == "-s") {
+            SILENT_MODE = true;
+            std::cout << "Silent mode enabled" << std::endl;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [OPTIONS]" << std::endl;
             std::cout << "Options:" << std::endl;
             std::cout << "  --opcodes <opcode1> [opcode2] ...  Run benchmarks for specific opcodes only" << std::endl;
             std::cout << "  --epochs <number>                  Set number of benchmark epochs" << std::endl;
+            std::cout << "  --silent, -s                       Suppress benchmark progress output" << std::endl;
+            std::cout << "  --script-stack                     Use scripts to populate stack instead of pre-initializing" << std::endl;
             std::cout << "  --help, -h                         Show this help message" << std::endl;
             std::cout << std::endl;
             std::cout << "Example opcodes: OP_ROLL, OP_SHA256, OP_ADD, OP_MUL, OP_CAT" << std::endl;
             std::cout << "Example usage:" << std::endl;
             std::cout << "  " << argv[0] << " --opcodes OP_ROLL OP_SHA256" << std::endl;
             std::cout << "  " << argv[0] << " --opcodes OP_ADD OP_MUL --epochs 10" << std::endl;
+            std::cout << "  " << argv[0] << " --silent" << std::endl;
             exit(0);
         }
     }
