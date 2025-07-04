@@ -489,7 +489,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             //
             if (!script.GetOp(pc, opcode, vchPushValue))
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-            if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
+            if (vchPushValue.size() > (sigversion == SigVersion::TAPSCRIPT_V2 ? MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE : MAX_SCRIPT_ELEMENT_SIZE))
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
             if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) {
