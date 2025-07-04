@@ -1149,11 +1149,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     if (n < 0 || n >= (int)stack.size())
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     if (opcode == OP_ROLL) {
-                        // rotate start, newstart, end.
-                        auto element = std::move(stack[stack.size() - n - 1]);
-                        stack.erase(stack.begin() + stack.size() - n - 1); 
-                        stack.push_back(std::move(element)); 
-                        varcost += n * 30;
+                        varcost += n * 24;
                     } else {
                         // Keep safe with references
                         stack.reserve(stack.size() + 1);
