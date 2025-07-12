@@ -1048,12 +1048,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // Keep safe with references
                     stack.reserve(stack.size() + 1);
                     valtype &vch = stacktop(-1);
-                    bool result;
-                    if (sigversion == SigVersion::TAPSCRIPT_V2) {
-                        result = Val64(vch).to_u64_ceil(1, varcost);
-                    } else {
-                        result = CastToBool(vch);
-                    }
+                    bool result = CastToBool(vch);
                     if (result)
                         stack.push_back(vch);
                     }
@@ -1385,9 +1380,6 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     {
                         if (v1.is_zero(varcost)) {
                             return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
-                        }
-                        else {
-                            v1 = Val64(1);
                         }
                     }
                     else {
