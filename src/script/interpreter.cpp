@@ -928,7 +928,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 {
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    altstack.push_back(std::move(stacktop(-1)));
+                    stack_push_costed(altstack, std::move(stacktop(-1)), varcost);
                     popstack(stack);
                 }
                 break;
@@ -937,7 +937,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 {
                     if (altstack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_ALTSTACK_OPERATION);
-                    stack.push_back(std::move(altstacktop(-1)));
+                    stack_push_costed(stack, std::move(altstacktop(-1)), varcost);
                     popstack(altstack);
                 }
                 break;
