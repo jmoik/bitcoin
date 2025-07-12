@@ -594,7 +594,7 @@ void Val64::op_2div(Val64 &v1, size_t &varcost)
     // BIP#ops:
     // |OP_2DIV
     // |Operand length
-    varcost += v1.m_realsize;
+    varcost += v1.m_realsize * 2;
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.trim_tail();
