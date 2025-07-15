@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 #include <span.h>
+#include <compat/endian.h>
 
 /**
  * This class is used for all modern taproot ops: this is
@@ -122,9 +123,16 @@ protected:
     // Swap with the other value
     void swap(Val64& other);
 
-    // Endian fixers
-    void set(size_t index, uint64_t v);
-    uint64_t get(size_t index) const;
+    // Endian fixers - inline for performance
+    inline void set(size_t index, uint64_t v)
+    {
+        m_u64span[index] = htole64_internal(v);
+    }
+    
+    inline uint64_t get(size_t index) const
+    {
+        return le64toh_internal(m_u64span[index]);
+    }
 
     // If it's past the end, return 0.
     uint64_t get_or_zero(size_t index) const;

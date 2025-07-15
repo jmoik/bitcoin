@@ -214,16 +214,6 @@ void Val64::swap(Val64 &other)
     std::swap(m_u64span, other.m_u64span);
 }
 
-void Val64::set(size_t index, uint64_t v)
-{
-    m_u64span[index] = htole64_internal(v);
-}
-
-uint64_t Val64::get(size_t index) const
-{
-    return le64toh_internal(m_u64span[index]);
-}
-
 uint64_t Val64::get_or_zero(size_t index) const
 {
     if (index >= m_u64span.size())
