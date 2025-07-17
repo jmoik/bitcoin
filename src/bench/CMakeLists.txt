@@ -65,7 +65,6 @@ target_link_libraries(bench_varops
   core_interface
   test_util
   bitcoin_node
-  bitcoin_wallet
   Boost::headers
 )
 
