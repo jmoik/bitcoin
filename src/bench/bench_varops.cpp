@@ -10,7 +10,9 @@
 #include <key.h>
 #include <script/valtype_stack.h>
 #include <fstream>
+#include <util/translation.h>
 
+const TranslateFn G_TRANSLATION_FUN{nullptr};
 // =================================
 //      Configuration Globals
 // =================================
