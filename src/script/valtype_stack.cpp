@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <script/valtype_stack.h>
+#include <stdexcept>
 
 ValtypeStack::ValtypeStack(const ValtypeStack& other) : stack(other.stack) {
     recalculate_size_tracking();
