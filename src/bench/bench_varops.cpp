@@ -318,6 +318,47 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
     return script_templates;
 }
 
+static bool HandleSpecialCases(const ScriptTemplate& script_template, 
+    const StackTemplate& stack_config,
+    std::vector<BenchTestCase>& test_cases) {
+// Handle shift operations (LSHIFT, RSHIFT)
+if (script_template.name.find("LSHIFT") != std::string::npos || script_template.name.find("RSHIFT") != std::string::npos) {
+if (stack_config.name == "1MB") {
+auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
+stack.pop_back();
+stack.push_back(std::vector<unsigned char>(1, 1));
+test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
+}
+return true;
+}
+
+// Handle ROLL operations
+if (script_template.name.find("ROLL") != std::string::npos) {
+int maximum_size = MAX_TAPSCRIPT_V2_STACK_SIZE;
+ValtypeStack stack;
+int roll_index = MAX_TAPSCRIPT_V2_STACK_SIZE - 5;
+for (int i = 0; i < maximum_size - 1; i++) {
+stack.push_back(Val64(roll_index).move_to_valtype());
+}
+test_cases.emplace_back(script_template.name + "_MAX_STACK_SIZE", stack, CreateScript(script_template.opcodes));
+return true;
+}
+
+// Handle stack manipulation operations (ROT, OVER, 2OVER, 2ROT, 2SWAP)
+if (script_template.name.find("ROT") != std::string::npos || 
+script_template.name.find("OVER") != std::string::npos || 
+script_template.name.find("2OVER") != std::string::npos || 
+script_template.name.find("2ROT") != std::string::npos || 
+script_template.name.find("2SWAP") != std::string::npos) {
+auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
+test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
+test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
+return true;
+}
+
+return false;
+}
+
 static std::vector<BenchTestCase> CreateTestCases() {
     std::vector<StackTemplate> config_stack_templates = GetStackTemplates();
     std::vector<ScriptTemplate> script_templates = CreateScriptTemplates();
@@ -328,31 +369,10 @@ static std::vector<BenchTestCase> CreateTestCases() {
         for (auto& stack_config : config_stack_templates) {
             if (ShouldSkipCase(script_template.name, stack_config.name)) continue;
             
-            if (script_template.name == "OP_LSHIFT" || script_template.name == "OP_RSHIFT") {
-                if (stack_config.name == "1MB") {
-                    auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
-                    stack.pop_back();
-                    stack.push_back(std::vector<unsigned char>(1, 1));
-                    test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
-                }
+            if (HandleSpecialCases(script_template, stack_config, test_cases)) {
                 continue;
             }
-            if (script_template.name == "OP_ROLL") {
-                int maximum_size = MAX_TAPSCRIPT_V2_STACK_SIZE;
-                ValtypeStack stack;
-                int roll_index = MAX_TAPSCRIPT_V2_STACK_SIZE - 5;
-                for (int i = 0; i < maximum_size - 1; i++) {
-                    stack.push_back(Val64(roll_index).move_to_valtype());
-                }
-                test_cases.emplace_back(script_template.name + "_MAX_STACK_SIZE", stack, CreateScript(script_template.opcodes));
-                continue;
-            }
-            if (script_template.name == "OP_ROT" || script_template.name == "OP_OVER" || script_template.name == "OP_2OVER" || script_template.name == "OP_2ROT" || script_template.name == "OP_2SWAP") {
-                auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
-                test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
-                test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
-                continue;
-            }
+            
             test_cases.emplace_back(
                 script_template.name + "_" + stack_config.name,
                 InitStack(stack_config.size, stack_config.count, stack_config.pattern),
