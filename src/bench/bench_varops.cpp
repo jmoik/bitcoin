@@ -92,7 +92,8 @@ static ValtypeStack InitStack(
     ValuePattern pattern)
 {
     ValtypeStack stack;
-    uint8_t value1, value2;
+    uint8_t value1 = 0;
+    uint8_t value2 = 0;
 
     switch (pattern) {
     case ValuePattern::STANDARD:
@@ -409,6 +410,15 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     for (size_t i = 0; i < stack_pool_size; ++i) {
         stack_pool.push_back(test_case.stack);
     }
+
+    // warmup for every benchmark to provide more stable results, fixes OP_2DUP memory issues on intel chips
+    CScript warmup_script = CreateScript(GetOpcodes(OP_NOP).front());
+    uint64_t warmup_budget = varops_block_budget;
+    ScriptError warmup_error;
+    ValtypeStack warmup_stack;
+    EvalScript(warmup_stack, warmup_script, 0, checker,
+                SigVersion::TAPSCRIPT_V2, sdata, &warmup_error, &warmup_budget);
+
 
     bench.run(test_case.name, [&] {
         assert(stack_index < stack_pool_size);
