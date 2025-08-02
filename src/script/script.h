@@ -57,7 +57,6 @@ static constexpr int VAROPS_COST_PER_BYTE_HASHED = 10;
 // BIP#ops: A per-transaction "varops budget" is determined by multiplying the
 // total transaction weight by the fixed factor 5200.
 static constexpr int VAROPS_BUDGET_PER_BYTE = 5200;
-static constexpr int VAROPS_FLAT_COST = 10;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
