@@ -355,8 +355,12 @@ bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator en
     return true;
 }
 
-bool IsOpSuccess(const opcodetype& opcode)
+bool IsOpSuccess(const opcodetype& opcode, SigVersion sigversion /* = SigVersion::BASE */)
 {
+    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        return opcode == 80 || opcode == 98 || (opcode >= 137 && opcode <= 138) ||
+            (opcode >= 187 && opcode <= 254);
+    }
     return opcode == 80 || opcode == 98 || (opcode >= 126 && opcode <= 129) ||
            (opcode >= 131 && opcode <= 134) || (opcode >= 137 && opcode <= 138) ||
            (opcode >= 141 && opcode <= 142) || (opcode >= 149 && opcode <= 153) ||
