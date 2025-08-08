@@ -233,6 +233,14 @@ static const unsigned int MAX_OPCODE = OP_NOP10;
 
 std::string GetOpName(opcodetype opcode);
 
+enum class SigVersion
+{
+    BASE = 0,        //!< Bare scripts and BIP16 P2SH-wrapped redeemscripts
+    WITNESS_V0 = 1,  //!< Witness v0 (P2WPKH and P2WSH); see BIP 141
+    TAPROOT = 2,     //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, key path spending; see BIP 341
+    TAPSCRIPT = 3,   //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, script path spending, leaf version 0xc0; see BIP 342
+    TAPSCRIPT_V2 = 4,   //!< Witness v1 with 33-byte program?
+};
 class scriptnum_error : public std::runtime_error
 {
 public:
@@ -623,7 +631,7 @@ public:
 };
 
 /** Test for OP_SUCCESSx opcodes as defined by BIP342. */
-bool IsOpSuccess(const opcodetype& opcode);
+bool IsOpSuccess(const opcodetype& opcode, SigVersion sigversion = SigVersion::BASE);
 
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode);
 
