@@ -392,6 +392,41 @@ static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, Scr
     return true;
 }
 
+static bool EvalChecksigTapscriptV2(const valtype& sig, const valtype& pubkey, ScriptExecutionData& execdata, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& success)
+{
+    assert(sigversion == SigVersion::TAPSCRIPT_V2);
+
+    /*
+     *  The following validation sequence is consensus critical. Please note how --
+     *    upgradable public key versions precede other rules;
+     *    the script execution fails when using empty signature with invalid public key;
+     *    the script execution fails when using non-empty invalid signature.
+     */
+    success = !sig.empty();
+    if (success) {
+        // Signature operations cost 260,000 units (5,200 * 50) and the sigops/witnesssize ratio test is not needed in V2
+        // Cost is checked in the main EvalScript loop, so we don't need to check the budget here
+    }
+    if (pubkey.size() == 0) {
+        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+    } else if (pubkey.size() == 32) {
+        if (success && !checker.CheckSchnorrSignature(sig, pubkey, sigversion, execdata, serror)) {
+            return false; // serror is set
+        }
+    } else {
+        /*
+         *  New public key version softforks should be defined before this `else` block.
+         *  Generally, the new code should not do anything but failing the script execution. To avoid
+         *  consensus bugs, it should not modify any existing values (including `success`).
+         */
+        if ((flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE) != 0) {
+            return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
+        }
+    }
+
+    return true;
+}
+
 /** Helper for OP_CHECKSIG, OP_CHECKSIGVERIFY, and (in Tapscript) OP_CHECKSIGADD.
  *
  * A return value of false means the script fails entirely. When true is returned, the
@@ -409,8 +444,7 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
         // Key path spending in Taproot has no script, so this is unreachable.
         break;
     case SigVersion::TAPSCRIPT_V2:
-        // To be defined.
-        assert(false);
+        return EvalChecksigTapscriptV2(sig, pubkey, execdata, flags, checker, sigversion, serror, success);
     }
     assert(false);
 }
@@ -1542,6 +1576,11 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
+                    
+                    if (sigversion == SigVersion::TAPSCRIPT_V2 && fSuccess) {
+                        varcost += VAROPS_COST_PER_SIGOP;
+                    }
+                    
                     popstack(stack);
                     popstack(stack);
                     stack.push_back(fSuccess ? vchTrue : vchFalse);
@@ -1568,6 +1607,10 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
 
                     bool success = true;
                     if (!EvalChecksig(sig, pubkey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, success)) return false;
+
+                    if (sigversion == SigVersion::TAPSCRIPT_V2 && success) {
+                        varcost += VAROPS_COST_PER_SIGOP;
+                    }
 
                     valtype numvec;
                     if (sigversion == SigVersion::TAPSCRIPT_V2) {
@@ -2214,6 +2257,7 @@ bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, cons
         // key_version is not used and left uninitialized.
         break;
     case SigVersion::TAPSCRIPT:
+    case SigVersion::TAPSCRIPT_V2:
         ext_flag = 1;
         // key_version must be 0 for now, representing the current version of
         // 32-byte public keys in the tapscript signature opcode execution.
@@ -2402,7 +2446,7 @@ bool GenericTransactionSignatureChecker<T>::CheckECDSASignature(const std::vecto
 template <class T>
 bool GenericTransactionSignatureChecker<T>::CheckSchnorrSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey_in, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2);
     // Schnorr signatures have 32-byte public keys. The caller is responsible for enforcing this.
     assert(pubkey_in.size() == 32);
     // Note that in Tapscript evaluation, empty signatures are treated specially (invalid signature that does not
@@ -2530,10 +2574,10 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
             }
             // New opcodes will be listed here. May use a different sigversion to modify existing opcodes.
                 if (IsOpSuccess(opcode, sigversion)) {
-                if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
-                    return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
-                }
-                return set_success(serror);
+                    if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+                    }
+                    return set_success(serror);
             }
         }
 
@@ -2680,7 +2724,7 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::TAPSCRIPT, checker, execdata, serror);
             }
             if ((control[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2) {
-                // Tapscript v2 (leaf version 0xc1)
+                // Tapscript v2 (leaf version 0xc2)
                 exec_script = CScript(script.begin(), script.end());
                 execdata.m_validation_weight_left = ::GetSerializeSize(witness.stack) + VALIDATION_WEIGHT_OFFSET;
                 execdata.m_validation_weight_left_init = true;
