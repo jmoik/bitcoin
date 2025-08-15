@@ -23,7 +23,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-
+        
 // Maximum number of bytes pushable to the stack (up to Tapscript v2)
 static constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
 
@@ -78,6 +78,10 @@ static constexpr int64_t VALIDATION_WEIGHT_PER_SIGOP_PASSED{50};
 
 // How much weight budget is added to the witness size (Tapscript only, see BIP 342).
 static constexpr int64_t VALIDATION_WEIGHT_OFFSET{50};
+
+// BIP#ops: Signature operations cost 260,000 varops units (5,200 * 50)
+static constexpr int VAROPS_COST_PER_SIGOP = VAROPS_BUDGET_PER_BYTE * VALIDATION_WEIGHT_PER_SIGOP_PASSED;
+
 
 template <typename T>
 std::vector<unsigned char> ToByteVector(const T& in)
