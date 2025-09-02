@@ -1391,7 +1391,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                             break;
                         case OP_NUMEQUALVERIFY:
                             if (v1.cmp(v2, varcost) != 0)
-                                set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
+                                return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
                             v1 = Val64(1);
                             break;
                         case OP_NUMNOTEQUAL:
@@ -1420,13 +1420,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                         default:
                             assert(!"invalid opcode"); break;
                         }
-                    if (opcode == OP_NUMEQUALVERIFY)
-                    {
-                        if (v1.is_zero(varcost)) {
-                            return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
-                        }
-                    }
-                    else {
+                        if (opcode != OP_NUMEQUALVERIFY) {
                         push64(stack, v1);
                     }
                     } else {
