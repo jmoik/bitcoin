@@ -1083,7 +1083,6 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                         // BIP#ops:
                         // |OP_IFDUP
                         // |(Length of top stack entry (before)) * 2 (COMPARINGZERO + COPYING)
-                        varcost += vch.size();
                         if (result)
                             stack.push_back(vch);
                         stack.push_back(std::move(vch));
@@ -1276,9 +1275,11 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                     // zero bytes after it (numerically, 0x01 == 0x0001 == 0x000001)
                     //if (opcode == OP_NOTEQUAL)
                     //    fEqual = !fEqual;
+                    if (vch1.size() == vch2.size()) {
+                        varcost += vch1.size();
+                    }
                     popstack(stack);
                     popstack(stack);
-                    varcost += std::max(vch1.size(), vch2.size());
                     stack.push_back(fEqual ? vchTrue : vchFalse);
                     if (opcode == OP_EQUALVERIFY)
                     {
@@ -1421,8 +1422,8 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                             assert(!"invalid opcode"); break;
                         }
                         if (opcode != OP_NUMEQUALVERIFY) {
-                        push64(stack, v1);
-                    }
+                            push64(stack, v1);
+                        }
                     } else {
                     // Not TAPSCRIPT_V2:
                     // (x1 x2 -- out)
