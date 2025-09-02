@@ -136,7 +136,7 @@ void Val64::move_from_valtype(std::vector<unsigned char> &vch)
 std::vector<unsigned char> Val64::move_to_valtype()
 {
     std::vector<unsigned char> ret;
-
+    
     charvec_change_start();
     ret = std::move(m_charvec);
     charvec_change_end();
@@ -290,8 +290,7 @@ int Val64::cmp_span(const Span<le64_t> v1, const Span<le64_t> v2)
 
 int Val64::cmp(const Val64 &v2, size_t &varcost) const
 {
-    // Worst case examination is both lengths
-    varcost += m_realsize + v2.m_realsize;
+    varcost += std::max(m_realsize, v2.m_realsize);
 
     return cmp_span(m_u64span, v2.m_u64span);
 }
