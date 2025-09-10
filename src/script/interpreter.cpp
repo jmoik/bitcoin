@@ -1784,9 +1784,8 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                     // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0)
                     varcost += len;
 
-                    valtype vch2 = vch;
-                    vch2.erase(vch2.begin() + begin, vch2.begin() + begin + len);
-                    stack.push_back(vch2);
+                    valtype vch2(vch.begin() + begin, vch.begin() + begin + len);
+                    stack.push_back(std::move(vch2));
                 }
                 break;
                     
