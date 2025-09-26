@@ -1587,7 +1587,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_BOOLAND success (second zero)",
@@ -1632,7 +1632,7 @@
                 "final stack": [
                   ""
                 ],
-                "varops cost": 4000000
+                "varops cost": 8000000
               },
               {
                 "name": "OP_BOOLAND success (one non-zero at the end)",
@@ -1685,7 +1685,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_BOOLOR success (one zero, one non-zero)",
@@ -1760,7 +1760,7 @@
                 "final stack": [
                   "01"
                 ],
-                "varops cost": 4000000
+                "varops cost": 8000000
             },
             {
                 "name": "OP_BOOLOR fail (only one item)",
@@ -2369,7 +2369,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MIN success (3 vs 2)",
@@ -2384,7 +2384,7 @@
                 "final stack": [
                     "02"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MIN success (equal values)",
@@ -2399,7 +2399,7 @@
                 "final stack": [
                     "05"
                 ],
-                "varops cost": 3
+                "varops cost": 6
             },
             {
                 "name": "OP_MIN success (empty and 01)",
@@ -2414,7 +2414,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MIN success (empty and empty)",
@@ -2444,7 +2444,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 3
+                "varops cost": 6
             },
             {
                 "name": "OP_MIN fail (only one item)",
@@ -2482,7 +2482,7 @@
                 "final stack": [
                     "02"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MAX success (3 vs 2)",
@@ -2497,7 +2497,7 @@
                 "final stack": [
                     "03"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MAX success (equal values)",
@@ -2512,7 +2512,7 @@
                 "final stack": [
                     "05"
                 ],
-                "varops cost": 3
+                "varops cost": 6
             },
             {
                 "name": "OP_MAX success (empty and 01)",
@@ -2527,7 +2527,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_MAX success (empty and empty)",
@@ -2557,7 +2557,7 @@
                 "final stack": [
                     "02"
                 ],
-                "varops cost": 3
+                "varops cost": 6
             },
             {
                 "name": "OP_MAX fail (only one item)",
@@ -2644,7 +2644,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_WITHIN success (trailing zeros ignored)",
