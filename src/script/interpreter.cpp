@@ -1380,12 +1380,12 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                                 return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
                             break;
                         case OP_BOOLAND:
-                            // Careful: don't shortcut varcost calc!
-                            v1 = Val64(!v1.is_zero(varcost) && !v2.is_zero(varcost));
+                            // Careful: don't shortcut varcost calc, use bitwise and to avoid short-circuiting!
+                            v1 = Val64(!v1.is_zero(varcost) & !v2.is_zero(varcost));
                             break;
                         case OP_BOOLOR:
-                            // Careful: don't shortcut varcost calc!
-                            v1 = Val64(!v1.is_zero(varcost) || !v2.is_zero(varcost));
+                            // Careful: don't shortcut varcost calc, use bitwise or to avoid short-circuiting!
+                            v1 = Val64(!v1.is_zero(varcost) | !v2.is_zero(varcost));
                             break;
                         case OP_NUMEQUAL:
                             v1 = Val64(v1.cmp(v2, varcost) == 0 ? 1 : 0);
@@ -1479,8 +1479,8 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                             !stack.pop64(v1)) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
-                        // Careful: don't shortcut varcost calc!
-                        Val64 res = Val64(((v1.cmp(v2, varcost) >= 0) &&
+                        // Careful: don't shortcut varcost calc, use bitwise and to avoid short-circuiting!
+                        Val64 res = Val64(((v1.cmp(v2, varcost) >= 0) &
                                           (v1.cmp(v3, varcost) < 0)) ? 1 : 0);
                         push64(stack, res);
                     } else {
