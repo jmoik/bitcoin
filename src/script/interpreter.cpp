@@ -1810,7 +1810,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
 
                 case OP_RIGHT:
                 {
-                    // A OFFSET -- A[OFFSET:]
+                    // A OFFSET -- A[-OFFSET:]
                     Val64 offset_v64;
                     if (!stack.pop64(offset_v64) ||
                         stack.size() < 1) {
@@ -1819,11 +1819,16 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
 
                     // BIP#ops:
                     // |OP_RIGHT
-                    // |Length of OFFSET operand + MAX(Length of A - Value of OFFSET, 0) (LENGTHCONV + COPYING)
+                    // |Length of OFFSET operand + MIN(Length of A, Value of OFFSET) (LENGTHCONV + COPYING)
                     uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
-                    varcost += stack.back().size() - offset;
                     valtype vch = stack.pop_back_valtype();  // Move instead of copy
-                    vch.erase(vch.begin(), vch.begin() + offset);
+                    
+                    if (offset >= vch.size()) {
+                        varcost += vch.size();
+                    } else {
+                        vch.erase(vch.begin(), vch.end() - offset);
+                        varcost += offset;
+                    }
                     stack.push_back(std::move(vch));
                 }
                 break;
