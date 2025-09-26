@@ -103,6 +103,9 @@ public:
     static void op_or(Val64 &v1, Val64 &v2, size_t &varcost);
     static void op_xor(Val64 &v1, Val64 &v2, size_t &varcost);
 
+    static void op_min(Val64 &v1, Val64 &v2, size_t &varcost);
+    static void op_max(Val64 &v1, Val64 &v2, size_t &varcost);
+
     // These three are potentially v. expensive, so we must
     // check varops varcost *before* we evaluate them:
     static size_t op_mul_varcost(const Val64 &v1, const Val64 &v2);

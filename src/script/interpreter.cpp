@@ -1411,12 +1411,10 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                             v1 = Val64(v1.cmp(v2, varcost) >= 0 ? 1 : 0);
                             break;
                         case OP_MIN:
-                            if (v1.cmp(v2, varcost) > 0)
-                                v1 = std::move(v2);
+                            Val64::op_min(v1, v2, varcost);
                             break;
                         case OP_MAX:
-                            if (v1.cmp(v2, varcost) < 0)
-                                v1 = std::move(v2);
+                            Val64::op_max(v1, v2, varcost);
                             break;
                         default:
                             assert(!"invalid opcode"); break;

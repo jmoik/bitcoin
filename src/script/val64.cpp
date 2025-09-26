@@ -663,6 +663,36 @@ void Val64::op_xor(Val64 &v1, Val64 &v2, size_t &varcost)
         v1.m_u64span[i] ^= v2.m_u64span[i];
 }
 
+void Val64::op_min(Val64 &v1, Val64 &v2, size_t &varcost)
+{
+    binop_v1_longest(v1, v2);
+
+    // BIP#ops:
+    // |OP_MIN
+    // |(Greater of two operand lengths) * 2
+    varcost += v1.m_realsize * 2;
+
+    if (cmp_span(v1.m_u64span, v2.m_u64span) > 0) {
+        v1 = std::move(v2);
+    }
+    v1.trim_tail();
+}
+
+void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
+{
+    binop_v1_longest(v1, v2);
+
+    // BIP#ops:
+    // |OP_MAX
+    // |(Greater of two operand lengths) * 2
+    varcost += v1.m_realsize * 2;
+
+    if (cmp_span(v1.m_u64span, v2.m_u64span) < 0) {
+        v1 = std::move(v2);
+    }
+    v1.trim_tail();
+}
+
 void Val64::mul_span(Span<le64_t> res,
                      const Span<le64_t> src,
                      uint64_t mul)
