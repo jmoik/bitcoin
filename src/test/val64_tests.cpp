@@ -54,7 +54,7 @@ public:
     Val64Test(uint64_t v): Val64(v) { };
     Val64Test() { };
 
-    Span<le64_t> span() const { return Val64::m_u64span; }
+    std::span<le64_t> span() const { return Val64::m_u64span; }
     size_t u64_size() const { return Val64::m_u64span.size(); }
     size_t realsize() const { return Val64::m_realsize; }
     uint64_t get(size_t i) const { return Val64::get(i); }
@@ -62,10 +62,10 @@ public:
 
     void set(size_t index, uint64_t v) { Val64::set(index, v); }
     const uint64_t *access_u64() const { return m_u64span.data(); }
-    static void mul_span(Span<le64_t> res, const Span<le64_t> src, uint64_t mul) { return Val64::mul_span(res, src, mul); }
-    static bool add_span(Span<uint64_t> v1, const Span<uint64_t> v2, size_t &nonzero_len) { return Val64::add_span(v1, v2, nonzero_len); }
-    static bool sub_span(Span<uint64_t> v1, const Span<uint64_t> v2, size_t &nonzero_len) { return Val64::sub_span(v1, v2, nonzero_len); }
-    static int cmp_span(const Span<le64_t> v1, const Span<le64_t> v2) { return Val64::cmp_span(v1, v2); }
+    static void mul_span(std::span<le64_t> res, const std::span<le64_t> src, uint64_t mul) { return Val64::mul_span(res, src, mul); }
+    static bool add_span(std::span<uint64_t> v1, const std::span<uint64_t> v2, size_t &nonzero_len) { return Val64::add_span(v1, v2, nonzero_len); }
+    static bool sub_span(std::span<uint64_t> v1, const std::span<uint64_t> v2, size_t &nonzero_len) { return Val64::sub_span(v1, v2, nonzero_len); }
+    static int cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2) { return Val64::cmp_span(v1, v2); }
     std::vector<uint64_t> copy_vector() {
         std::vector<uint64_t> v;
         for (size_t i = 0; i < u64_size(); i++) {

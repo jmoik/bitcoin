@@ -108,7 +108,7 @@ static void VerifySchnorr(benchmark::Bench& bench)
     key.SignSchnorr(hash, vchSig, NULL, hash);
 
     XOnlyPubKey xpub(pubkey);
-    Span<const unsigned char> sigbytes(vchSig.data(), vchSig.size());
+    std::span<const unsigned char> sigbytes(vchSig.data(), vchSig.size());
     assert(sigbytes.size() == 64);
 
     // Benchmark.

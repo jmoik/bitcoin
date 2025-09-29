@@ -18,10 +18,10 @@ public:
     static void set_force_unaligned(bool val) { Val64::force_unaligned = val; }
     uint64_t &last_word(size_t off = 0) { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
     const uint64_t &last_word(size_t off = 0) const { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
-    const Span<le64_t> span() const { return Val64::m_u64span; }
-    Span<le64_t> span() { return Val64::m_u64span; }
-    static void mul_span(Span<le64_t> res,
-                         const Span<le64_t> src,
+    const std::span<le64_t> span() const { return Val64::m_u64span; }
+    std::span<le64_t> span() { return Val64::m_u64span; }
+    static void mul_span(std::span<le64_t> res,
+                         const std::span<le64_t> src,
                          uint64_t mul) { return Val64::mul_span(res, src, mul); }
 };
 

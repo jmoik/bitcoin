@@ -456,7 +456,7 @@ static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::stri
     key.SignSchnorr(hash, vchSig, NULL, hash);
 
     XOnlyPubKey xpub(pubkey);
-    Span<const unsigned char> sigbytes{vchSig.data(), vchSig.size()};
+    std::span<const unsigned char> sigbytes{vchSig.data(), vchSig.size()};
     assert(sigbytes.size() == 64);
 
     bench.run(name, [&] {

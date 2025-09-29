@@ -62,7 +62,7 @@ void Val64::set_span()
     if (std::align(alignof(uint64_t), u64size * sizeof(uint64_t), ptr, space) == m_charvec.data()
         && ptr == m_charvec.data()
         && !force_unaligned) {
-        m_u64span = Span<le64_t>(reinterpret_cast<uint64_t *>(m_charvec.data()), u64size);
+        m_u64span = std::span<le64_t>(reinterpret_cast<uint64_t *>(m_charvec.data()), u64size);
         return;
     }
 
@@ -78,7 +78,7 @@ void Val64::set_span()
     if (force_unaligned && ptr == m_charvec.data())
         ptr = m_charvec.data() + sizeof(uint64_t);
 
-    m_u64span = Span<le64_t>(reinterpret_cast<uint64_t *>(ptr), u64size);
+    m_u64span = std::span<le64_t>(reinterpret_cast<uint64_t *>(ptr), u64size);
 
     // Figure out how much the offset now is, so we can move data.
     size_t off = u64ptr_off();
@@ -260,7 +260,7 @@ bool Val64::is_zero(size_t &varcost) const
     return span_is_allzero(m_u64span);
 }
 
-bool Val64::span_is_allzero(const Span<le64_t> span)
+bool Val64::span_is_allzero(const std::span<le64_t> span)
 {
     if (span.size() == 0)
         return true;
@@ -271,7 +271,7 @@ bool Val64::span_is_allzero(const Span<le64_t> span)
 }
 
 // If v1 > v2: 1.  If v1 < v2: -1.  Else 0
-int Val64::cmp_span(const Span<le64_t> v1, const Span<le64_t> v2)
+int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
 
@@ -296,7 +296,7 @@ int Val64::cmp(const Val64 &v2, size_t &varcost) const
 }
 
 // v1 += v2 (size v2 <= v1).  Return true if carry overflowed.
-bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
+bool Val64::add_span(std::span<le64_t> v1, const std::span<le64_t> v2,
                      size_t &nonzero_len)
 {
     assert(v1.size() >= v2.size());
@@ -371,7 +371,7 @@ void Val64::op_1add(Val64 &v1, size_t &varcost)
 }
 
 // v1 -= v2
-bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len)
+bool Val64::sub_span(std::span<le64_t> v1, const std::span<le64_t> v2, size_t &nonzero_len)
 {
     auto common_len = std::min(v1.size(), v2.size());
 
@@ -693,8 +693,8 @@ void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
     v1.trim_tail();
 }
 
-void Val64::mul_span(Span<le64_t> res,
-                     const Span<le64_t> src,
+void Val64::mul_span(std::span<le64_t> res,
+                     const std::span<le64_t> src,
                      uint64_t mul)
 {
     // Result must be (at least) 1 word larger, for carry.
