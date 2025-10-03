@@ -560,6 +560,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                         const valtype &src = stacktop(-1 - i);
                         result.insert(result.end(), src.begin(), src.end());
                     }
+                    varcost += total_size;
                     stack.erase(stack.size() - *multiop, stack.size());
                     stack.push_back(result);
                 }
