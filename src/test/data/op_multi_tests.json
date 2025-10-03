@@ -1,0 +1,167 @@
+[
+    {
+        "category": "OP_MULTI tests",
+        "tests": [
+            {
+                "name": "OP_MULTI with OP_CAT - concatenate 10 elements",
+                "initial stack": ["30", "31", "32", "33", "34", "35", "36", "37", "38", "39"],
+                "opcodes": ["5A", "B3", "7E"],
+                "success": true,
+                "final stack": ["39383736353433323130"],
+                "varops cost": 11,
+                "description": "LENGTHCONV + COPYING: len(count) + total_size = 1 + 10 = 11"
+            },
+            {
+                "name": "OP_MULTI with OP_DROP - drop 5 elements",
+                "initial stack": ["61", "62", "63", "64", "65", "66", "67"],
+                "opcodes": ["55", "B3", "75"],
+                "success": true,
+                "final stack": ["61", "62"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(count) = 1 (DROP has no variable cost)"
+            },
+            {
+                "name": "OP_MULTI with OP_ADD - sum multiple numbers",
+                "initial stack": ["01", "02", "03", "04", "05"],
+                "opcodes": ["55", "B3", "93"],
+                "success": true,
+                "final stack": ["0F"],
+                "varops cost": 21,
+                "description": "LENGTHCONV + ARITH: len(count) + 5 * (max(1,1)*4) = 1 + 20 = 21"
+            },
+            {
+                "name": "OP_MULTI with OP_DUP - duplicate multiple elements",
+                "initial stack": ["78", "79", "7A"],
+                "opcodes": ["53", "B3", "76"],
+                "success": true,
+                "final stack": ["78", "79", "7A", "78", "79", "7A"],
+                "varops cost": 4,
+                "description": "LENGTHCONV + COPYING: len(count) + 3 * 1 = 1 + 3 = 4"
+            },
+            {
+                "name": "OP_MULTI with OP_EQUAL - check if multiple elements are equal (true)",
+                "initial stack": ["73616D65", "73616D65", "73616D65", "73616D65"],
+                "opcodes": ["54", "B3", "87"],
+                "success": true,
+                "final stack": ["01"],
+                "varops cost": 17,
+                "description": "LENGTHCONV + COMPARING: len(count) + len(base) * count = 1 + 4 * 4 = 17"
+            },
+            {
+                "name": "OP_MULTI with OP_EQUAL - check if multiple elements are equal (false)",
+                "initial stack": ["61", "62", "63"],
+                "opcodes": ["53", "B3", "87"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 4,
+                "description": "LENGTHCONV + COMPARING: len(count) + len(base) * count = 1 + 1 * 3 = 4"
+            },
+            {
+                "name": "OP_MULTI with insufficient stack elements should fail",
+                "initial stack": ["61", "62", "63"],
+                "opcodes": ["5A", "B3", "7E"],
+                "success": false
+            },
+            {
+                "name": "OP_MULTI with OP_MIN - find minimum value",
+                "initial stack": ["0A", "03", "07", "01", "05"],
+                "opcodes": ["55", "B3", "A3"],
+                "success": true,
+                "final stack": ["01"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + COMPARING: len(count) + 4 * 1 = 1 + 4 = 5"
+            },
+            {
+                "name": "OP_MULTI with OP_MAX - find maximum value",
+                "initial stack": ["0A", "03", "07", "01", "05"],
+                "opcodes": ["55", "B3", "A4"],
+                "success": true,
+                "final stack": ["0A"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + COMPARING: len(count) + 4 * 1 = 1 + 4 = 5"
+            },
+            {
+                "name": "OP_MULTI with OP_AND - bitwise AND operation",
+                "initial stack": ["0F", "07", "03"],
+                "opcodes": ["53", "B3", "84"],
+                "success": true,
+                "final stack": ["03"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + OTHER + ZEROING: len(count) + 2 * (1+1) = 1 + 4 = 5"
+            },
+            {
+                "name": "OP_MULTI with OP_OR - bitwise OR operation",
+                "initial stack": ["01", "02", "04"],
+                "opcodes": ["53", "B3", "85"],
+                "success": true,
+                "final stack": ["07"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + OTHER: len(count) + 2 * (min(1,1)*2) = 1 + 4 = 5"
+            },
+            {
+                "name": "OP_MULTI with OP_BOOLAND - boolean AND operation (true)",
+                "initial stack": ["05", "0A", "01"],
+                "opcodes": ["53", "B3", "9A"],
+                "success": true,
+                "final stack": ["01"],
+                "varops cost": 4,
+                "description": "LENGTHCONV + COMPARINGZERO: len(count) + 1 + 1 + 1 = 4"
+            },
+            {
+                "name": "OP_MULTI with OP_BOOLAND - boolean AND operation (false)",
+                "initial stack": ["05", "", "01"],
+                "opcodes": ["53", "B3", "9A"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 3,
+                "description": "LENGTHCONV + COMPARINGZERO: len(count) + 1 + 0 + 1 = 3"
+            },
+            {
+                "name": "OP_MULTI with OP_BOOLOR - boolean OR operation (true)",
+                "initial stack": ["", "", "05"],
+                "opcodes": ["53", "B3", "9B"],
+                "success": true,
+                "final stack": ["01"],
+                "varops cost": 2,
+                "description": "LENGTHCONV + COMPARINGZERO: len(count) + 0 + 0 + 1 = 2"
+            },
+            {
+                "name": "OP_MULTI with OP_BOOLOR - boolean OR operation (false)",
+                "initial stack": ["", "", ""],
+                "opcodes": ["53", "B3", "9B"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 1,
+                "description": "LENGTHCONV + COMPARINGZERO: len(count) + 0 + 0 + 0 = 1"
+            },
+            {
+                "name": "OP_MULTI with 0 elements - test neutral element behavior",
+                "initial stack": [],
+                "opcodes": ["00", "B3", "A3"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 0,
+                "description": "LENGTHCONV: len(count) = 0 (empty count = 0)"
+            },
+            {
+                "name": "OP_MULTI with OP_SHA256 - hash multiple inputs",
+                "initial stack": ["616263", "646566", "676869"],
+                "opcodes": ["53", "B3", "A8"],
+                "success": true,
+                "final stack": ["7a63ba5e2733941e1a56c5d8002256cddc225a575236d3f2bfec00201c43b84e"],
+                "varops cost": 91,
+                "description": "LENGTHCONV + HASH: len(count) + (3+3+3) * 10 = 1 + 90 = 91"
+            },
+            {
+                "name": "OP_MULTI with unknown opcode should succeed",
+                "initial stack": ["61", "62"],
+                "opcodes": ["52", "B3", "50"],
+                "success": true,
+                "final stack": ["61", "62"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(count) = 1 (unknown opcode has no additional cost)"
+            }
+        ]
+    }
+]
+

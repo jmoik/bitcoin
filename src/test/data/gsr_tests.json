@@ -1,0 +1,393 @@
+[
+    {
+        "category": "OP_LEFT and OP_RIGHT tests",
+        "tests": [
+            {
+                "name": "OP_LEFT - basic functionality",
+                "initial stack": ["68656C6C6F", "03"],
+                "opcodes": ["80"],
+                "success": true,
+                "final stack": ["68656C"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(OFFSET) = len(0x03) = 1"
+            },
+            {
+                "name": "OP_RIGHT - basic functionality", 
+                "initial stack": ["68656C6C6F", "02"],
+                "opcodes": ["81"],
+                "success": true,
+                "final stack": ["6C6F"],
+                "varops cost": 3,
+                "description": "LENGTHCONV + COPYING: len(OFFSET) + len(result) = 1 + 2 = 3"
+            },
+            {
+                "name": "OP_LEFT with zero offset",
+                "initial stack": ["74657374", ""],
+                "opcodes": ["80"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 0,
+                "description": "LENGTHCONV: len(OFFSET) = len(empty) = 0"
+            },
+            {
+                "name": "OP_RIGHT with zero offset",
+                "initial stack": ["74657374", ""],
+                "opcodes": ["81"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 0,
+                "description": "LENGTHCONV + COPYING: len(OFFSET) + len(result) = 0 + 0 = 0"
+            },
+            {
+                "name": "OP_LEFT with offset equal to string length",
+                "initial stack": ["616263", "03"],
+                "opcodes": ["80"],
+                "success": true,
+                "final stack": ["616263"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(OFFSET) = 1"
+            },
+            {
+                "name": "OP_RIGHT with offset equal to string length",
+                "initial stack": ["616263", "03"],
+                "opcodes": ["81"],
+                "success": true,
+                "final stack": ["616263"],
+                "varops cost": 4,
+                "description": "LENGTHCONV + COPYING: len(OFFSET) + len(result) = 1 + 3 = 4"
+            },
+            {
+                "name": "OP_LEFT with offset greater than string length",
+                "initial stack": ["6869", "0A"],
+                "opcodes": ["80"],
+                "success": true,
+                "final stack": ["6869"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(OFFSET) = 1"
+            },
+            {
+                "name": "OP_RIGHT with offset greater than string length",
+                "initial stack": ["6869", "0A"],
+                "opcodes": ["81"],
+                "success": true,
+                "final stack": ["6869"],
+                "varops cost": 3,
+                "description": "LENGTHCONV + COPYING: len(OFFSET) + len(result) = 1 + 2 = 3"
+            },
+            {
+                "name": "OP_LEFT with binary data",
+                "initial stack": ["0102030405", "03"],
+                "opcodes": ["80"],
+                "success": true,
+                "final stack": ["010203"],
+                "varops cost": 1,
+                "description": "LENGTHCONV: len(OFFSET) = 1"
+            },
+            {
+                "name": "OP_RIGHT with binary data",
+                "initial stack": ["0102030405", "02"],
+                "opcodes": ["81"],
+                "success": true,
+                "final stack": ["0405"],
+                "varops cost": 3,
+                "description": "LENGTHCONV + COPYING: len(OFFSET) + len(result) = 1 + 2 = 3"
+            },
+            {
+                "name": "OP_LEFT with insufficient stack elements should fail",
+                "initial stack": ["616263"],
+                "opcodes": ["80"],
+                "success": false
+            },
+            {
+                "name": "OP_RIGHT with insufficient stack elements should fail",
+                "initial stack": ["01"],
+                "opcodes": ["81"],
+                "success": false
+            }
+        ]
+    },
+    {
+        "category": "OP_CAT tests",
+        "tests": [
+            {
+                "name": "OP_CAT - basic concatenation",
+                "initial stack": ["616263", "646566"],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["616263646566"],
+                "varops cost": 6,
+                "description": "COPYING: len(A) + len(B) = 3 + 3 = 6"
+            },
+            {
+                "name": "OP_CAT with empty first operand",
+                "initial stack": ["", "68656C6C6F"],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["68656C6C6F"],
+                "varops cost": 5,
+                "description": "COPYING: len(A) + len(B) = 0 + 5 = 5"
+            },
+            {
+                "name": "OP_CAT with empty second operand",
+                "initial stack": ["74657374", ""],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["74657374"],
+                "varops cost": 4,
+                "description": "COPYING: len(A) + len(B) = 4 + 0 = 4"
+            },
+            {
+                "name": "OP_CAT with both operands empty",
+                "initial stack": ["", ""],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 0,
+                "description": "COPYING: len(A) + len(B) = 0 + 0 = 0"
+            },
+            {
+                "name": "OP_CAT with binary data",
+                "initial stack": ["0102", "030405"],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["0102030405"],
+                "varops cost": 5,
+                "description": "COPYING: len(A) + len(B) = 2 + 3 = 5"
+            },
+            {
+                "name": "OP_CAT with single byte operands",
+                "initial stack": ["FF", "00"],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["FF00"],
+                "varops cost": 2,
+                "description": "COPYING: len(A) + len(B) = 1 + 1 = 2"
+            },
+            {
+                "name": "OP_CAT with insufficient stack elements should fail",
+                "initial stack": ["616263"],
+                "opcodes": ["7E"],
+                "success": false
+            },
+            {
+                "name": "OP_CAT with empty stack should fail",
+                "initial stack": [],
+                "opcodes": ["7E"],
+                "success": false
+            },
+            {
+                "name": "OP_CAT exceeding MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE should fail",
+                "initial stack": ["AA{2500000}", "BB{2500000}"],
+                "opcodes": ["7E"],
+                "success": false
+            },
+            {
+                "name": "OP_CAT at the size limit should succeed",
+                "initial stack": ["CC{2000000}", "DD{2000000}"],
+                "opcodes": ["7E"],
+                "success": true,
+                "final stack": ["CC{2000000}DD{2000000}"],
+                "varops cost": 4000000,
+                "description": "COPYING: len(A) + len(B) = 2000000 + 2000000 = 4000000"
+            }
+        ]
+    },
+    {
+        "category": "OP_SUBSTR tests",
+        "tests": [
+            {
+                "name": "OP_SUBSTR - basic substring extraction",
+                "initial stack": ["68656C6C6F", "01", "03"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["68656C6C6F", "656C6C"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(3, 5-1) = 1 + 1 + 3 = 5"
+            },
+            {
+                "name": "OP_SUBSTR - extract from beginning",
+                "initial stack": ["74657374", "", "02"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["74657374", "7465"],
+                "varops cost": 3,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(2, 4-0) = 0 + 1 + 2 = 3"
+            },
+            {
+                "name": "OP_SUBSTR - extract to end",
+                "initial stack": ["626974636F696E", "03", "04"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["626974636F696E", "636F696E"],
+                "varops cost": 6,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(4, 7-3) = 1 + 1 + 4 = 6"
+            },
+            {
+                "name": "OP_SUBSTR with zero length",
+                "initial stack": ["68656C6C6F", "02", ""],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["68656C6C6F", ""],
+                "varops cost": 1,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(0, 5-2) = 1 + 0 + 0 = 1"
+            },
+            {
+                "name": "OP_SUBSTR - begin at end of string",
+                "initial stack": ["616263", "03", "01"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["616263", ""],
+                "varops cost": 2,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(1, 3-3) = 1 + 1 + 0 = 2"
+            },
+            {
+                "name": "OP_SUBSTR - begin beyond string length",
+                "initial stack": ["6869", "0A", "05"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["6869", ""],
+                "varops cost": 2,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(5, max(0, 2-10)) = 1 + 1 + 0 = 2"
+            },
+            {
+                "name": "OP_SUBSTR - length extends beyond string",
+                "initial stack": ["74657374", "02", "0A"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["74657374", "7374"],
+                "varops cost": 4,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(10, 4-2) = 1 + 1 + 2 = 4"
+            },
+            {
+                "name": "OP_SUBSTR with binary data",
+                "initial stack": ["0102030405", "01", "03"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["0102030405", "020304"],
+                "varops cost": 5,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(3, 5-1) = 1 + 1 + 3 = 5"
+            },
+            {
+                "name": "OP_SUBSTR with empty string",
+                "initial stack": ["", "", "01"],
+                "opcodes": ["7F"],
+                "success": true,
+                "final stack": ["", ""],
+                "varops cost": 1,
+                "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(1, 0-0) = 0 + 1 + 0 = 1"
+            },
+            {
+                "name": "OP_SUBSTR with insufficient stack elements should fail",
+                "initial stack": ["616263", "01"],
+                "opcodes": ["7F"],
+                "success": false
+            },
+            {
+                "name": "OP_SUBSTR with empty stack should fail",
+                "initial stack": [],
+                "opcodes": ["7F"],
+                "success": false
+            }
+        ]
+    },
+    {
+        "category": "OP_INVERT tests", 
+        "tests": [
+            {
+                "name": "OP_INVERT - basic bitwise inversion",
+                "initial stack": ["FF"],
+                "opcodes": ["83"],
+                "success": true,
+                "final stack": ["00"],
+                "varops cost": 2,
+                "description": "OTHER: len(A) * 2 = 1 * 2 = 2"
+            },
+            {
+                "name": "OP_INVERT with all zeros",
+                "initial stack": [""],
+                "opcodes": ["83"],
+                "success": true,
+                "final stack": [""],
+                "varops cost": 0,
+                "description": "OTHER: len(A) * 2 = 0 * 2 = 0"
+            },
+            {
+                "name": "OP_INVERT with multi-byte value",
+                "initial stack": ["FF12"],
+                "opcodes": ["83"],
+                "success": true,
+                "final stack": ["00ED"],
+                "varops cost": 4,
+                "description": "OTHER: len(A) * 2 = 2 * 2 = 4"
+            },
+            {
+                "name": "OP_INVERT with all ones",
+                "initial stack": ["FFFFFFFFFFFFFFFF"],
+                "opcodes": ["83"],
+                "success": true,
+                "final stack": ["0000000000000000"],
+                "varops cost": 16,
+                "description": "OTHER: len(A) * 2 = 8 * 2 = 16"
+            },
+            {
+                "name": "OP_INVERT with alternating bit pattern",
+                "initial stack": ["AAAAAAAAAAAAAAAA"],
+                "opcodes": ["83"],
+                "success": true,
+                "final stack": ["5555555555555555"],
+                "varops cost": 16,
+                "description": "OTHER: len(A) * 2 = 8 * 2 = 16"
+            },
+            {
+                "name": "OP_INVERT with insufficient stack elements should fail",
+                "initial stack": [],
+                "opcodes": ["83"],
+                "success": false
+            }
+        ]
+    },
+    {
+        "category": "Binary bitwise operations",
+        "tests": [
+            {
+                "name": "OP_AND: 0xFF & 0xF0 = 0xF0",
+                "initial stack": ["FF", "F0"],
+                "opcodes": ["84"],
+                "success": true,
+                "final stack": ["F0"],
+                "varops cost": 2,
+                "description": "OTHER + ZEROING: len(A) + len(B) = 1 + 1 = 2"
+            },
+            {
+                "name": "OP_OR: 0x0F | 0xF0 = 0xFF",
+                "initial stack": ["0F", "F0"],
+                "opcodes": ["85"],
+                "success": true,
+                "final stack": ["FF"],
+                "varops cost": 2,
+                "description": "OTHER: min(len(A), len(B)) * 2 = min(1, 1) * 2 = 2"
+            },
+            {
+                "name": "OP_XOR: 0xFF ^ 0x0F = 0xF0",
+                "initial stack": ["FF", "0F"],
+                "opcodes": ["86"],
+                "success": true,
+                "final stack": ["F0"],
+                "varops cost": 2,
+                "description": "OTHER: min(len(A), len(B)) * 2 = min(1, 1) * 2 = 2"
+            },
+            {
+                "name": "OP_AND with insufficient stack (empty)",
+                "initial stack": [],
+                "opcodes": ["84"],
+                "success": false
+            },
+            {
+                "name": "OP_OR with insufficient stack (one element)",
+                "initial stack": ["FF"],
+                "opcodes": ["85"],
+                "success": false
+            }
+        ]
+    }
+]

@@ -4,6 +4,8 @@
 
 #include <test/util/setup_common.h>
 #include <test/util/json.h>
+#include <test/data/gsr_tests.json.h>
+#include <test/data/op_multi_tests.json.h>
 #include <test/data/varops_tests.json.h>
 #include <test/util/script.h>
 #include <script/interpreter.h>
@@ -17,7 +19,7 @@
 #include <stdexcept>
 
 
-BOOST_FIXTURE_TEST_SUITE(varops_tests, BasicTestingSetup)
+BOOST_FIXTURE_TEST_SUITE(gsr_tests, BasicTestingSetup)
 
 static void PrintStackComparison(const std::string& test_name, 
                                 const std::vector<std::vector<unsigned char>>& actual_stack,
@@ -50,6 +52,10 @@ static void PrintStackComparison(const std::string& test_name,
 static std::vector<unsigned char> ParseHex(const std::string& hex)
 {
     std::vector<unsigned char> result;
+    if (hex.empty()) {
+        return result;
+    }
+    
     result.reserve(hex.length() / 2);
     
     for (size_t i = 0; i < hex.length(); ) {
@@ -86,15 +92,14 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
     return result;
 }
 
-BOOST_AUTO_TEST_CASE(varops_json_tests)
+static void RunJsonTests(const UniValue& tests, const std::string& suite_name, bool check_varops_budget = false)
 {
-    UniValue tests = read_json(json_tests::varops_tests);
-
     for (const UniValue& category_val : tests.getValues()) {
         std::string category_name = category_val["category"].get_str();
         
         for (const UniValue& test : category_val["tests"].getValues()) {
             std::string test_name = test["name"].get_str();
+            std::string full_test_name = suite_name + "::" + test_name;
             
             try {
 
@@ -105,7 +110,7 @@ BOOST_AUTO_TEST_CASE(varops_json_tests)
                     auto parsed_opcodes = ParseHex(hex_str);
                     script.insert(script.end(), parsed_opcodes.cbegin(), parsed_opcodes.cend());
                 } catch (const std::exception& e) {
-                    std::cerr << "Failed parsing opcode hex '" << opcode_hex.get_str() << "' in test '" << test_name << "': " << e.what() << std::endl;
+                    std::cerr << "Failed parsing opcode hex '" << opcode_hex.get_str() << "' in test '" << full_test_name << "': " << e.what() << std::endl;
                     throw;
                 }
             }
@@ -118,7 +123,7 @@ BOOST_AUTO_TEST_CASE(varops_json_tests)
                     try {
                         initial_stack.push_back(ParseHex(item.get_str()));
                     } catch (const std::exception& e) {
-                        std::cerr << "Failed parsing initial stack item '" << item.get_str() << "' in test '" << test_name << "': " << e.what() << std::endl;
+                        std::cerr << "Failed parsing initial stack item '" << item.get_str() << "' in test '" << full_test_name << "': " << e.what() << std::endl;
                         throw;
                     }
                 }
@@ -137,7 +142,7 @@ BOOST_AUTO_TEST_CASE(varops_json_tests)
                         try {
                             expected_final_stack.push_back(ParseHex(item.get_str()));
                         } catch (const std::exception& e) {
-                            std::cerr << "Failed parsing final stack item '" << item.get_str() << "' in test '" << test_name << "': " << e.what() << std::endl;
+                            std::cerr << "Failed parsing final stack item '" << item.get_str() << "' in test '" << full_test_name << "': " << e.what() << std::endl;
                             throw;
                         }
                     }
@@ -157,24 +162,44 @@ BOOST_AUTO_TEST_CASE(varops_json_tests)
 
             bool success = EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, &serror, &varops_budget);
 
-            BOOST_CHECK_MESSAGE(success == expected_success, "Test '" << test_name << "' failed success check.");
+            BOOST_CHECK_MESSAGE(success == expected_success, "Test '" << full_test_name << "' failed success check.");
             
             if (expected_success) {
                 if (stack != expected_final_stack) {
-                    PrintStackComparison(test_name, stack, expected_final_stack);
+                    PrintStackComparison(full_test_name, stack, expected_final_stack);
                 }
-                BOOST_CHECK_MESSAGE(stack == expected_final_stack, "Test '" << test_name << "' failed final stack check.");
-                uint64_t budget_consumed = budget - varops_budget;
-                BOOST_CHECK_MESSAGE(budget_consumed == expected_varops_budget_consumed, "Test '" << test_name << "' failed varops cost check. budget_consumed: " << budget_consumed << ", Expected: " << expected_varops_budget_consumed);
+                BOOST_CHECK_MESSAGE(stack == expected_final_stack, "Test '" << full_test_name << "' failed final stack check.");
+                if (check_varops_budget) {
+                    uint64_t budget_consumed = budget - varops_budget;
+                    BOOST_CHECK_MESSAGE(budget_consumed == expected_varops_budget_consumed, "Test '" << full_test_name << "' failed varops cost check. budget_consumed: " << budget_consumed << ", Expected: " << expected_varops_budget_consumed);
+                }
             }
             
             } catch (const std::exception& e) {
-                std::cerr << "Exception in test '" << test_name << "' (category: '" << category_name << "'): " << e.what() << std::endl;
+                std::cerr << "Exception in test '" << full_test_name << "' (category: '" << category_name << "'): " << e.what() << std::endl;
                 throw;
             }
         }
     }
 }
 
+BOOST_AUTO_TEST_CASE(varops_json_tests)
+{
+    UniValue varops_tests = read_json(json_tests::varops_tests);
+    RunJsonTests(varops_tests, "varops_tests", true);
+}
 
-BOOST_AUTO_TEST_SUITE_END() 
+BOOST_AUTO_TEST_CASE(gsr_json_tests)
+{
+    UniValue gsr_tests = read_json(json_tests::gsr_tests);
+    RunJsonTests(gsr_tests, "gsr_tests", true);
+}
+
+BOOST_AUTO_TEST_CASE(op_multi_json_tests)
+{
+    UniValue op_multi_tests = read_json(json_tests::op_multi_tests);
+    RunJsonTests(op_multi_tests, "op_multi_tests", true);
+}
+
+
+BOOST_AUTO_TEST_SUITE_END()
