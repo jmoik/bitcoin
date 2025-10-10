@@ -2630,6 +2630,9 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
         // Tapscript v1 enforces initial stack size limits (altstack is empty here)
         if (sigversion != SigVersion::TAPSCRIPT_V2) {
             if (stack.size() > MAX_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+        } else {
+            // Tapscript v2 also enforces initial stack size limits (with its own limit)
+            if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
         }
     }
 
