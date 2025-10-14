@@ -33,6 +33,10 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Operation limit exceeded";
         case SCRIPT_ERR_STACK_SIZE:
             return "Stack size limit exceeded";
+        case SCRIPT_ERR_TOTAL_STACK_SIZE:
+            return "Total stack size limit exceeded";
+        case SCRIPT_ERR_STACK_ELEMENT_SIZE:
+            return "Stack element size limit exceeded";
         case SCRIPT_ERR_SIG_COUNT:
             return "Signature count negative or greater than pubkey count";
         case SCRIPT_ERR_PUBKEY_COUNT:
@@ -119,9 +123,17 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Signature is found in scriptCode";
         case SCRIPT_ERR_SCRIPTNUM:
             return "Script number overflowed or is non-minimally encoded";
+        case SCRIPT_ERR_DIVIDE_BY_ZERO:
+            return "OP_DIV or OP_MOD by zero";
+        case SCRIPT_ERR_SUB_UNDERFLOW:
+            return "OP_SUB or OP_SUB1 result would be negative";
+        case SCRIPT_ERR_VAROP_COUNT:
+            return "Varops count exceeded";
+        case SCRIPT_ERR_VAROP_NULL:
+            return "Varops must not be null in tapscript v2";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
-        default: break;
+            break;
     }
     return "unknown error";
 }
