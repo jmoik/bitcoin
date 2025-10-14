@@ -2112,12 +2112,19 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
         if (r.has_value()) return *r;
 
         // Tapscript enforces initial stack size limits (altstack is empty here)
-        if (stack.size() > MAX_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+        if (sigversion != SigVersion::TAPSCRIPT_V2) {
+            if (stack.size() > MAX_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+        } else {
+            // Tapscript v2 also enforces initial stack size limits (with its own limit)
+            if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+        }
     }
 
-    // Disallow stack item size > MAX_SCRIPT_ELEMENT_SIZE in witness stack
-    for (const valtype& elem : stack) {
-        if (elem.size() > MAX_SCRIPT_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+    if (sigversion != SigVersion::TAPSCRIPT_V2) {
+        // Disallow stack item size > MAX_SCRIPT_ELEMENT_SIZE in witness stack
+        for (const valtype& elem : stack) {
+            if (elem.size() > MAX_SCRIPT_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+        }
     }
 
     // Run the script interpreter.
