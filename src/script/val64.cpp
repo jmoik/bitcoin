@@ -7,7 +7,7 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
-#include <endian.h>
+#include <compat/endian.h>
 #include <iostream>
 
 // For testing.
@@ -62,7 +62,7 @@ void Val64::set_span()
     if (std::align(alignof(uint64_t), u64size * sizeof(uint64_t), ptr, space) == m_charvec.data()
         && ptr == m_charvec.data()
         && !force_unaligned) {
-        m_u64span = Span<le64_t>(reinterpret_cast<uint64_t *>(m_charvec.data()), u64size);
+        m_u64span = std::span<le64_t>(reinterpret_cast<uint64_t *>(m_charvec.data()), u64size);
         return;
     }
 
@@ -78,7 +78,7 @@ void Val64::set_span()
     if (force_unaligned && ptr == m_charvec.data())
         ptr = m_charvec.data() + sizeof(uint64_t);
 
-    m_u64span = Span<le64_t>(reinterpret_cast<uint64_t *>(ptr), u64size);
+    m_u64span = std::span<le64_t>(reinterpret_cast<uint64_t *>(ptr), u64size);
 
     // Figure out how much the offset now is, so we can move data.
     size_t off = u64ptr_off();
@@ -136,7 +136,7 @@ void Val64::move_from_valtype(std::vector<unsigned char> &vch)
 std::vector<unsigned char> Val64::move_to_valtype()
 {
     std::vector<unsigned char> ret;
-
+    
     charvec_change_start();
     ret = std::move(m_charvec);
     charvec_change_end();
@@ -214,16 +214,6 @@ void Val64::swap(Val64 &other)
     std::swap(m_u64span, other.m_u64span);
 }
 
-void Val64::set(size_t index, uint64_t v)
-{
-    m_u64span[index] = htole64(v);
-}
-
-uint64_t Val64::get(size_t index) const
-{
-    return le64toh(m_u64span[index]);
-}
-
 uint64_t Val64::get_or_zero(size_t index) const
 {
     if (index >= m_u64span.size())
@@ -270,7 +260,7 @@ bool Val64::is_zero(size_t &varcost) const
     return span_is_allzero(m_u64span);
 }
 
-bool Val64::span_is_allzero(const Span<le64_t> span)
+bool Val64::span_is_allzero(const std::span<le64_t> span)
 {
     if (span.size() == 0)
         return true;
@@ -281,15 +271,15 @@ bool Val64::span_is_allzero(const Span<le64_t> span)
 }
 
 // If v1 > v2: 1.  If v1 < v2: -1.  Else 0
-int Val64::cmp_span(const Span<le64_t> v1, const Span<le64_t> v2)
+int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
 
     for (ssize_t i = maxlen-1; i >= 0; --i) {
         uint64_t iv1, iv2;
 
-        iv1 = size_t(i) < v1.size() ? le64toh(v1[i]) : 0;
-        iv2 = size_t(i) < v2.size() ? le64toh(v2[i]) : 0;
+        iv1 = size_t(i) < v1.size() ? le64toh_internal(v1[i]) : 0;
+        iv2 = size_t(i) < v2.size() ? le64toh_internal(v2[i]) : 0;
         if (iv1 < iv2)
             return -1;
         if (iv1 > iv2)
@@ -300,14 +290,13 @@ int Val64::cmp_span(const Span<le64_t> v1, const Span<le64_t> v2)
 
 int Val64::cmp(const Val64 &v2, size_t &varcost) const
 {
-    // Worst case examination is both lengths
-    varcost += m_realsize + v2.m_realsize;
+    varcost += std::max(m_realsize, v2.m_realsize);
 
     return cmp_span(m_u64span, v2.m_u64span);
 }
 
 // v1 += v2 (size v2 <= v1).  Return true if carry overflowed.
-bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
+bool Val64::add_span(std::span<le64_t> v1, const std::span<le64_t> v2,
                      size_t &nonzero_len)
 {
     assert(v1.size() >= v2.size());
@@ -320,13 +309,13 @@ bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
     for (i = 0; i < v2.size(); ++i) {
         uint64_t u1, u2, res;
 
-        u1 = le64toh(v1[i]);
-        u2 = le64toh(v2[i]);
+        u1 = le64toh_internal(v1[i]);
+        u2 = le64toh_internal(v2[i]);
 
         res = u1 + u2 + carry;
         if (res)
             nonzero_len = i + 1;
-        v1[i] = htole64(res);
+        v1[i] = htole64_internal(res);
         if (res > u1)
             carry = false;
         else {
@@ -337,8 +326,8 @@ bool Val64::add_span(Span<le64_t> v1, const Span<le64_t> v2,
     /* Carry forwards if required (continue even if not overflowing,
      * to set nonzero_len) */
     while (i < v1.size()) {
-        uint64_t u1 = le64toh(v1[i] + carry);
-        v1[i] = htole64(u1);
+        uint64_t u1 = le64toh_internal(v1[i] + carry);
+        v1[i] = htole64_internal(u1);
         if (u1)
             nonzero_len = i + 1;
         carry = carry && (u1 == 0);
@@ -354,8 +343,8 @@ void Val64::op_add(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_ADD
-    // |Greater of two operand lengths * 3
-    varcost += v1.m_realsize * 3;
+    // |Greater of two operand lengths * 4
+    varcost += v1.m_realsize * 4;
 
     size_t nonzero_len;
     bool carry = add_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -382,7 +371,7 @@ void Val64::op_1add(Val64 &v1, size_t &varcost)
 }
 
 // v1 -= v2
-bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len)
+bool Val64::sub_span(std::span<le64_t> v1, const std::span<le64_t> v2, size_t &nonzero_len)
 {
     auto common_len = std::min(v1.size(), v2.size());
 
@@ -394,11 +383,11 @@ bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len
     for (i = 0; i < common_len; ++i) {
         uint64_t u1, u2, res;
 
-        u1 = le64toh(v1[i]);
-        u2 = le64toh(v2[i]);
+        u1 = le64toh_internal(v1[i]);
+        u2 = le64toh_internal(v2[i]);
 
         res = u1 - u2 - underflow;
-        v1[i] = htole64(res);
+        v1[i] = htole64_internal(res);
         if (res)
             nonzero_len = i + 1;
         if (res < u1)
@@ -423,8 +412,8 @@ bool Val64::sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len
     /* We have exhausted v2.  Underflow forwards if required: we keep
      * going even if we don't need to, to update nonzero_len. */
     while (i < v1.size()) {
-        uint64_t u1 = le64toh(v1[i]);
-        v1[i] = htole64(u1 - underflow);
+        uint64_t u1 = le64toh_internal(v1[i]);
+        v1[i] = htole64_internal(u1 - underflow);
         if (v1[i] != 0)
             nonzero_len = i + 1;
         underflow = (underflow && u1 == 0);
@@ -439,8 +428,8 @@ bool Val64::op_sub(Val64 &v1, const Val64 &v2, size_t &varcost)
 {
     // BIP#ops:
     // |OP_SUB
-    // |Greater of two operand lengths * 2
-    varcost += std::max(v1.m_realsize, v2.m_realsize) * 2;
+    // |Greater of two operand lengths * 3
+    varcost += std::max(v1.m_realsize, v2.m_realsize) * 3;
     size_t nonzero_len;
 
     bool underflow = sub_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -594,7 +583,7 @@ void Val64::op_2div(Val64 &v1, size_t &varcost)
     // BIP#ops:
     // |OP_2DIV
     // |Operand length
-    varcost += v1.m_realsize;
+    varcost += v1.m_realsize * 2;
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.trim_tail();
@@ -674,15 +663,45 @@ void Val64::op_xor(Val64 &v1, Val64 &v2, size_t &varcost)
         v1.m_u64span[i] ^= v2.m_u64span[i];
 }
 
-void Val64::mul_span(Span<le64_t> res,
-                     const Span<le64_t> src,
+void Val64::op_min(Val64 &v1, Val64 &v2, size_t &varcost)
+{
+    binop_v1_longest(v1, v2);
+
+    // BIP#ops:
+    // |OP_MIN
+    // |(Greater of two operand lengths) * 2
+    varcost += v1.m_realsize * 2;
+
+    if (cmp_span(v1.m_u64span, v2.m_u64span) > 0) {
+        v1 = std::move(v2);
+    }
+    v1.trim_tail();
+}
+
+void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
+{
+    binop_v1_longest(v1, v2);
+
+    // BIP#ops:
+    // |OP_MAX
+    // |(Greater of two operand lengths) * 2
+    varcost += v1.m_realsize * 2;
+
+    if (cmp_span(v1.m_u64span, v2.m_u64span) < 0) {
+        v1 = std::move(v2);
+    }
+    v1.trim_tail();
+}
+
+void Val64::mul_span(std::span<le64_t> res,
+                     const std::span<le64_t> src,
                      uint64_t mul)
 {
     // Result must be (at least) 1 word larger, for carry.
     assert(res.size() >= src.size() + 1);
 
     // Calculate this * mul, into res.
-    res[0] = htole64(0);
+    res[0] = htole64_internal(0);
     for (size_t i = 0; i < src.size(); ++i) {
         uint64_t hi, lo, oldhi;
 
@@ -690,17 +709,17 @@ void Val64::mul_span(Span<le64_t> res,
         // has it (otherwise falls back to software)
         unsigned __int128 product;
 
-        product = (__int128)(le64toh(src[i])) * mul;
+        product = (__int128)(le64toh_internal(src[i])) * mul;
         hi = product >> 64;
         lo = product;
 
-        oldhi = le64toh(res[i]);
+        oldhi = le64toh_internal(res[i]);
         /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
          * gives an upper u64 which is < UINT64MAX. */
         if (__builtin_add_overflow(lo, oldhi, &lo))
             hi++;
-        res[i] = htole64(lo);
-        res[i+1] = htole64(hi);
+        res[i] = htole64_internal(lo);
+        res[i+1] = htole64_internal(hi);
     }
 }
 
@@ -924,18 +943,18 @@ size_t Val64::op_mul_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_MUL
-    // |Length of A + length of B + (length of A + 7) / 8 * (length of B) * 4
+    // |Length of A + length of B + (length of A + 7) / 8 * (length of B) * 6
     //  (BEWARE OVERFLOW)
-    return v1.m_realsize + v2.m_realsize + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * 4;
+    return v1.m_realsize + v2.m_realsize + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * 6;
 }
 
 size_t Val64::op_div_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_DIV
-    // |Length of A * 9 + length of B * 2 + (length of A)^2 / 4  (BEWARE OVERFLOW)
+    // |Length of A * 9 + length of B * 2 + (length of A)^2 / 3  (BEWARE OVERFLOW)
     return v1.m_realsize * 9 + v2.m_realsize * 2
-        + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) / 4;
+        + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) / 3;
 }
 
 size_t Val64::op_mod_varcost(const Val64 &v1, const Val64 &v2)
