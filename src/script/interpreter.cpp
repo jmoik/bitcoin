@@ -1424,14 +1424,11 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
-    // static const CScriptNum bnFalse(0);
-    // static const CScriptNum bnTrue(1);
     static const valtype vchFalse(0);
-    // static const valtype vchZero(0);
     static const valtype vchTrue(1, 1);
 
-    // sigversion cannot be TAPROOT here, as it admits no script execution.
-    assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::TAPSCRIPT);
+    // sigversion can only be TAPSCRIPT_V2 here
+    assert(sigversion == SigVersion::TAPSCRIPT_V2);
 
     CScript::const_iterator pc = script.begin();
     CScript::const_iterator pend = script.end();
@@ -1463,34 +1460,22 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
             if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
-            if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) {
-                // Note how OP_RESERVED does not count towards the opcode limit.
-                if (opcode > OP_16 && ++nOpCount > MAX_OPS_PER_SCRIPT) {
-                    return set_error(serror, SCRIPT_ERR_OP_COUNT);
-                }
-
-                if (opcode == OP_CAT ||
-                    opcode == OP_SUBSTR ||
-                    opcode == OP_LEFT ||
-                    opcode == OP_RIGHT ||
-                    opcode == OP_INVERT ||
-                    opcode == OP_AND ||
-                    opcode == OP_OR ||
-                    opcode == OP_XOR ||
-                    opcode == OP_2MUL ||
-                    opcode == OP_2DIV ||
-                    opcode == OP_MUL ||
-                    opcode == OP_DIV ||
-                    opcode == OP_MOD ||
-                    opcode == OP_LSHIFT ||
-                    opcode == OP_RSHIFT) {
-                    return set_error(serror, SCRIPT_ERR_DISABLED_OPCODE); // Disabled opcodes (CVE-2010-5137).
-                }
-            }
-
-            // With SCRIPT_VERIFY_CONST_SCRIPTCODE, OP_CODESEPARATOR in non-segwit script is rejected even in an unexecuted branch
-            if (opcode == OP_CODESEPARATOR && sigversion == SigVersion::BASE && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
-                return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
+            if (opcode == OP_CAT ||
+                opcode == OP_SUBSTR ||
+                opcode == OP_LEFT ||
+                opcode == OP_RIGHT ||
+                opcode == OP_INVERT ||
+                opcode == OP_AND ||
+                opcode == OP_OR ||
+                opcode == OP_XOR ||
+                opcode == OP_2MUL ||
+                opcode == OP_2DIV ||
+                opcode == OP_MUL ||
+                opcode == OP_DIV ||
+                opcode == OP_MOD ||
+                opcode == OP_LSHIFT ||
+                opcode == OP_RSHIFT)
+                return set_error(serror, SCRIPT_ERR_DISABLED_OPCODE); // Disabled opcodes (CVE-2010-5137).
 
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
                 if (fRequireMinimal && !CheckMinimalPush(vchPushValue, opcode)) {
@@ -2122,112 +2107,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 case OP_CHECKMULTISIG:
                 case OP_CHECKMULTISIGVERIFY:
                 {
-                    if (sigversion == SigVersion::TAPSCRIPT) return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
-
-                    // ([sig ...] num_of_signatures [pubkey ...] num_of_pubkeys -- bool)
-
-                    int i = 1;
-                    if ((int)stack.size() < i)
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-
-                    int nKeysCount = CScriptNum(stacktop(-i), fRequireMinimal).getint();
-                    if (nKeysCount < 0 || nKeysCount > MAX_PUBKEYS_PER_MULTISIG)
-                        return set_error(serror, SCRIPT_ERR_PUBKEY_COUNT);
-                    nOpCount += nKeysCount;
-                    if (nOpCount > MAX_OPS_PER_SCRIPT)
-                        return set_error(serror, SCRIPT_ERR_OP_COUNT);
-                    int ikey = ++i;
-                    // ikey2 is the position of last non-signature item in the stack. Top stack item = 1.
-                    // With SCRIPT_VERIFY_NULLFAIL, this is used for cleanup if operation fails.
-                    int ikey2 = nKeysCount + 2;
-                    i += nKeysCount;
-                    if ((int)stack.size() < i)
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-
-                    int nSigsCount = CScriptNum(stacktop(-i), fRequireMinimal).getint();
-                    if (nSigsCount < 0 || nSigsCount > nKeysCount)
-                        return set_error(serror, SCRIPT_ERR_SIG_COUNT);
-                    int isig = ++i;
-                    i += nSigsCount;
-                    if ((int)stack.size() < i)
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-
-                    // Subset of script starting at the most recent codeseparator
-                    CScript scriptCode(pbegincodehash, pend);
-
-                    // Drop the signature in pre-segwit scripts but not segwit scripts
-                    for (int k = 0; k < nSigsCount; k++)
-                    {
-                        valtype& vchSig = stacktop(-isig-k);
-                        if (sigversion == SigVersion::BASE) {
-                            int found = FindAndDelete(scriptCode, CScript() << vchSig);
-                            if (found > 0 && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))
-                                return set_error(serror, SCRIPT_ERR_SIG_FINDANDDELETE);
-                        }
-                    }
-
-                    bool fSuccess = true;
-                    while (fSuccess && nSigsCount > 0)
-                    {
-                        valtype& vchSig    = stacktop(-isig);
-                        valtype& vchPubKey = stacktop(-ikey);
-
-                        // Note how this makes the exact order of pubkey/signature evaluation
-                        // distinguishable by CHECKMULTISIG NOT if the STRICTENC flag is set.
-                        // See the script_(in)valid tests for details.
-                        if (!CheckSignatureEncoding(vchSig, flags, serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
-                            // serror is set
-                            return false;
-                        }
-
-                        // Check signature
-                        bool fOk = checker.CheckECDSASignature(vchSig, vchPubKey, scriptCode, sigversion);
-
-                        if (fOk) {
-                            isig++;
-                            nSigsCount--;
-                        }
-                        ikey++;
-                        nKeysCount--;
-
-                        // If there are more signatures left than keys left,
-                        // then too many signatures have failed. Exit early,
-                        // without checking any further signatures.
-                        if (nSigsCount > nKeysCount)
-                            fSuccess = false;
-                    }
-
-                    // Clean up stack of actual arguments
-                    while (i-- > 1) {
-                        // If the operation failed, we require that all signatures must be empty vector
-                        if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) && !ikey2 && stacktop(-1).size())
-                            return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
-                        if (ikey2 > 0)
-                            ikey2--;
-                        popstack(stack);
-                    }
-
-                    // A bug causes CHECKMULTISIG to consume one extra argument
-                    // whose contents were not checked in any way.
-                    //
-                    // Unfortunately this is a potential source of mutability,
-                    // so optionally verify it is exactly equal to zero prior
-                    // to removing it from the stack.
-                    if (stack.size() < 1)
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    if ((flags & SCRIPT_VERIFY_NULLDUMMY) && stacktop(-1).size())
-                        return set_error(serror, SCRIPT_ERR_SIG_NULLDUMMY);
-                    popstack(stack);
-
-                    stack.push_back(fSuccess ? vchTrue : vchFalse);
-
-                    if (opcode == OP_CHECKMULTISIGVERIFY)
-                    {
-                        if (fSuccess)
-                            popstack(stack);
-                        else
-                            return set_error(serror, SCRIPT_ERR_CHECKMULTISIGVERIFY);
-                    }
+                    return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
                 }
                 break;
 
