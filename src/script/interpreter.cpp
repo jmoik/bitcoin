@@ -1726,6 +1726,7 @@ bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, cons
         // keyversion is not used.
         break;
     case SigVersion::TAPSCRIPT:
+    case SigVersion::TAPSCRIPT_V2:
         ext_flag = 1;
         break;
     default:
@@ -1810,7 +1811,7 @@ bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, cons
     }
 
     // Additional data for BIP 342 signatures
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2) {
         assert(execdata.m_tapleaf_hash_init);
         if (input_type != SIGHASH_ANYPREVOUTANYSCRIPT) {
             ss << execdata.m_tapleaf_hash;
