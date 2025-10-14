@@ -12,6 +12,8 @@
 #include <pubkey.h>
 #include <script/script.h>
 #include <tinyformat.h>
+#include <script/valtype_stack.h>
+#include <script/val64.h>
 #include <uint256.h>
 
 typedef std::vector<unsigned char> valtype;
@@ -60,6 +62,26 @@ static inline void popstack(std::vector<valtype>& stack)
     if (stack.empty())
         throw std::runtime_error("popstack(): stack empty");
     stack.pop_back();
+}
+
+static inline void popstack(ValtypeStack& stack)
+{
+    if (stack.empty())
+        throw std::runtime_error("popstack(ValtypeStack& stack): stack empty");
+    stack.pop_back();
+}
+
+static void pushVal64(ValtypeStack& stack, Val64 &v)
+{
+    stack.push_back(v.move_to_valtype());
+}
+
+static void stackPushCosted(ValtypeStack& stack,
+                              const std::vector<unsigned char> &v,
+                              size_t &varcost)
+{
+    varcost += v.size();
+    stack.push_back(v);
 }
 
 bool static IsCompressedOrUncompressedPubKey(const valtype &vchPubKey) {
