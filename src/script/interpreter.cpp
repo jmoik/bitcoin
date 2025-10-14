@@ -347,7 +347,7 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
 
 static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, ScriptExecutionData& execdata, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& success)
 {
-    assert(sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2);
     assert(execdata.m_internal_key); // caller must provide the internal key
 
     /*
@@ -357,7 +357,7 @@ static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, Scr
      *    the script execution fails when using non-empty invalid signature.
      */
     success = !sig.empty();
-    if (success) {
+    if (success && sigversion == SigVersion::TAPSCRIPT) {
         // Implement the sigops/witnesssize ratio test.
         // Passing with an upgradable public key version is also counted.
         assert(execdata.m_validation_weight_left_init);
@@ -412,6 +412,7 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     case SigVersion::WITNESS_V0:
         return EvalChecksigPreTapscript(sig, pubkey, pbegincodehash, pend, flags, checker, sigversion, serror, success);
     case SigVersion::TAPSCRIPT:
+    case SigVersion::TAPSCRIPT_V2:
         return EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, sigversion, serror, success);
     case SigVersion::TAPROOT:
         // Key path spending in Taproot has no script, so this is unreachable.
