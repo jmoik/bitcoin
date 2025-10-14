@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 #include <span.h>
+#include <compat/endian.h>
 
 /**
  * This class is used for all modern taproot ops: this is
@@ -27,7 +28,7 @@ protected:
     size_t m_realsize;
 
     // The span inside m_charvec, as little-endian uint64_t.
-    Span<le64_t> m_u64span;
+    std::span<le64_t> m_u64span;
 
     // Helper to set other fields after m_charvec is set.
     void set_span();
@@ -102,6 +103,9 @@ public:
     static void op_or(Val64 &v1, Val64 &v2, size_t &varcost);
     static void op_xor(Val64 &v1, Val64 &v2, size_t &varcost);
 
+    static void op_min(Val64 &v1, Val64 &v2, size_t &varcost);
+    static void op_max(Val64 &v1, Val64 &v2, size_t &varcost);
+
     // These three are potentially v. expensive, so we must
     // check varops varcost *before* we evaluate them:
     static size_t op_mul_varcost(const Val64 &v1, const Val64 &v2);
@@ -122,9 +126,16 @@ protected:
     // Swap with the other value
     void swap(Val64& other);
 
-    // Endian fixers
-    void set(size_t index, uint64_t v);
-    uint64_t get(size_t index) const;
+    // Endian fixers - inline for performance
+    inline void set(size_t index, uint64_t v)
+    {
+        m_u64span[index] = htole64_internal(v);
+    }
+    
+    inline uint64_t get(size_t index) const
+    {
+        return le64toh_internal(m_u64span[index]);
+    }
 
     // If it's past the end, return 0.
     uint64_t get_or_zero(size_t index) const;
@@ -146,24 +157,24 @@ protected:
     bool bitshift_up_small(size_t bits);
 
     // False if any non-zero bytes in span.
-    static bool span_is_allzero(const Span<le64_t> span);
+    static bool span_is_allzero(const std::span<le64_t> span);
     
     // (*this) cmp (v2 << shift_words*64)
-    static int cmp_span(const Span<le64_t> v1, const Span<le64_t> v2);
+    static int cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2);
 
     // v1 += v2, return carry.  v1.size() >= v2.size().
     // If returns false, nonzero_len is one past the last non-zero u64 in v1
     // (which helps optimize trim_tail)
-    static bool add_span(Span<uint64_t> v1, const Span<uint64_t> v2, size_t &nonzero_len);
+    static bool add_span(std::span<uint64_t> v1, const std::span<uint64_t> v2, size_t &nonzero_len);
 
     // v1 -= v2, returns underflow.
     // If returns false, nonzero_len is one past the last non-zero u64 in v1
     // (which helps optimize trim_tail)
-    static bool sub_span(Span<le64_t> v1, const Span<le64_t> v2, size_t &nonzero_len);
+    static bool sub_span(std::span<le64_t> v1, const std::span<le64_t> v2, size_t &nonzero_len);
     
     // res = src * mul
-    static void mul_span(Span<le64_t> res,
-                         const Span<le64_t> src,
+    static void mul_span(std::span<le64_t> res,
+                         const std::span<le64_t> src,
                          uint64_t mul);
 
     enum class divmod_op {
