@@ -63,7 +63,7 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
 
 std::optional<uint256> MutableTransactionSignatureCreator::ComputeSchnorrSignatureHash(const uint256* leaf_hash, SigVersion sigversion) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2);
 
     // BIP341/BIP342 signing needs lots of precomputed transaction data. While some
     // (non-SIGHASH_DEFAULT) sighash modes exist that can work with just some subset
@@ -73,7 +73,7 @@ std::optional<uint256> MutableTransactionSignatureCreator::ComputeSchnorrSignatu
     ScriptExecutionData execdata;
     execdata.m_annex_init = true;
     execdata.m_annex_present = false; // Only support annex-less signing for now.
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2) {
         execdata.m_codeseparator_pos_init = true;
         execdata.m_codeseparator_pos = 0xFFFFFFFF; // Only support non-OP_CODESEPARATOR BIP342 signing for now.
         if (!leaf_hash) return std::nullopt; // BIP342 signing needs leaf hash.
