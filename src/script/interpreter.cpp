@@ -2171,7 +2171,16 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
 
     // Scripts inside witness implicitly require cleanstack behaviour
     if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
-    if (!CastToBool(stack.back())) return set_error(serror, SCRIPT_ERR_EVAL_FALSE);
+    bool result;
+    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        size_t varcost = 0;
+        result = Val64(stack.back()).to_u64_ceil(1, varcost);
+    } else {
+        result = CastToBool(stack.back());
+    }
+    if (!result) {
+        return set_error(serror, SCRIPT_ERR_EVAL_FALSE);
+    }
     return true;
 }
 
