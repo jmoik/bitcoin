@@ -22,6 +22,8 @@ typedef enum ScriptError_t
     SCRIPT_ERR_PUSH_SIZE,
     SCRIPT_ERR_OP_COUNT,
     SCRIPT_ERR_STACK_SIZE,
+    SCRIPT_ERR_TOTAL_STACK_SIZE,
+    SCRIPT_ERR_STACK_ELEMENT_SIZE,
     SCRIPT_ERR_SIG_COUNT,
     SCRIPT_ERR_PUBKEY_COUNT,
 
@@ -88,6 +90,12 @@ typedef enum ScriptError_t
     /* Inquisition additions */
     INQ_SCRIPTERR
 
+    /* Tapscript v2 */
+    SCRIPT_ERR_DIVIDE_BY_ZERO,
+    SCRIPT_ERR_SUB_UNDERFLOW,
+    SCRIPT_ERR_VAROP_COUNT,
+    SCRIPT_ERR_VAROP_NULL,
+    
     SCRIPT_ERR_ERROR_COUNT
 } ScriptError;
 
