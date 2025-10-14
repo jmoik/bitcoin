@@ -2123,7 +2123,7 @@ std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_v
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             }
             // New opcodes will be listed here. May use a different sigversion to modify existing opcodes.
-            if (IsOpSuccess(opcode)) {
+            if (IsOpSuccess(opcode, sigversion)) {
                 switch(opcode) {
                 INQ_SUCCESS_OPCODES
                 case OP_RESERVED:
