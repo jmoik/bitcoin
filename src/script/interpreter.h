@@ -23,6 +23,7 @@ class CPubKey;
 class CScript;
 class CScriptNum;
 class XOnlyPubKey;
+class ValtypeStack;
 struct CScriptWitness;
 
 /** Signature hash types/flags */
@@ -367,7 +368,7 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
-bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* error = nullptr);
+bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* error = nullptr);
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror = nullptr, std::optional<uint64_t> varops_budget = std::nullopt);
 
 size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness& witness, script_verify_flags flags);
