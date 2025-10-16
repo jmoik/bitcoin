@@ -1348,6 +1348,10 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                 case OP_15:
                 case OP_16:
                 {
+                    // OP_1NEGATE is OP_SUCCESS in Tapscript2
+                    if (opcode == OP_1NEGATE) {
+                        break;
+                    }
                     // ( -- value)
                     CScriptNum bn((int)opcode - (int)(OP_1 - 1));
                     stack.push_back(bn.getvch());
