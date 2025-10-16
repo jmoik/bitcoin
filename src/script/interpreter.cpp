@@ -1421,7 +1421,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 }
 
 
-bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
+bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
@@ -1437,7 +1437,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     opcodetype opcode;
     valtype vchPushValue;
     ConditionStack vfExec;
-    std::vector<valtype> altstack;
+    ValtypeStack altstack;
     set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
     if ((sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) && script.size() > MAX_SCRIPT_SIZE) {
         return set_error(serror, SCRIPT_ERR_SCRIPT_SIZE);
@@ -1612,7 +1612,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     {
                         if (stack.size() < 1)
                             return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
-                        valtype& vch = stacktop(-1);
+                        const valtype& vch = stacktop(-1);
                         // Tapscript requires minimal IF/NOTIF inputs as a consensus rule.
                         if (sigversion == SigVersion::TAPSCRIPT) {
                             // The input argument to the OP_IF and OP_NOTIF opcodes must be either
@@ -1748,11 +1748,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
                     if (stack.size() < 6)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch1 = stacktop(-6);
-                    valtype vch2 = stacktop(-5);
-                    stack.erase(stack.end()-6, stack.end()-4);
-                    stack.push_back(vch1);
-                    stack.push_back(vch2);
+                    stack.rotate(-6, -4, 0);
                 }
                 break;
 
@@ -1761,8 +1757,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 x3 x4 -- x3 x4 x1 x2)
                     if (stack.size() < 4)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    swap(stacktop(-4), stacktop(-2));
-                    swap(stacktop(-3), stacktop(-1));
+                    stack.swap(-4, -2);
+                    stack.swap(-3, -1);
                 }
                 break;
 
@@ -1809,7 +1805,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 -- x2)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    stack.erase(stack.end() - 2);
+                    stack.erase(stack.size() - 2);
                 }
                 break;
 
@@ -1836,7 +1832,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     valtype vch = stacktop(-n-1);
                     if (opcode == OP_ROLL)
-                        stack.erase(stack.end()-n-1);
+                        stack.erase(stack.size() - n - 1);
                     stack.push_back(vch);
                 }
                 break;
@@ -1848,8 +1844,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     //  x2 x3 x1  after second swap
                     if (stack.size() < 3)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    swap(stacktop(-3), stacktop(-2));
-                    swap(stacktop(-2), stacktop(-1));
+                    stack.swap(-3, -2);
+                    stack.swap(-2, -1);
                 }
                 break;
 
@@ -1858,7 +1854,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 -- x2 x1)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    swap(stacktop(-2), stacktop(-1));
+                    stack.swap(-2, -1);
                 }
                 break;
 
@@ -1867,8 +1863,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 -- x2 x1 x2)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch = stacktop(-1);
-                    stack.insert(stack.end()-2, vch);
+                    const valtype &vch = stacktop(-1);
+                    stack.insert(stack.size() - 2, vch);
                 }
                 break;
 
@@ -1894,8 +1890,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (x1 x2 - bool)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype& vch1 = stacktop(-2);
-                    valtype& vch2 = stacktop(-1);
+                    const valtype& vch1 = stacktop(-2);
+                    const valtype& vch2 = stacktop(-1);
                     bool fEqual = (vch1 == vch2);
                     // OP_NOTEQUAL is disabled because it would be too easy to say
                     // something like n != 1 and have some wiseguy pass in 1 with extra
@@ -2031,7 +2027,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     // (in -- hash)
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype& vch = stacktop(-1);
+                    const valtype& vch = stacktop(-1);
                     valtype vchHash((opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20 : 32);
                     if (opcode == OP_RIPEMD160)
                         CRIPEMD160().Write(vch.data(), vch.size()).Finalize(vchHash.data());
@@ -2066,8 +2062,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
 
-                    valtype& vchSig    = stacktop(-2);
-                    valtype& vchPubKey = stacktop(-1);
+                    const valtype& vchSig    = stacktop(-2);
+                    const valtype& vchPubKey = stacktop(-1);
 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
@@ -2866,7 +2862,8 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
     // Run the script interpreter.
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
         if (!varops_budget) return set_error(serror, SCRIPT_ERR_VAROP_NULL);
-        if (!EvalScript(stack, exec_script, flags, checker, sigversion, execdata, *varops_budget, serror)) return false;
+        ValtypeStack valtype_stack{stack};
+        if (!EvalScript(valtype_stack, exec_script, flags, checker, sigversion, execdata, *varops_budget, serror)) return false;
     } else {
         if (!EvalScript(stack, exec_script, flags, checker, sigversion, execdata, serror)) return false;
     }
