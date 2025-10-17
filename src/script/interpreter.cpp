@@ -1947,6 +1947,9 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                     // zero bytes after it (numerically, 0x01 == 0x0001 == 0x000001)
                     //if (opcode == OP_NOTEQUAL)
                     //    fEqual = !fEqual;
+                    if (vch1.size() == vch2.size()) {
+                        varcost += vch1.size();
+                    }
                     popstack(stack);
                     popstack(stack);
                     stack.push_back(fEqual ? vchTrue : vchFalse);
@@ -2169,6 +2172,11 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
+                                        
+                    if (fSuccess) {
+                        varcost += VAROPS_COST_PER_SIGOP;
+                    }
+                    
                     popstack(stack);
                     popstack(stack);
                     stack.push_back(fSuccess ? vchTrue : vchFalse);
