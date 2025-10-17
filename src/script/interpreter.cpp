@@ -1528,7 +1528,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                 {
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    altstack.push_back(stacktop(-1));
+                    stackPushCosted(altstack, std::move(stacktop(-1)), varcost);
                     popstack(stack);
                 }
                 break;
@@ -1537,7 +1537,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                 {
                     if (altstack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_ALTSTACK_OPERATION);
-                    stack.push_back(altstacktop(-1));
+                    stackPushCosted(stack, std::move(altstacktop(-1)), varcost);
                     popstack(altstack);
                 }
                 break;
@@ -1557,10 +1557,15 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (x1 x2 -- x1 x2 x1 x2)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch1 = stacktop(-2);
-                    valtype vch2 = stacktop(-1);
-                    stack.push_back(vch1);
-                    stack.push_back(vch2);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 2);
+                    const valtype &vch1 = stacktop(-2);
+                    const valtype &vch2 = stacktop(-1);
+                    // BIP#ops:
+                    // |OP_2DUP
+                    // |Sum of two operand lengths (COPYING)
+                    stackPushCosted(stack, vch1, varcost);
+                    stackPushCosted(stack, vch2, varcost);
                 }
                 break;
 
@@ -1569,24 +1574,33 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
                     if (stack.size() < 3)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch1 = stacktop(-3);
-                    valtype vch2 = stacktop(-2);
-                    valtype vch3 = stacktop(-1);
-                    stack.push_back(vch1);
-                    stack.push_back(vch2);
-                    stack.push_back(vch3);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 3);
+                    const valtype &vch1 = stacktop(-3);
+                    const valtype &vch2 = stacktop(-2);
+                    const valtype &vch3 = stacktop(-1);
+                    // BIP#ops:
+                    // |OP_3DUP
+                    // |Sum of three operand lengths (COPYING)
+                    stackPushCosted(stack, vch1, varcost);
+                    stackPushCosted(stack, vch2, varcost);
+                    stackPushCosted(stack, vch3, varcost);
                 }
                 break;
-
                 case OP_2OVER:
                 {
                     // (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
                     if (stack.size() < 4)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch1 = stacktop(-4);
-                    valtype vch2 = stacktop(-3);
-                    stack.push_back(vch1);
-                    stack.push_back(vch2);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 2);
+                    const valtype &vch1 = stacktop(-4);
+                    const valtype &vch2 = stacktop(-3);
+                    // BIP#ops:
+                    // |OP_2OVER
+                    // |Sum of lengths of third and fourth-top stack entries (before) (COPYING)
+                    stackPushCosted(stack, vch1, varcost);
+                    stackPushCosted(stack, vch2, varcost);
                 }
                 break;
 
@@ -1612,11 +1626,18 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                 case OP_IFDUP:
                 {
                     // (x - 0 | x x)
-                    if (stack.size() < 1)
+                    Val64 v64;
+                    if (!stack.pop64(v64))
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch = stacktop(-1);
-                    if (CastToBool(vch))
+                    bool result = !v64.is_zero(varcost);
+                    std::vector<unsigned char> vch(v64.move_to_valtype());
+                    // BIP#ops:
+                    // |OP_IFDUP
+                    // |(Length of top stack entry (before)) * 2 (COMPARINGZERO + COPYING)
+                    varcost += vch.size();
+                    if (result)
                         stack.push_back(vch);
+                    stack.push_back(std::move(vch));
                 }
                 break;
 
@@ -1642,8 +1663,13 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (x -- x x)
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch = stacktop(-1);
-                    stack.push_back(vch);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 1);
+                    const valtype &vch = stacktop(-1);
+                    // BIP#ops:
+                    // |OP_DUP
+                    // |Length of top stack entry (before) (COPYING)
+                    stackPushCosted(stack, vch, varcost);
                 }
                 break;
 
@@ -1661,8 +1687,13 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (x1 x2 -- x1 x2 x1)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype vch = stacktop(-2);
-                    stack.push_back(vch);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 1);
+                    const valtype &vch = stacktop(-2);
+                    // BIP#ops:
+                    // |OP_OVER
+                    // |Length of second-top stack entry (before) (COPYING)
+                    stackPushCosted(stack, vch, varcost);
                 }
                 break;
 
@@ -1726,7 +1757,13 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (x1 x2 -- x2 x1 x2)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    // Keep safe with references
+                    stack.reserve(stack.size() + 1);
                     const valtype &vch = stacktop(-1);
+                    // BIP#ops:
+                    // |OP_TUCK
+                    // |Length of second-from-top stack entry (before) (COPYING)
+                    varcost += vch.size();
                     stack.insert(stack.size() - 2, vch);
                 }
                 break;
