@@ -1619,19 +1619,10 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                             return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
                         const valtype& vch = stacktop(-1);
                         // Tapscript requires minimal IF/NOTIF inputs as a consensus rule.
-                        if (sigversion == SigVersion::TAPSCRIPT) {
-                            // The input argument to the OP_IF and OP_NOTIF opcodes must be either
-                            // exactly 0 (the empty vector) or exactly 1 (the one-byte vector with value 1).
-                            if (vch.size() > 1 || (vch.size() == 1 && vch[0] != 1)) {
-                                return set_error(serror, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
-                            }
-                        }
-                        // Under witness v0 rules it is only a policy rule, enabled through SCRIPT_VERIFY_MINIMALIF.
-                        if (sigversion == SigVersion::WITNESS_V0 && (flags & SCRIPT_VERIFY_MINIMALIF)) {
-                            if (vch.size() > 1)
-                                return set_error(serror, SCRIPT_ERR_MINIMALIF);
-                            if (vch.size() == 1 && vch[0] != 1)
-                                return set_error(serror, SCRIPT_ERR_MINIMALIF);
+                        // The input argument to the OP_IF and OP_NOTIF opcodes must be either
+                        // exactly 0 (the empty vector) or exactly 1 (the one-byte vector with value 1).
+                        if (vch.size() > 1 || (vch.size() == 1 && vch[0] != 1)) {
+                            return set_error(serror, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
                         }
                         fValue = CastToBool(vch);
                         if (opcode == OP_NOTIF)
