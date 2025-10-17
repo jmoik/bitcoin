@@ -1280,9 +1280,6 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
     ConditionStack vfExec;
     ValtypeStack altstack;
     set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
-    if ((sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) && script.size() > MAX_SCRIPT_SIZE) {
-        return set_error(serror, SCRIPT_ERR_SCRIPT_SIZE);
-    }
     bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
     uint32_t opcode_pos = 0;
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
@@ -1299,7 +1296,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
             //
             if (!script.GetOp(pc, opcode, vchPushValue))
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-            if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
+            if (vchPushValue.size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
@@ -2257,8 +2254,28 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
             }
 
             // Size limits
-            if (stack.size() + altstack.size() > MAX_STACK_SIZE)
+            if (stack.size() + altstack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+            }
+
+            // This is impossible to violate prior to tapscript v2.
+            size_t largest_element_size = 0;
+            if (stack.total_stack_size(largest_element_size) + altstack.total_stack_size(largest_element_size) > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+                return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+            }
+
+            // Note: with all ops so far, violator would have to be top of stack
+            if (largest_element_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+                return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+                
+            }
+
+            // Budget limits
+            if (varcost > varops_budget) {
+                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            }
+            varops_budget -= varcost;
+
         }
     }
     catch (...)
