@@ -1462,23 +1462,6 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
             if (vchPushValue.size() > MAX_SCRIPT_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
-            if (opcode == OP_CAT ||
-                opcode == OP_SUBSTR ||
-                opcode == OP_LEFT ||
-                opcode == OP_RIGHT ||
-                opcode == OP_INVERT ||
-                opcode == OP_AND ||
-                opcode == OP_OR ||
-                opcode == OP_XOR ||
-                opcode == OP_2MUL ||
-                opcode == OP_2DIV ||
-                opcode == OP_MUL ||
-                opcode == OP_DIV ||
-                opcode == OP_MOD ||
-                opcode == OP_LSHIFT ||
-                opcode == OP_RSHIFT)
-                return set_error(serror, SCRIPT_ERR_DISABLED_OPCODE); // Disabled opcodes (CVE-2010-5137).
-
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
                 if (fRequireMinimal && !CheckMinimalPush(vchPushValue, opcode)) {
                     return set_error(serror, SCRIPT_ERR_MINIMALDATA);
@@ -2225,6 +2208,207 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                 case OP_CHECKMULTISIGVERIFY:
                 {
                     return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
+                }
+                break;
+
+                // These are TAPSCRIPT_V2 only:
+                case OP_CAT:
+                {
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    // BIP#ops:
+                    // |OP_CAT
+                    // |Sum of two operand lengths (COPYING)
+                    
+                    // Pop in reverse order (top first, then second-to-top)
+                    valtype vch2 = stack.pop_back_valtype();
+                    valtype vch1 = stack.pop_back_valtype();    
+                    varcost += vch1.size() + vch2.size();
+
+                    vch1.insert(vch1.end(), vch2.begin(), vch2.end());
+                    stack.push_back(std::move(vch1));
+                }
+                break;
+                    
+                case OP_SUBSTR:
+                {
+                    // A BEGIN LEN -- A[BEGIN:BEGIN+LEN]
+                    Val64 begin_v64, len_v64;
+                    if (!stack.pop64(len_v64) ||
+                        !stack.pop64(begin_v64) ||
+                        stack.size() < 1) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+                    const valtype &vch = stacktop(-1);
+
+                    // BIP#ops:
+                    // |OP_SUBSTR
+                    // |(Sum of lengths of LEN and BEGIN operands)
+                    //  + MIN(Value of first operand (LEN), Length of operand A - Value of BEGIN, 0)
+                    //  (LENGTHCONV + COPYING)
+                    uint64_t begin = begin_v64.to_u64_ceil(vch.size(), varcost);
+                    uint64_t len = len_v64.to_u64_ceil(vch.size() - begin, varcost);
+
+                    // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0)
+                    varcost += len;
+
+                    valtype vch2(vch.begin() + begin, vch.begin() + begin + len);
+                    stack.push_back(std::move(vch2));
+                }
+                break;
+                    
+                case OP_LEFT:
+                {
+                    // A OFFSET -- A[:OFFSET]
+                    Val64 offset_v64;
+                    if (!stack.pop64(offset_v64) ||
+                        stack.size() < 1) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+
+                    // BIP#ops:
+                    // |OP_LEFT
+                    // |Length of OFFSET operand
+                    uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
+                    valtype vch = stack.pop_back_valtype();  // Move instead of copy
+                    vch.erase(vch.begin() + offset, vch.end());
+                    stack.push_back(std::move(vch));
+                }
+                break;
+
+                case OP_RIGHT:
+                {
+                    // A OFFSET -- A[-OFFSET:]
+                    Val64 offset_v64;
+                    if (!stack.pop64(offset_v64) ||
+                        stack.size() < 1) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+
+                    // BIP#ops:
+                    // |OP_RIGHT
+                    // |Length of OFFSET operand + MIN(Length of A, Value of OFFSET) (LENGTHCONV + COPYING)
+                    uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
+                    valtype vch = stack.pop_back_valtype();  // Move instead of copy
+                    
+                    if (offset >= vch.size()) {
+                        varcost += vch.size();
+                    } else {
+                        vch.erase(vch.begin(), vch.end() - offset);
+                        varcost += offset;
+                    }
+                    stack.push_back(std::move(vch));
+                }
+                break;
+
+                // Taproot v2 unary ops.
+                case OP_INVERT:
+                case OP_2MUL:
+                case OP_2DIV:
+                {
+                    Val64 v64;
+                    if (!stack.pop64(v64)) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+                    // Puts result back in v64a
+                    switch (opcode)
+                    {
+                    case OP_INVERT: Val64::op_invert(v64, varcost); break;
+                    case OP_2MUL:   Val64::op_2mul(v64, varcost); break;
+                    case OP_2DIV:   Val64::op_2div(v64, varcost); break;
+                    default:        assert(!"invalid opcode");
+                    }
+                    pushVal64(stack, v64);
+                }
+                break;
+
+                // Taproot v2 binary ops.
+                case OP_AND:
+                case OP_OR:
+                case OP_XOR:
+                case OP_MUL:
+                case OP_DIV:
+                case OP_MOD:
+                case OP_LSHIFT:
+                case OP_RSHIFT:
+                {
+                    Val64 v64a, v64b;
+                    if (!stack.pop64(v64b) ||
+                        !stack.pop64(v64a)) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+
+                    // Puts result back in v64a
+                    switch (opcode)
+                    {
+                    case OP_AND:
+                        Val64::op_and(v64a, v64b, varcost);
+                        break;
+
+                    case OP_OR:
+                        Val64::op_or(v64a, v64b, varcost);
+                        break;
+
+                    case OP_XOR:
+                        Val64::op_xor(v64a, v64b, varcost);
+                        break;
+
+                    case OP_MUL:
+                        // BIP#ops:
+                        // |OP_MUL
+                        // ...
+                        // # Calculate the varops cost of the operation: if it
+                        // exceeds the remaining budget, fail.
+                        varcost = Val64::op_mul_varcost(v64a, v64b);
+                        if (varcost > varops_budget)
+                            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        v64a = Val64::op_mul(v64a, v64b);
+                        break;
+
+                    case OP_DIV:
+                        // BIP#ops:
+                        // |OP_DIV
+                        // ...
+                        // # Calculate the varops cost of the operation: if it
+                        // exceeds the remaining budget, fail.
+                        varcost = Val64::op_div_varcost(v64a, v64b);
+                        if (varcost > varops_budget)
+                            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        if (!Val64::op_div(v64a, v64b))
+                            return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
+                        break;
+
+                    case OP_MOD:
+                        // BIP#ops:
+                        // |OP_MOD
+                        // ...
+                        // # Calculate the varops cost of the operation: if it
+                        // exceeds the remaining budget, fail.
+                        varcost = Val64::op_mod_varcost(v64a, v64b);
+                        if (varcost > varops_budget)
+                            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        if (!Val64::op_mod(v64a, v64b)) 
+                            return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
+                        break;
+
+                    case OP_LSHIFT:
+                        if (!Val64::op_upshift(v64a, v64b,
+                                                MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE,
+                                                varcost)) {
+                            return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+                        }
+                        break;
+
+                    case OP_RSHIFT:
+                        Val64::op_downshift(v64a, v64b, varcost);
+                        break;
+
+                    default:
+                        assert(!"invalid opcode");
+                    }
+
+                    pushVal64(stack, v64a);
                 }
                 break;
 
