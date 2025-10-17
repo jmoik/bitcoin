@@ -1644,8 +1644,9 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                 case OP_DEPTH:
                 {
                     // -- stacksize
-                    CScriptNum bn(stack.size());
-                    stack.push_back(bn.getvch());
+                    Val64 v(stack.size());
+                    valtype vch = v.move_to_valtype();
+                    stackPushCosted(stack, vch, varcost);
                 }
                 break;
 
@@ -1774,8 +1775,9 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // (in -- in size)
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn(stacktop(-1).size());
-                    stack.push_back(bn.getvch());
+                    Val64 v(stacktop(-1).size());
+                    valtype vch = v.move_to_valtype();
+                    stackPushCosted(stack, vch, varcost);
                 }
                 break;
 
