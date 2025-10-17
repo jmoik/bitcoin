@@ -1808,22 +1808,32 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                 case OP_NOT:
                 case OP_0NOTEQUAL:
                 {
-                    // (in -- out)
-                    if (stack.size() < 1)
+                    // OP_NEGATE and OP_ABS are OP_SUCCESS in Tapscript2
+                    if (opcode == OP_NEGATE || opcode == OP_ABS)
+                        break;
+                    Val64 v64;
+                    if (!stack.pop64(v64))
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn(stacktop(-1), fRequireMinimal);
                     switch (opcode)
                     {
-                    case OP_1ADD:       bn += bnOne; break;
-                    case OP_1SUB:       bn -= bnOne; break;
-                    case OP_NEGATE:     bn = -bn; break;
-                    case OP_ABS:        if (bn < bnZero) bn = -bn; break;
-                    case OP_NOT:        bn = (bn == bnZero); break;
-                    case OP_0NOTEQUAL:  bn = (bn != bnZero); break;
-                    default:            assert(!"invalid opcode"); break;
+                    case OP_1ADD:
+                        Val64::op_1add(v64, varcost);
+                        break;
+                    case OP_1SUB:
+                        if (!Val64::op_1sub(v64, varcost))
+                            return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
+                        break;
+                    case OP_NOT:
+                        v64 = Val64(v64.is_zero(varcost) ? 1 : 0);
+                        break;
+                    case OP_0NOTEQUAL:
+                        v64 = Val64(v64.is_zero(varcost) ? 0 : 1);
+                        break;
+                    default:
+                        assert(!"invalid opcode");
+                        break;
                     }
-                    popstack(stack);
-                    stack.push_back(bn.getvch());
+                    pushVal64(stack, v64);
                 }
                 break;
 
