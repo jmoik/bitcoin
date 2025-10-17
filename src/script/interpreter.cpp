@@ -1885,12 +1885,9 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                 case OP_ROT:
                 {
                     // (x1 x2 x3 -- x2 x3 x1)
-                    //  x2 x1 x3  after first swap
-                    //  x2 x3 x1  after second swap
                     if (stack.size() < 3)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    stack.swap(-3, -2);
-                    stack.swap(-2, -1);
+                    stack.rotate(-3, -2, 0);
                 }
                 break;
 
