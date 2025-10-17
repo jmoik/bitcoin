@@ -2014,63 +2014,87 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                 case OP_MIN:
                 case OP_MAX:
                 {
-                    // (x1 x2 -- out)
-                    if (stack.size() < 2)
+                    Val64 v1, v2;
+                    if (!stack.pop64(v2) || !stack.pop64(v1)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn1(stacktop(-2), fRequireMinimal);
-                    CScriptNum bn2(stacktop(-1), fRequireMinimal);
-                    CScriptNum bn(0);
-                    switch (opcode)
-                    {
+                    }
+                    // These place result into v1.
+                    switch (opcode) {
                     case OP_ADD:
-                        bn = bn1 + bn2;
+                        Val64::op_add(v1, v2, varcost);
                         break;
 
                     case OP_SUB:
-                        bn = bn1 - bn2;
+                        if (!Val64::op_sub(v1, v2, varcost))
+                            return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
                         break;
-
-                    case OP_BOOLAND:             bn = (bn1 != bnZero && bn2 != bnZero); break;
-                    case OP_BOOLOR:              bn = (bn1 != bnZero || bn2 != bnZero); break;
-                    case OP_NUMEQUAL:            bn = (bn1 == bn2); break;
-                    case OP_NUMEQUALVERIFY:      bn = (bn1 == bn2); break;
-                    case OP_NUMNOTEQUAL:         bn = (bn1 != bn2); break;
-                    case OP_LESSTHAN:            bn = (bn1 < bn2); break;
-                    case OP_GREATERTHAN:         bn = (bn1 > bn2); break;
-                    case OP_LESSTHANOREQUAL:     bn = (bn1 <= bn2); break;
-                    case OP_GREATERTHANOREQUAL:  bn = (bn1 >= bn2); break;
-                    case OP_MIN:                 bn = (bn1 < bn2 ? bn1 : bn2); break;
-                    case OP_MAX:                 bn = (bn1 > bn2 ? bn1 : bn2); break;
-                    default:                     assert(!"invalid opcode"); break;
-                    }
-                    popstack(stack);
-                    popstack(stack);
-                    stack.push_back(bn.getvch());
-
-                    if (opcode == OP_NUMEQUALVERIFY)
-                    {
-                        if (CastToBool(stacktop(-1)))
-                            popstack(stack);
-                        else
+                    case OP_BOOLAND:
+                        // Careful: evaluate both is_zero calls before combining to avoid short-circuiting
+                        {
+                            bool z1 = v1.is_zero(varcost);
+                            bool z2 = v2.is_zero(varcost);
+                            v1 = Val64(!z1 && !z2);
+                        }
+                        break;
+                    case OP_BOOLOR:
+                        // Careful: evaluate both is_zero calls before combining to avoid short-circuiting
+                        {
+                            bool z1 = v1.is_zero(varcost);
+                            bool z2 = v2.is_zero(varcost);
+                            v1 = Val64(!z1 || !z2);
+                        }
+                        break;
+                    case OP_NUMEQUAL:
+                        v1 = Val64(v1.cmp(v2, varcost) == 0 ? 1 : 0);
+                        break;
+                    case OP_NUMEQUALVERIFY:
+                        if (v1.cmp(v2, varcost) != 0)
                             return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
+                        v1 = Val64(1);
+                        break;
+                    case OP_NUMNOTEQUAL:
+                        v1 = Val64(v1.cmp(v2, varcost) == 0 ? 0 : 1);
+                        break;
+                    case OP_LESSTHAN:
+                        v1 = Val64(v1.cmp(v2, varcost) < 0 ? 1 : 0);
+                        break;
+                    case OP_GREATERTHAN:
+                        v1 = Val64(v1.cmp(v2, varcost) > 0 ? 1 : 0);
+                        break;
+                    case OP_LESSTHANOREQUAL:
+                        v1 = Val64(v1.cmp(v2, varcost) <= 0 ? 1 : 0);
+                        break;
+                    case OP_GREATERTHANOREQUAL:
+                        v1 = Val64(v1.cmp(v2, varcost) >= 0 ? 1 : 0);
+                        break;
+                    case OP_MIN:
+                        Val64::op_min(v1, v2, varcost);
+                        break;
+                    case OP_MAX:
+                        Val64::op_max(v1, v2, varcost);
+                        break;
+                    default:
+                        assert(!"invalid opcode"); break;
                     }
+                    if (opcode != OP_NUMEQUALVERIFY) {
+                        pushVal64(stack, v1);
+                    }
+                    break;
                 }
-                break;
-
                 case OP_WITHIN:
-                {
-                    // (x min max -- out)
-                    if (stack.size() < 3)
+                    {
+                    Val64 v1, v2, v3;
+                    if (!stack.pop64(v3) ||
+                        !stack.pop64(v2) ||
+                        !stack.pop64(v1)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    CScriptNum bn1(stacktop(-3), fRequireMinimal);
-                    CScriptNum bn2(stacktop(-2), fRequireMinimal);
-                    CScriptNum bn3(stacktop(-1), fRequireMinimal);
-                    bool fValue = (bn2 <= bn1 && bn1 < bn3);
-                    popstack(stack);
-                    popstack(stack);
-                    popstack(stack);
-                    stack.push_back(fValue ? vchTrue : vchFalse);
-                }
+                    }
+                    // Careful: evaluate both cmp calls before combining to avoid short-circuiting
+                    bool cond1 = v1.cmp(v2, varcost) >= 0;
+                    bool cond2 = v1.cmp(v3, varcost) < 0;
+                    Val64 res = Val64((cond1 && cond2) ? 1 : 0);
+                    pushVal64(stack, res);
+                    }
                 break;
 
 
