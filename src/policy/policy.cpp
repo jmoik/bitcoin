@@ -331,6 +331,11 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
                     for (const auto& item : stack) {
                         if (item.size() > MAX_STANDARD_TAPSCRIPT_STACK_ITEM_SIZE) return false;
                     }
+                } else if ((control_block[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2) {
+                    // Leaf version 0xc2 (aka Tapscript v2)
+                    for (const auto& item : stack) {
+                        if (item.size() > MAX_STANDARD_TAPSCRIPT_V2_STACK_ITEM_SIZE) return false;
+                    }
                 }
             } else if (stack.size() == 1) {
                 // Key path spend (1 stack element after removing optional annex)
