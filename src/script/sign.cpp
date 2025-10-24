@@ -320,7 +320,7 @@ struct TapSatisfier: Satisfier<XOnlyPubKey> {
 static bool SignTaprootScript(const SigningProvider& provider, const BaseSignatureCreator& creator, SignatureData& sigdata, int leaf_version, Span<const unsigned char> script_bytes, std::vector<valtype>& result)
 {
     // Only BIP342 tapscript signing is supported for now.
-    if (leaf_version != TAPROOT_LEAF_TAPSCRIPT) return false;
+    if (leaf_version != TAPROOT_LEAF_TAPSCRIPT && leaf_version != TAPROOT_LEAF_TAPSCRIPT_V2) return false;
 
     uint256 leaf_hash = ComputeTapleafHash(leaf_version, script_bytes);
     CScript script = CScript(script_bytes.begin(), script_bytes.end());
