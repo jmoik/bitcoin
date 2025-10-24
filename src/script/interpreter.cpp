@@ -3218,22 +3218,27 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
         }
     }
 
+    bool result;
     // Run the script interpreter.
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
         if (!varops_budget) return set_error(serror, SCRIPT_ERR_VAROP_NULL);
         ValtypeStack valtype_stack{stack};
         if (!EvalScript(valtype_stack, exec_script, flags, checker, sigversion, execdata, *varops_budget, serror)) return false;
+
+        // Scripts inside witness implicitly require cleanstack behaviour
+        if (valtype_stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
+
+        // Check result
+        size_t varcost = 0;
+        valtype back_val = valtype_stack.back();
+        result = Val64(back_val).to_u64_ceil(1, varcost);
     } else {
         if (!EvalScript(stack, exec_script, flags, checker, sigversion, execdata, serror)) return false;
-    }
 
-    // Scripts inside witness implicitly require cleanstack behaviour
-    if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
-    bool result;
-    if (sigversion == SigVersion::TAPSCRIPT_V2) {
-        size_t varcost = 0;
-        result = Val64(stack.back()).to_u64_ceil(1, varcost);
-    } else {
+        // Scripts inside witness implicitly require cleanstack behaviour
+        if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
+
+        // Check result
         result = CastToBool(stack.back());
     }
     if (!result) {
