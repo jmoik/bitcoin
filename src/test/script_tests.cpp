@@ -24,7 +24,9 @@
 #include <util/fs.h>
 #include <util/strencodings.h>
 #include <util/string.h>
+#include <script/valtype_stack.h>
 
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -34,6 +36,7 @@
 
 #include <secp256k1.h>
 #include <univalue.h>
+#include <script/val64.h>
 
 // Uncomment if you want to output updated JSON tests.
 // #define UPDATE_JSON_TESTS
@@ -1722,6 +1725,80 @@ BOOST_AUTO_TEST_CASE(formatscriptflags)
     BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_TAPROOT | script_verify_flags::from_int(1u<<27)), "TAPROOT,0x08000000");
     BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_TAPROOT | script_verify_flags::from_int((1u<<28) | (1ull<<58))), "TAPROOT,0x400000010000000");
     BOOST_CHECK_EQUAL(FormatScriptFlags(script_verify_flags::from_int(1u<<26)), "0x04000000");
+}
+
+static size_t get_val(size_t default_val, const char *var)
+{
+	const char *env = getenv(var);
+	if (!env || atol(env) == 0)
+		return default_val;
+	return atol(env);
+}
+
+static void BenchEvalScript(const CScript &script,
+                            const std::vector<unsigned char> &op1,
+                            const std::vector<unsigned char> &op2,
+                            const char *name)
+{
+	BaseSignatureChecker checker;
+	ScriptExecutionData sdata;
+	ScriptError serror;
+	size_t cooling = get_val(0, "EVALSCRIPT_COOLING_BYTES");
+
+	std::vector<unsigned char> cool1(cooling/2, cooling/7), cool2(cooling/2, cooling/15);
+    if (cooling/2)
+        std::cerr << "Cooling using " << cooling << "bytes!" << std::endl;
+
+    using namespace std::chrono;
+
+	for (int i = 0; i < 10; ++i) {
+		std::vector<std::vector<unsigned char> > stack(2);
+
+		stack[0] = op2;
+        for (size_t i = 0; i < stack[0].size(); i++)
+            stack[0][i] += cooling++;
+
+		// In case we want to clear cache.
+        for (size_t i = 0; i < cool1.size(); i++) {
+            cool1[i] += cooling; 
+            cool2[i] += cooling;
+        }
+
+		// Set up stack: this does a copy, so these won't be cold.
+		stack[1] = op1;
+        for (size_t i = 0; i < stack[1].size(); i++)
+            stack[1][i] += cooling++;
+
+        uint64_t varops_budget = 1e10;
+        ValtypeStack valtype_stack{stack};
+        if (!EvalScript(valtype_stack, script, 0, checker,
+						SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror)) {
+			std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
+			assert(0);
+		}
+	}
+
+    assert(cooling);
+}
+
+BOOST_AUTO_TEST_CASE(invert_cold)
+{
+	std::vector<unsigned char> op1(4000000), op2(4000000);
+	CScript script;
+
+	script << OP_DROP << OP_INVERT;
+
+	BenchEvalScript(script, op1, op2, "invert_cold");
+}
+
+BOOST_AUTO_TEST_CASE(invert_hot)
+{
+	std::vector<unsigned char> op1(4000000), op2(4000000);
+	CScript script;
+
+	script << OP_INVERT;
+
+	BenchEvalScript(script, op1, op2, "invert_hot");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
