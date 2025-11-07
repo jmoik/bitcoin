@@ -89,6 +89,8 @@ add_executable(test_bitcoin
   script_segwit_tests.cpp
   script_standard_tests.cpp
   script_tests.cpp
+  valtype_stack_tests.cpp
+  gsr_tests.cpp
   scriptnum_tests.cpp
   serfloat_tests.cpp
   serialize_tests.cpp
@@ -136,9 +138,12 @@ target_json_data_sources(test_bitcoin
   data/key_io_invalid.json
   data/key_io_valid.json
   data/script_tests.json
+  data/gsr_tests.json
   data/sighash.json
   data/tx_invalid.json
   data/tx_valid.json
+  data/val64_conversion.json
+  data/varops_tests.json
 )
 target_raw_data_sources(test_bitcoin NAMESPACE test::data
   data/asmap.raw

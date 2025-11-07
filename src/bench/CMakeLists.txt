@@ -23,6 +23,7 @@ add_executable(bench_bitcoin
   disconnected_transactions.cpp
   duplicate_inputs.cpp
   ellswift.cpp
+  evalscript.cpp
   examples.cpp
   gcs_filter.cpp
   hashpadding.cpp
@@ -34,6 +35,8 @@ add_executable(bench_bitcoin
   mempool_eviction.cpp
   mempool_stress.cpp
   merkle_root.cpp
+  micro.cpp
+  obfuscation.cpp
   parse_hex.cpp
   peer_eviction.cpp
   poly1305.cpp
@@ -48,8 +51,22 @@ add_executable(bench_bitcoin
   streams_findbyte.cpp
   strencodings.cpp
   util_time.cpp
+  val64.cpp
   verify_script.cpp
   xor.cpp
+)
+
+add_executable(bench_varops
+  bench_varops.cpp
+  bench.cpp
+  nanobench.cpp
+)
+
+target_link_libraries(bench_varops
+  core_interface
+  test_util
+  bitcoin_node
+  Boost::headers
 )
 
 include(TargetDataSources)
