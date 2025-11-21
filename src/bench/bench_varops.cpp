@@ -197,7 +197,6 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_SUB:
         case OP_MUL:
         case OP_DIV:
-        case OP_MOD:
         case OP_BOOLAND:
         case OP_BOOLOR:
         case OP_NUMEQUAL:
@@ -208,12 +207,15 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_GREATERTHANOREQUAL:
         case OP_MIN:
         case OP_MAX:
-        case OP_CAT:
         case OP_LSHIFT:
         case OP_RSHIFT:
         case OP_LEFT:
         case OP_RIGHT:
             return {{OP_DUP, opcode, OP_DROP, OP_DUP}, {opcode, OP_DUP}};
+        
+        case OP_MOD:
+        case OP_CAT:
+            return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
 
         // (0 in -> 1 out)
         case OP_SIZE:
