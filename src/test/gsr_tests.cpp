@@ -20,6 +20,36 @@
 
 BOOST_FIXTURE_TEST_SUITE(gsr_tests, BasicTestingSetup)
 
+
+
+static void PrintStackComparison(const std::string& test_name, 
+    const std::vector<std::vector<unsigned char>>& actual_stack,
+    const std::vector<std::vector<unsigned char>>& expected_stack)
+{
+    std::cerr << "Test '" << test_name << "' failed final stack check. Final stack:\n";
+    for (size_t i = 0; i < std::max(actual_stack.size(), expected_stack.size()); ++i) {
+        std::cerr << "  [" << i << "] ";
+        if (i < expected_stack.size()) {
+            std::cerr << "Expected: ";
+            std::ranges::for_each(expected_stack[i], 
+            [](auto c) { std::cerr << std::hex << +c << " "; });
+        } else {
+            std::cerr << "Expected: No element";
+        }
+
+        std::cerr << ", ";
+
+        if (i < actual_stack.size()) {
+            std::cerr << "Actual: ";
+            std::ranges::for_each(actual_stack[i], 
+            [](auto c) { std::cerr << std::hex << +c << " "; });
+        } else {
+            std::cerr << "Actual: No element";
+        }
+        std::cerr << std::dec << '\n';
+    }
+}
+
 static opcodetype GetOpCode(const std::string& name)
 {
     // Handle numeric opcodes
@@ -150,18 +180,29 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
         return result;
     }
     
-    result.reserve(hex.length() / 2);
+    // Strip "0x" prefix if present
+    std::string hex_data = hex;
+    if (hex_data.length() >= 2 && hex_data[0] == '0' && (hex_data[1] == 'x' || hex_data[1] == 'X')) {
+        hex_data = hex_data.substr(2);
+    }
     
-    for (size_t i = 0; i < hex.length(); ) {
+    // Empty string after stripping prefix means empty byte vector
+    if (hex_data.empty()) {
+        return result;
+    }
+    
+    result.reserve(hex_data.length() / 2);
+    
+    for (size_t i = 0; i < hex_data.length(); ) {
         // Check for expansion notation {n}
-        if (i < hex.length() && hex[i] == '{') {
+        if (i < hex_data.length() && hex_data[i] == '{') {
             // Find the closing brace
-            size_t close_brace = hex.find('}', i);
+            size_t close_brace = hex_data.find('}', i);
             if (close_brace == std::string::npos) {
                 throw std::invalid_argument("Unclosed brace in hex string");
             }
             
-            std::string count_str = hex.substr(i + 1, close_brace - i - 1);
+            std::string count_str = hex_data.substr(i + 1, close_brace - i - 1);
             uint64_t repeat_count = std::stoull(count_str) - 1;
             
             if (result.empty()) {
@@ -176,10 +217,10 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
             i = close_brace + 1;
         } else {
             // Normal hex byte parsing
-            if (i + 1 >= hex.length()) {
+            if (i + 1 >= hex_data.length()) {
                 throw std::invalid_argument("Incomplete hex byte");
             }
-            result.push_back(std::stoi(hex.substr(i, 2), nullptr, 16));
+            result.push_back(std::stoi(hex_data.substr(i, 2), nullptr, 16));
             i += 2;
         }
     }
@@ -260,9 +301,9 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             
             stack = valtype_stack.get_stack();
             if (expected_success) {
-                // if (stack != expected_final_stack) {
-                //     PrintStackComparison(full_test_name, stack, expected_final_stack);
-                // }
+                if (stack != expected_final_stack) {
+                    PrintStackComparison(full_test_name, stack, expected_final_stack);
+                }
                 BOOST_CHECK_MESSAGE(stack == expected_final_stack, "Test '" << full_test_name << "' failed final stack check.");
                 if (check_varops_budget) {
                     uint64_t budget_consumed = budget - varops_budget;
