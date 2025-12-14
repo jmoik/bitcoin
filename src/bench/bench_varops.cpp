@@ -24,6 +24,12 @@ constexpr uint64_t TOTAL_VAROPS_BUDGET = MAX_BLOCK_WEIGHT_UINT64 * VAROPS_BUDGET
 bool SILENT_MODE = false;
 std::string OUTPUT_FILE = "";
 
+const std::set<opcodetype> GSR_ONLY_OPCODES = {
+    OP_CAT, OP_SUBSTR, OP_LEFT, OP_RIGHT, OP_INVERT,
+    OP_AND, OP_OR, OP_XOR, OP_2MUL, OP_2DIV,
+    OP_MUL, OP_DIV, OP_MOD, OP_LSHIFT, OP_RSHIFT
+};
+
 namespace Timing {
     int EPOCHS = 5;
     constexpr int EPOCH_ITERATIONS = 1;
@@ -59,6 +65,7 @@ struct BenchTestCase {
     ValtypeStack stack;
     CScript script;
     uint64_t varops_consumed{0};
+    bool is_gsr_only{false};
 };
 
 struct BenchResult {
@@ -66,6 +73,7 @@ struct BenchResult {
     double median_sec;
     uint64_t varops_consumed;
     double per_varop_ns;
+    bool is_gsr_only{false};
 };
 
 
@@ -131,6 +139,23 @@ std::string GetSequenceName(const std::vector<opcodetype>& opcodes) {
     return name;
   }
 
+static bool ContainsGsrOnlyOpcode(const std::vector<opcodetype>& opcodes) {
+    for (const auto& opcode : opcodes) {
+        if (GSR_ONLY_OPCODES.count(opcode)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsGsrOnlySize(uint64_t size) {
+    return size > MAX_SCRIPT_ELEMENT_SIZE;
+}
+
+static bool IsGsrOnly(const std::vector<opcodetype>& opcodes, uint64_t stack_size) {
+    return ContainsGsrOnlyOpcode(opcodes) || IsGsrOnlySize(stack_size);
+}
+
 
 std::vector<StackTemplate> GetStackTemplates() {
     return {
@@ -186,7 +211,7 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_0NOTEQUAL:
         case OP_2MUL:
         case OP_2DIV:
-            return {{opcode, OP_DROP, OP_DUP}};
+            return {{opcode, OP_DROP, OP_DUP}, {OP_3DUP, opcode, OP_DROP, opcode, OP_DROP, opcode, OP_DROP}};
 
         // (2 in -> 1 out)
         case OP_AND:
@@ -230,7 +255,7 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
             return {{opcode}};
 
         case OP_2DROP:
-            return {{OP_DUP, OP_DUP, opcode}};
+            return {{OP_2DUP, opcode}};
 
         case OP_2OVER:
             return {{opcode, OP_DROP, OP_DROP}};
@@ -270,19 +295,6 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
 
         case OP_DROP:
             return {{opcode, OP_DUP}};
-
-        // Signature check operations
-        case OP_CHECKSIG:
-            // 2 in -> 1 out (sig, pubkey -> true/false)
-            return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
-        
-        case OP_CHECKSIGVERIFY:
-            // 2 in -> 0 out (sig, pubkey -> verify and continue)
-            return {{OP_DUP, opcode, OP_DUP}};
-        
-        case OP_CHECKSIGADD:
-            // 3 in -> 1 out (pubkey, n, sig -> n+1 or n)
-            return {{OP_DUP, OP_DUP, opcode, OP_DROP, OP_DUP}};
 
         default:
             return {};
@@ -355,7 +367,8 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
             auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
             stack.push_back(Val64(offset_val).move_to_valtype());
             std::string test_name = script_template.name + "_" + stack_config.name + "_offset_" + offset_name;
-            test_cases.emplace_back(test_name, stack, CreateScript(script_template.opcodes));
+            bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
+            test_cases.push_back({test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
         }
         return true;
     }
@@ -366,7 +379,8 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
             auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
             stack.pop_back();
             stack.push_back(std::vector<unsigned char>(1, 1));
-            test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
+            bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
+            test_cases.push_back({script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
         }
         return true;
     }
@@ -379,7 +393,9 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         for (int i = 0; i < maximum_size - 1; i++) {
             stack.push_back(Val64(roll_index).move_to_valtype());
         }
-        test_cases.emplace_back(script_template.name + "_MAX_STACK_SIZE", stack, CreateScript(script_template.opcodes));
+        // ROLL/PICK with MAX_STACK_SIZE is GSR-only (current script has much smaller stack limits)
+        bool gsr_only = true;
+        test_cases.push_back({script_template.name + "_MAX_STACK_SIZE", stack, CreateScript(script_template.opcodes), 0, gsr_only});
         return true;
     }
 
@@ -390,12 +406,17 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
     script_template.name.find("2ROT") != std::string::npos || 
     script_template.name.find("2SWAP") != std::string::npos) {
         auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
-        test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
-        test_cases.emplace_back(script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes));
+        bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
+        test_cases.push_back({script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
+        test_cases.push_back({script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
         return true;
     }
 
     return false;
+}
+
+static bool ContainsOpcode(const std::vector<opcodetype>& opcodes, opcodetype target) {
+    return std::find(opcodes.begin(), opcodes.end(), target) != opcodes.end();
 }
 
 static std::vector<BenchTestCase> CreateTestCases() {
@@ -413,11 +434,21 @@ static std::vector<BenchTestCase> CreateTestCases() {
                 continue;
             }
             
-            test_cases.emplace_back(
+            // OP_3DUP requires 3 stack elements; skip 2MB case for these
+            bool uses_3dup = ContainsOpcode(script_template.opcodes, OP_3DUP);
+            if (uses_3dup && stack_config.name == "2MBx2") {
+                continue;
+            }
+            int stack_count = uses_3dup ? 3 : stack_config.count;
+            
+            bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
+            test_cases.push_back({
                 script_template.name + "_" + stack_config.name,
-                InitStack(stack_config.size, stack_config.count, stack_config.pattern),
-                CreateScript(script_template.opcodes)
-            );
+                InitStack(stack_config.size, stack_count, stack_config.pattern),
+                CreateScript(script_template.opcodes),
+                0,
+                gsr_only
+            });
         }
     }
     
@@ -546,7 +577,7 @@ static std::vector<BenchResult> CollectResults(const ankerl::nanobench::Bench& b
         if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double per_varop_ns = test_case.varops_consumed > 0 ? (median_sec * 1e9) / test_case.varops_consumed : 0;
-            results.emplace_back(test_case.name, median_sec, test_case.varops_consumed, per_varop_ns);
+            results.push_back({test_case.name, median_sec, test_case.varops_consumed, per_varop_ns, test_case.is_gsr_only});
         }
     }
 
@@ -555,7 +586,7 @@ static std::vector<BenchResult> CollectResults(const ankerl::nanobench::Bench& b
         schnorr_median_time = schnorr_result->median(ankerl::nanobench::Result::Measure::elapsed);
     }
 
-    results.push_back(BenchResult{"Schnorr signature validation", schnorr_median_time * SIGNATURES_PER_BLOCK, 0, 0});
+    results.push_back({"Schnorr signature validation", schnorr_median_time * SIGNATURES_PER_BLOCK, 0, 0, false});
     std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) { return a.median_sec > b.median_sec; });
     
     return results;
@@ -772,7 +803,7 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
         file << "#\n";
     }
     
-    file << "Rank,Name,Seconds,Schnorr_Equivalents,Varops_Percentage\n";
+    file << "Rank,Name,Seconds,Schnorr_Equivalents,Varops_Percentage,Is_GSR_Only\n";
     
     for (size_t i = 0; i < results.size(); i++) {
         double schnorr_times = schnorr_median_time > 0 ? results[i].median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
@@ -782,7 +813,8 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
              << results[i].name << ","
              << results[i].median_sec << ","
              << schnorr_times << ","
-             << varops_percentage << "\n";
+             << varops_percentage << ","
+             << (results[i].is_gsr_only ? "true" : "false") << "\n";
     }
     
     file.close();
