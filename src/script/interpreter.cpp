@@ -1421,7 +1421,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 }
 
 
-bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
+bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
@@ -3159,7 +3159,13 @@ template class GenericTransactionSignatureChecker<CMutableTransaction>;
     return std::nullopt;
 }
 
-std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, ScriptError* serror)
+// Overload for when varops_budget is not available in the calling context
+[[maybe_unused]] static std::optional<bool> op_success_check(script_verify_flags flags, script_verify_flags enforce, script_verify_flags discourage, ScriptError discourage_err, ScriptError* serror)
+{
+    return op_success_check(flags, enforce, discourage, discourage_err, serror, std::nullopt);
+}
+
+std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, ScriptError* serror, std::optional<uint64_t> varops_budget)
 {
     {
         // OP_SUCCESSx processing overrides everything, including stack element size limits
@@ -3191,13 +3197,13 @@ std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_v
     return std::nullopt;
 }
 
-static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror)
+static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror, std::optional<uint64_t> varops_budget)
 {
     std::vector<valtype> stack{stack_span.begin(), stack_span.end()};
 
     if (sigversion == SigVersion::TAPSCRIPT) {
 
-        auto r = CheckTapscriptOpSuccess(exec_script, flags, serror);
+        auto r = CheckTapscriptOpSuccess(exec_script, flags, sigversion, serror, varops_budget);
         if (r.has_value()) return *r;
 
         // Tapscript enforces initial stack size limits (altstack is empty here)
