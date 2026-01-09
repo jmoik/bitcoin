@@ -224,14 +224,6 @@ template<typename TxType>
 uint256 GetDefaultCheckTemplateVerifyHash(const TxType& tx, const uint256& outputs_hash, const uint256& sequences_hash,
                                 const uint32_t input_index);
 
-enum class SigVersion
-{
-    BASE = 0,        //!< Bare scripts and BIP16 P2SH-wrapped redeemscripts
-    WITNESS_V0 = 1,  //!< Witness v0 (P2WPKH and P2WSH); see BIP 141
-    TAPROOT = 2,     //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, key path spending; see BIP 341
-    TAPSCRIPT = 3,   //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, script path spending, leaf version 0xc0; see BIP 342
-};
-
 enum class KeyVersion
 {
     TAPROOT = 0,     //!< 32 byte public key
@@ -408,6 +400,6 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
 int FindAndDelete(CScript& script, const CScript& b);
 
 bool CastToBool(const std::vector<unsigned char>& vch);
-std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, ScriptError* serror);
+std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, ScriptError* serror, std::optional<uint64_t> varops_budget);
 
 #endif // BITCOIN_SCRIPT_INTERPRETER_H
