@@ -159,7 +159,7 @@ Val64::Val64(const Val64 &v)
 // Faster "trim zeroes from end" function
 void Val64::trim_tail(size_t nonzero_len)
 {
-#if DEBUG
+#ifdef DEBUG
     // Check that the words after nonzero len are indeed all zero.
     for (size_t i = nonzero_len; i < m_u64span.size(); i++) {
         assert(m_u64span[i] == 0);
