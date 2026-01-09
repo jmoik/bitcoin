@@ -84,7 +84,7 @@ static Val64Test val64_singleton(uint64_t val)
     return v;
 }
 
-#if USE_GMP
+#ifdef USE_GMP
 #include <gmp.h>
 
 static void vector_to_mpz(const std::vector<unsigned char>& vec, mpz_t &num)
