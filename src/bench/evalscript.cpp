@@ -53,7 +53,7 @@ static void BenchEvalScript(benchmark::Bench& bench,
 		for (size_t i = 0; i < stack[1].size(); i++)
 			stack[1][i] = op1[i];
 
-        uint64_t varops_budget = 1e10;
+        uint64_t varops_budget = 1e14;
 
 		ValtypeStack valtype_stack{stack};
 		if (!EvalScript(valtype_stack, script, 0, checker,
