@@ -3201,7 +3201,7 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
 {
     std::vector<valtype> stack{stack_span.begin(), stack_span.end()};
 
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (sigversion == SigVersion::TAPSCRIPT || sigversion == SigVersion::TAPSCRIPT_V2) {
 
         auto r = CheckTapscriptOpSuccess(exec_script, flags, sigversion, serror, varops_budget);
         if (r.has_value()) return *r;
