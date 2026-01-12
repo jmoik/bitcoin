@@ -118,7 +118,10 @@ public:
     // Returns false if v2 is 0.
     static bool op_div(Val64 &v1, Val64 &v2);
     static bool op_mod(Val64 &v1, Val64 &v2);
-    
+
+private:
+    static void warn_alignment_once(const void *p, size_t len);
+
 protected:
     // Copy constructor, useful for tests.
     Val64(const Val64 &);
@@ -187,6 +190,8 @@ protected:
 
     // Test helpers
     static bool force_unaligned;
+public:
+    static bool suppress_alignment_warnings;
 };
 
 #endif // BITCOIN_SCRIPT_VAL64_H
