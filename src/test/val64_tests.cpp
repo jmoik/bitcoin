@@ -59,6 +59,7 @@ public:
     size_t realsize() const { return Val64::m_realsize; }
     uint64_t get(size_t i) const { return Val64::get(i); }
     static void set_force_unaligned(bool val) { Val64::force_unaligned = val; }
+    static void set_suppress_alignment_warnings(bool val) { Val64::suppress_alignment_warnings = val; }
 
     void set(size_t index, uint64_t v) { Val64::set(index, v); }
     const uint64_t *access_u64() const { return m_u64span.data(); }
@@ -142,6 +143,7 @@ static std::vector<uint64_t> ParseVec64(const UniValue &arr)
 
 BOOST_AUTO_TEST_CASE(val64_valtype_conversion)
 {
+    Val64Test::set_suppress_alignment_warnings(true);
     UniValue tests = read_json(json_tests::val64_conversion);
 
     for (unsigned int idx = 0; idx < tests.size(); idx++) {
@@ -169,6 +171,7 @@ BOOST_AUTO_TEST_CASE(val64_valtype_conversion)
 
 BOOST_AUTO_TEST_CASE(val64_unaligned)
 {
+    Val64Test::set_suppress_alignment_warnings(true);
     Val64Test::set_force_unaligned(true);
 
     std::vector<unsigned char> v_in_empty;        
@@ -201,6 +204,7 @@ BOOST_AUTO_TEST_CASE(val64_unaligned)
 
 BOOST_AUTO_TEST_CASE(val64_and_or_xor)
 {
+    Val64Test::set_suppress_alignment_warnings(true);
     // FIXME: Test varcosts!
     size_t varcost = 0;
     for (bool unaligned: {false, true}) {
@@ -298,10 +302,12 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_add)
 {
+    Val64Test::set_suppress_alignment_warnings(true);
     // FIXME: Test varcosts!
     size_t varcost = 0;
     for (bool unaligned: {false, true}) {
@@ -371,6 +377,7 @@ BOOST_AUTO_TEST_CASE(val64_add)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_sub)
@@ -448,6 +455,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_cmp)
@@ -514,6 +522,7 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_upshift)
@@ -573,6 +582,7 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_downshift)
@@ -635,6 +645,7 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_add_span)
@@ -835,6 +846,7 @@ BOOST_AUTO_TEST_CASE(val64_mul)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_2mul)
@@ -897,6 +909,7 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_2div)
@@ -958,6 +971,7 @@ BOOST_AUTO_TEST_CASE(val64_2div)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_div_mod)
@@ -1044,5 +1058,6 @@ BOOST_AUTO_TEST_CASE(val64_div_mod)
         }
 #endif
     }
+    Val64Test::set_suppress_alignment_warnings(false);
 }
 BOOST_AUTO_TEST_SUITE_END()

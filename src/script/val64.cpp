@@ -12,12 +12,13 @@
 
 // For testing.
 bool Val64::force_unaligned = false;
+bool Val64::suppress_alignment_warnings = false;
 
-static void warn_alignment_once(const void *p, size_t len)
+void Val64::warn_alignment_once(const void *p, size_t len)
 {
     static bool warned = false;
 
-    if (warned)
+    if (warned || suppress_alignment_warnings)
         return;
 
     std::cerr
@@ -66,7 +67,7 @@ void Val64::set_span()
         return;
     }
 
-    warn_alignment_once(m_charvec.data(), m_charvec.size());
+    Val64::warn_alignment_once(m_charvec.data(), m_charvec.size());
 
     // Append zeroes so we can move values.  This might change alignment.
     m_charvec.insert(m_charvec.end(), sizeof(uint64_t), 0);

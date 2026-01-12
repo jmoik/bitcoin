@@ -5,6 +5,7 @@
 #include <test/util/setup_common.h>
 
 #include <addrman.h>
+#include <script/val64.h>
 #include <banman.h>
 #include <chainparams.h>
 #include <common/system.h>
@@ -121,6 +122,8 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
     fDiscover = true;
     fListen = true;
     SetRPCWarmupStarting();
+
+    Val64::suppress_alignment_warnings = true;
     g_reachable_nets.Reset();
     ClearLocal();
 
