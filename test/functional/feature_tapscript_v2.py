@@ -27,6 +27,7 @@ class TapscriptV2Test(BitcoinTestFramework):
     def add_options(self, parser):
         # Set default random seed for deterministic behavior
         parser.set_defaults(randomseed=1234567890)
+        self.add_wallet_options(parser)
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -1412,7 +1413,7 @@ class TapscriptV2Test(BitcoinTestFramework):
             utxo_info = self.create_tapscript_v2_funding_tx(locking_script, amount=0.1)
             self.log.debug(f"✓ Created TAPSCRIPT_V2 funding transaction: {utxo_info['funding_txid']}")
             spending_tx = self.create_tapscript_v2_spending_tx(utxo_info, extra_witness_elements=unlocking_script)
-            self.log.debug(f"✓ Created TAPSCRIPT_V2 spending transaction: {spending_tx.txid_hex}")
+            self.log.debug(f"✓ Created TAPSCRIPT_V2 spending transaction: {spending_tx.rehash()}")
 
             # # print tx size 
             # self.log.debug(f"Tx size: {len(spending_tx.serialize())} B")
