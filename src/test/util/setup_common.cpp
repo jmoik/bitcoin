@@ -5,6 +5,7 @@
 #include <test/util/setup_common.h>
 
 #include <addrman.h>
+#include <script/val64.h>
 #include <banman.h>
 #include <chainparams.h>
 #include <common/system.h>
@@ -114,6 +115,8 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
     if (!EnableFuzzDeterminism()) {
         SeedRandomForTest(SeedRand::FIXED_SEED);
     }
+
+    Val64::suppress_alignment_warnings = true;
     m_node.shutdown_signal = &m_interrupt;
     m_node.shutdown_request = [this]{ return m_interrupt(); };
     m_node.args = &gArgs;
