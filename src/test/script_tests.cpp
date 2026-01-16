@@ -1730,9 +1730,12 @@ BOOST_AUTO_TEST_CASE(formatscriptflags)
 static size_t get_val(size_t default_val, const char *var)
 {
 	const char *env = getenv(var);
-	if (!env || atol(env) == 0)
+	if (!env)
 		return default_val;
-	return atol(env);
+	auto val = ToIntegral<long>(env);
+	if (!val || *val == 0)
+		return default_val;
+	return static_cast<size_t>(*val);
 }
 
 static void BenchEvalScript(const CScript &script,

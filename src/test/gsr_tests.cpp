@@ -10,6 +10,8 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <test/util/random.h>
+#include <util/strencodings.h>
+#include <util/string.h>
 #include <util/vector.h>
 #include <univalue.h>
 #include <boost/test/unit_test.hpp>
@@ -56,7 +58,7 @@ static opcodetype GetOpCode(const std::string& name)
     if (name == "0") return OP_0;
     if (name == "-1") return OP_1NEGATE;
     for (int i = 1; i <= 16; ++i) {
-        if (name == std::to_string(i)) return static_cast<opcodetype>(OP_1 + i - 1);
+        if (name == util::ToString(i)) return static_cast<opcodetype>(OP_1 + i - 1);
     }
 
     // Handle named opcodes
@@ -203,8 +205,12 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
             }
             
             std::string count_str = hex_data.substr(i + 1, close_brace - i - 1);
-            uint64_t repeat_count = std::stoull(count_str) - 1;
-            
+            auto repeat_count_opt = ToIntegral<uint64_t>(count_str);
+            if (!repeat_count_opt) {
+                throw std::invalid_argument("Invalid repeat count");
+            }
+            uint64_t repeat_count = *repeat_count_opt - 1;
+
             if (result.empty()) {
                 throw std::invalid_argument("No previous byte to repeat");
             }
@@ -220,7 +226,12 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
             if (i + 1 >= hex_data.length()) {
                 throw std::invalid_argument("Incomplete hex byte");
             }
-            result.push_back(std::stoi(hex_data.substr(i, 2), nullptr, 16));
+            unsigned char byte_val = 0;
+            auto [ptr, ec] = std::from_chars(hex_data.data() + i, hex_data.data() + i + 2, byte_val, 16);
+            if (ec != std::errc{}) {
+                throw std::invalid_argument("Invalid hex byte");
+            }
+            result.push_back(byte_val);
             i += 2;
         }
     }

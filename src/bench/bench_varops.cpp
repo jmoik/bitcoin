@@ -12,8 +12,11 @@
 #include <crypto/sha256.h>
 #include <fstream>
 #include <util/translation.h>
+#include <util/strencodings.h>
+#include <util/string.h>
 #include <sstream>
 #include <cstdio>
+#include <iostream>
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
 
@@ -322,7 +325,7 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
         auto sequences = GetOpcodes(opcode);
         
         if (sequences.empty()) {
-            printf("Skipping unsupported opcode 0x%02x (%s)\n", op, opname.c_str());
+            std::cout << strprintf("Skipping unsupported opcode 0x%02x (%s)\n", op, opname.c_str());
             continue;
         }
         
@@ -498,7 +501,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     if (!result) {
         std::string error_msg = ScriptErrorString(serror);
         if (error_msg.find("Varops count exceeded") == std::string::npos) {
-            printf("Script error: %s\n", error_msg.c_str());
+            std::cout << strprintf("Script error: %s\n", error_msg.c_str());
         }
     }
     if (working_budget != varops_block_budget && test_case.varops_consumed == 0) {
@@ -536,10 +539,10 @@ static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::stri
 
 static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchTestCase>& test_cases) {
     if (!SILENT_MODE) {
-        printf("Running Schnorr signature benchmark...\n");
+        std::cout << "Running Schnorr signature benchmark...\n";
     }
     RunSchnorrBenchmark(bench, "Schnorr signature validation");
-    
+
     double schnorr_median_time = 0.0;
     if (const auto* schnorr_result = FindResult(bench, "Schnorr signature validation")) {
         schnorr_median_time = schnorr_result->median(ankerl::nanobench::Result::Measure::elapsed);
@@ -547,7 +550,7 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
 
     double schnorr_block_time = schnorr_median_time * SIGNATURES_PER_BLOCK;
     if (!SILENT_MODE) {
-        printf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
+        std::cout << strprintf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
     }
     int bench_count = 0;
     
@@ -557,10 +560,10 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
         if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double schnorr_times = median_sec / schnorr_median_time;
-            
+
             if (!SILENT_MODE) {
-                printf("%3d/%zu: %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n", 
-                       ++bench_count, test_cases.size(), test_case.name.c_str(), median_sec, schnorr_times, 
+                std::cout << strprintf("%3d/%zu: %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
+                       ++bench_count, test_cases.size(), test_case.name.c_str(), median_sec, schnorr_times,
                        (double(test_case.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
             } else {
                 ++bench_count;
@@ -621,11 +624,11 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
     if (slowest_100_percent_time > 0 && schnorr_median_time > 0) {
         double suggested_budget = VAROPS_BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
         std::cout << "\nSUGGESTED MAXIMUM VAROPS BUDGET:\n";
-        printf("   Based on slowest 100%% varops operation (%.3f sec) vs Schnorr (%.3f sec):\n",
+        std::cout << strprintf("   Based on slowest 100%% varops operation (%.3f sec) vs Schnorr (%.3f sec):\n",
                slowest_100_percent_time, schnorr_median_time);
-        printf("   Suggested budget: %.0f varops per weight unit (current: %d)\n",
+        std::cout << strprintf("   Suggested budget: %.0f varops per weight unit (current: %d)\n",
                suggested_budget, VAROPS_BUDGET_PER_BYTE);
-        printf("   Formula: %d / %.3f * %.3f = %.0f\n\n",
+        std::cout << strprintf("   Formula: %d / %.3f * %.3f = %.0f\n\n",
                VAROPS_BUDGET_PER_BYTE, slowest_100_percent_time, schnorr_median_time, suggested_budget);
     }
     
@@ -652,7 +655,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             const auto& result = slower_than_schnorr[i];
             double schnorr_times = schnorr_median_time > 0 ? result.median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
             if (schnorr_times > SIGNATURES_PER_BLOCK / 2) {
-                printf("%zu. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
+                std::cout << strprintf("%zu. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
                        ++printed_count, result.name.c_str(), result.median_sec, schnorr_times,
                        (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
             }
@@ -663,7 +666,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
     if (schnorr_result) {
         std::cout << "\n" << std::string(80, '-') << "\n";
         double schnorr_times = SIGNATURES_PER_BLOCK;
-        printf("%-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
+        std::cout << strprintf("%-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
                schnorr_result->name.c_str(), schnorr_result->median_sec, schnorr_times,
                (double(schnorr_result->varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
         std::cout << std::string(80, '-') << "\n\n";
@@ -678,7 +681,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             const auto& result = faster_than_schnorr[i];
             double schnorr_times = schnorr_median_time > 0 ? result.median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
             if (schnorr_times > SIGNATURES_PER_BLOCK / 2) {
-                printf("%d. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
+                std::cout << strprintf("%d. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
                        ++printed_count, result.name.c_str(), result.median_sec, schnorr_times,
                        (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
             }
@@ -741,15 +744,15 @@ static std::string GetSystemInfo() {
     // Get compiler
     std::string compiler = "Unknown";
 #if defined(__clang__)
-    compiler = "Clang " + std::to_string(__clang_major__) + "." + 
-               std::to_string(__clang_minor__) + "." + 
-               std::to_string(__clang_patchlevel__);
+    compiler = "Clang " + util::ToString(__clang_major__) + "." +
+               util::ToString(__clang_minor__) + "." +
+               util::ToString(__clang_patchlevel__);
 #elif defined(__GNUC__)
-    compiler = "GCC " + std::to_string(__GNUC__) + "." + 
-               std::to_string(__GNUC_MINOR__) + "." + 
-               std::to_string(__GNUC_PATCHLEVEL__);
+    compiler = "GCC " + util::ToString(__GNUC__) + "." +
+               util::ToString(__GNUC_MINOR__) + "." +
+               util::ToString(__GNUC_PATCHLEVEL__);
 #elif defined(_MSC_VER)
-    compiler = "MSVC " + std::to_string(_MSC_VER);
+    compiler = "MSVC " + util::ToString(_MSC_VER);
 #endif
     
     // Get SHA256 implementation
@@ -888,8 +891,9 @@ static void ParseArguments(int argc, char* argv[]) {
             }
         } else if (arg == "--epochs" && i + 1 < argc) {
             try {
-                Timing::EPOCHS = std::stoi(argv[++i]);
-                if (Timing::EPOCHS <= 0) throw std::invalid_argument("Epochs must be positive");
+                auto epochs = ToIntegral<int>(argv[++i]);
+                if (!epochs || *epochs <= 0) throw std::invalid_argument("Epochs must be positive");
+                Timing::EPOCHS = *epochs;
                 if (!SILENT_MODE) {
                     std::cout << "Setting epochs to: " << Timing::EPOCHS << std::endl;
                 }

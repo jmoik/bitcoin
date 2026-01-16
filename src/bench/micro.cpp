@@ -11,6 +11,7 @@
 #include <vector>
 #include <crypto/sha256.h>
 #include <script/val64.h>
+#include <util/strencodings.h>
 
 // A de-privatizing child.
 class Val64Test: public Val64 {
@@ -29,7 +30,8 @@ static size_t bench_size(const char *varname = "MICRO_BENCH_BYTES")
 	const char *env = getenv(varname);
 	if (!env)
 		return DEFAULT_BENCH_SIZE;
-	return atol(env);
+	auto val = ToIntegral<long>(env);
+	return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
 }
 
 // For a simple speed comparison

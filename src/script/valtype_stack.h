@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <map>
+#include <optional>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -44,7 +45,7 @@ public:
     void push_back(std::vector<unsigned char>&& element);
     void pop_back();
     std::vector<unsigned char> pop_back_valtype();  // Returns the popped element by value
-    bool pop64(Val64 &v, int index = -1);
+    bool pop64(Val64 &v, std::optional<size_t> index = std::nullopt);
     void clear();
     
     void erase(size_t n);  // Erase the element at position n

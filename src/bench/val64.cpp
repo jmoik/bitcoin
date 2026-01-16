@@ -11,6 +11,7 @@
 #include <vector>
 #include <crypto/sha256.h>
 #include <script/val64.h>
+#include <util/strencodings.h>
 
 // A de-privatizing child.
 class Val64Test: public Val64 {
@@ -32,7 +33,8 @@ static size_t bench_size(const char *varname = "VAL64_BENCH_BYTES")
 	const char *env = getenv(varname);
 	if (!env)
 		return DEFAULT_BENCH_SIZE;
-	return atol(env);
+	auto val = ToIntegral<long>(env);
+	return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
 }
 
 static void Val64UpShiftSmall(benchmark::Bench& bench)
@@ -178,7 +180,8 @@ static void Val64AddPattern(benchmark::Bench& bench)
 
     std::vector<unsigned char> template1, template2;
 
-    size_t pval = env ? atol(env) : 0;
+    auto parsed = env ? ToIntegral<long>(env) : std::nullopt;
+    size_t pval = parsed ? static_cast<size_t>(*parsed) : 0;
 
     for (size_t i = 0; i < 8; i++) {
         switch (pval % 3) {

@@ -66,13 +66,16 @@ std::vector<unsigned char> ValtypeStack::pop_back_valtype() {
     return result;
 }
 
-bool ValtypeStack::pop64(Val64 &v, int index /* = -1 */) {
+bool ValtypeStack::pop64(Val64 &v, std::optional<size_t> index /* = std::nullopt */) {
     if (stack.empty())
         return false;
 
-    update_size_tracking(stack.at(stack.size() + index), false);
-    v.move_from_valtype(stack.at(stack.size() + index));
-    stack.erase(stack.begin() + stack.size() + index);
+    // if no index provided, pop from the back (last element)
+    const size_t index_to_pop = index.value_or(stack.size() - 1);
+
+    update_size_tracking(stack.at(index_to_pop), false);
+    v.move_from_valtype(stack.at(index_to_pop));
+    stack.erase(stack.begin() + index_to_pop);
     return true;
 }
 
