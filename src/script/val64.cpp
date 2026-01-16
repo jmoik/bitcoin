@@ -10,6 +10,11 @@
 #include <compat/endian.h>
 #include <iostream>
 
+// MSVC compatibility: __int128 and __builtin_add_overflow are not available
+#if !defined(__SIZEOF_INT128__) && defined(_MSC_VER)
+#define PORTABLE_64BIT_MATH 1
+#endif
+
 // For testing.
 bool Val64::force_unaligned = false;
 bool Val64::suppress_alignment_warnings = false;
@@ -707,7 +712,7 @@ void Val64::mul_span(std::span<le64_t> res,
         uint64_t hi, lo, oldhi;
 
         // Take advantage of 64 bit multiplier if platform has it
-#if defined(__SIZEOF_INT128__)
+#if defined(__SIZEOF_INT128__) && !defined(PORTABLE_64BIT_MATH)
         unsigned __int128 product;
         product = ((unsigned __int128)(le64toh_internal(src[i]))) * mul;
         hi = product >> 64;
@@ -716,8 +721,24 @@ void Val64::mul_span(std::span<le64_t> res,
         oldhi = le64toh_internal(res[i]);
         /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
          * gives an upper u64 which is < UINT64MAX. */
+#ifdef __has_builtin
+#if __has_builtin(__builtin_add_overflow)
         if (__builtin_add_overflow(lo, oldhi, &lo))
             hi++;
+#else
+        // Fallback without __builtin_add_overflow
+        uint64_t new_lo = lo + oldhi;
+        if (new_lo < lo)  // overflow in addition
+            hi++;
+        lo = new_lo;
+#endif
+#else
+        // Fallback for compilers without __has_builtin
+        uint64_t new_lo = lo + oldhi;
+        if (new_lo < lo)  // overflow in addition
+            hi++;
+        lo = new_lo;
+#endif
 #else
         // Portable fallback: 64x64->128 bit multiplication
         uint64_t a = le64toh_internal(src[i]);
@@ -864,7 +885,7 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
     // 2: for j from m-1 downto 0 do:
     for (ptrdiff_t j = m - 1; j >= 0; j--) {
         // 3: q* = floor((v1_n+j_ x β + v1_n+j-1_) / v2_n-1_)
-#if defined(__SIZEOF_INT128__)
+#if defined(__SIZEOF_INT128__) && !defined(PORTABLE_64BIT_MATH)
         unsigned __int128 v;
         unsigned __int128 qstar;
         unsigned __int128 rstar;

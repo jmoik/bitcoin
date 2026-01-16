@@ -77,4 +77,5 @@ private:
     void recalculate_size_tracking();
 };
 
-#endif // BITCOIN_VALTYPE_STACK_H 
+#endif // BITCOIN_VALTYPE_STACK_H
+
