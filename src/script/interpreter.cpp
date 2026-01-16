@@ -2071,7 +2071,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, 
                         stack.size() < 1) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
-                    const valtype &vch = stacktop(-1);
+                    valtype vch = stack.pop_back_valtype();
 
                     // BIP#ops:
                     // |OP_SUBSTR
