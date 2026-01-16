@@ -200,7 +200,7 @@
                 "initial stack": ["68656C6C6F", "01", "03"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["68656C6C6F", "656C6C"],
+                "final stack": ["656C6C"],
                 "varops cost": 5,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(3, 5-1) = 1 + 1 + 3 = 5"
             },
@@ -209,7 +209,7 @@
                 "initial stack": ["74657374", "", "02"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["74657374", "7465"],
+                "final stack": ["7465"],
                 "varops cost": 3,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(2, 4-0) = 0 + 1 + 2 = 3"
             },
@@ -218,7 +218,7 @@
                 "initial stack": ["626974636F696E", "03", "04"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["626974636F696E", "636F696E"],
+                "final stack": ["636F696E"],
                 "varops cost": 6,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(4, 7-3) = 1 + 1 + 4 = 6"
             },
@@ -227,7 +227,7 @@
                 "initial stack": ["68656C6C6F", "02", ""],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["68656C6C6F", ""],
+                "final stack": [""],
                 "varops cost": 1,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(0, 5-2) = 1 + 0 + 0 = 1"
             },
@@ -236,7 +236,7 @@
                 "initial stack": ["616263", "03", "01"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["616263", ""],
+                "final stack": [""],
                 "varops cost": 2,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(1, 3-3) = 1 + 1 + 0 = 2"
             },
@@ -245,7 +245,7 @@
                 "initial stack": ["6869", "0A", "05"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["6869", ""],
+                "final stack": [""],
                 "varops cost": 2,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(5, max(0, 2-10)) = 1 + 1 + 0 = 2"
             },
@@ -254,7 +254,7 @@
                 "initial stack": ["74657374", "02", "0A"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["74657374", "7374"],
+                "final stack": ["7374"],
                 "varops cost": 4,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(10, 4-2) = 1 + 1 + 2 = 4"
             },
@@ -263,7 +263,7 @@
                 "initial stack": ["0102030405", "01", "03"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["0102030405", "020304"],
+                "final stack": ["020304"],
                 "varops cost": 5,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(3, 5-1) = 1 + 1 + 3 = 5"
             },
@@ -272,7 +272,7 @@
                 "initial stack": ["", "", "01"],
                 "opcodes": ["OP_SUBSTR"],
                 "success": true,
-                "final stack": ["", ""],
+                "final stack": [""],
                 "varops cost": 1,
                 "description": "LENGTHCONV + COPYING: len(BEGIN) + len(LEN) + min(1, 0-0) = 0 + 1 + 0 = 1"
             },
