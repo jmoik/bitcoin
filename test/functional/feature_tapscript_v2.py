@@ -93,12 +93,13 @@ class TapscriptV2Test(BitcoinTestFramework):
             spent_output = CTxOut(int(utxo_info["amount"] * 100000000), utxo_info["tap"].scriptPubKey)
             
             sighash = TaprootSignatureHash(
-                spending_tx, 
-                [spent_output], 
-                0, 
+                spending_tx,
+                [spent_output],
+                0,
                 0,  # hash_type (SIGHASH_DEFAULT)
                 scriptpath=True,
                 leaf_script=locking_script,
+                codeseparator_pos=0xffffffff,
                 leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
             )
             
@@ -146,12 +147,13 @@ class TapscriptV2Test(BitcoinTestFramework):
             
             # Compute sighash
             sighash = TaprootSignatureHash(
-                spending_tx, 
-                [spent_output], 
-                0, 
+                spending_tx,
+                [spent_output],
+                0,
                 0,
                 scriptpath=True,
                 leaf_script=locking_script,
+                codeseparator_pos=0xffffffff,
                 leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
             )
             
@@ -369,12 +371,13 @@ class TapscriptV2Test(BitcoinTestFramework):
                     
                     # Compute sighash
                     sighash = TaprootSignatureHash(
-                        spending_tx, 
-                        [spent_output], 
+                        spending_tx,
+                        [spent_output],
                         hash_type,  # The hash type we're testing
                         0,  # input_index = 0
                         scriptpath=True,
                         leaf_script=locking_script,
+                        codeseparator_pos=0xffffffff,
                         leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
                     )
                     
@@ -1245,6 +1248,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                         0,
                         scriptpath=True,
                         leaf_script=locking_script,
+                        codeseparator_pos=0xffffffff,
                         leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
                     )
 

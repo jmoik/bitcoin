@@ -149,7 +149,7 @@ static void VerifyTweakAdd(benchmark::Bench& bench)
     KeyPair::ECC_Stop();
 }
 
-BENCHMARK(VerifyScriptBench, benchmark::PriorityLevel::HIGH);
-BENCHMARK(VerifyNestedIfScript, benchmark::PriorityLevel::HIGH);
-BENCHMARK(VerifySchnorr, benchmark::PriorityLevel::LOW);
-BENCHMARK(VerifyTweakAdd, benchmark::PriorityLevel::LOW);
+BENCHMARK(VerifyScriptBench);
+BENCHMARK(VerifyNestedIfScript);
+BENCHMARK(VerifySchnorr);
+BENCHMARK(VerifyTweakAdd);
