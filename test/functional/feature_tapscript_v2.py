@@ -16,12 +16,32 @@ from test_framework.messages import (
     SEQUENCE_FINAL,
 )
 import hashlib
-from test_framework.script import *
+from test_framework.script import (
+    CScript,
+    OP_1,
+    OP_2,
+    OP_3,
+    OP_EQUAL,
+    OP_CHECKSIG,
+    OP_CHECKSIGADD,
+    OP_CAT,
+    OP_DUP,
+    OP_DROP,
+    OP_2DUP,
+    OP_2DROP,
+    OP_VERIFY,
+    OP_LESSTHAN,
+    OP_MUL,
+    OP_SHA256,
+    OP_CHECKLOCKTIMEVERIFY,
+    OP_AND,
+    OP_OR,
+    OP_INVERT,
+)
 from test_framework.segwit_addr import encode_segwit_address
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.key import ECKey, compute_xonly_pubkey, sign_schnorr
-from test_framework.script import TaprootSignatureHash, taproot_construct
-from test_framework.messages import CTxOut
+from test_framework.script import TaprootSignatureHash, taproot_construct, LEAF_VERSION_TAPSCRIPT_V2
 
 class TapscriptV2Test(BitcoinTestFramework):
     def add_options(self, parser):
@@ -37,7 +57,7 @@ class TapscriptV2Test(BitcoinTestFramework):
 
     def print_test_status(self, test_name, is_start=True, success=None):
         """Print colored test status messages.
-        
+
         Args:
             test_name: Name of the test
             is_start: True if starting test, False if ending
@@ -47,10 +67,9 @@ class TapscriptV2Test(BitcoinTestFramework):
         GREEN = '\033[92m'
         RED = '\033[91m'
         BLUE = '\033[94m'
-        YELLOW = '\033[93m'
         RESET = '\033[0m'
         BOLD = '\033[1m'
-        
+
         if is_start:
             self.log.info(f"\n\n{BLUE}{BOLD}▶ Starting test:{RESET} {test_name}\n")
         else:

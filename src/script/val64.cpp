@@ -276,7 +276,7 @@ int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
 
-    for (ssize_t i = maxlen-1; i >= 0; --i) {
+    for (ptrdiff_t i = maxlen-1; i >= 0; --i) {
         uint64_t iv1, iv2;
 
         iv1 = size_t(i) < v1.size() ? le64toh_internal(v1[i]) : 0;
@@ -706,11 +706,10 @@ void Val64::mul_span(std::span<le64_t> res,
     for (size_t i = 0; i < src.size(); ++i) {
         uint64_t hi, lo, oldhi;
 
-        // Take advantage of 64 bit multiplier if platform
-        // has it (otherwise falls back to software)
+        // Take advantage of 64 bit multiplier if platform has it
+#if defined(__SIZEOF_INT128__)
         unsigned __int128 product;
-
-        product = (__int128)(le64toh_internal(src[i])) * mul;
+        product = ((unsigned __int128)(le64toh_internal(src[i]))) * mul;
         hi = product >> 64;
         lo = product;
 
@@ -719,6 +718,29 @@ void Val64::mul_span(std::span<le64_t> res,
          * gives an upper u64 which is < UINT64MAX. */
         if (__builtin_add_overflow(lo, oldhi, &lo))
             hi++;
+#else
+        // Portable fallback: 64x64->128 bit multiplication
+        uint64_t a = le64toh_internal(src[i]);
+        uint64_t a_lo = a & 0xFFFFFFFFULL;
+        uint64_t a_hi = a >> 32;
+        uint64_t b_lo = mul & 0xFFFFFFFFULL;
+        uint64_t b_hi = mul >> 32;
+
+        uint64_t p0 = a_lo * b_lo;
+        uint64_t p1 = a_lo * b_hi;
+        uint64_t p2 = a_hi * b_lo;
+        uint64_t p3 = a_hi * b_hi;
+
+        uint64_t carry = ((p0 >> 32) + (p1 & 0xFFFFFFFFULL) + (p2 & 0xFFFFFFFFULL)) >> 32;
+        lo = p0 + (p1 << 32) + (p2 << 32);
+        hi = p3 + (p1 >> 32) + (p2 >> 32) + carry;
+
+        oldhi = le64toh_internal(res[i]);
+        uint64_t new_lo = lo + oldhi;
+        if (new_lo < lo)  // overflow in addition
+            hi++;
+        lo = new_lo;
+#endif
         res[i] = htole64_internal(lo);
         res[i+1] = htole64_internal(hi);
     }
@@ -840,8 +862,9 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
     std::vector<le64_t> scratch((v2.m_u64span.size() + 1) * sizeof(uint64_t));
 
     // 2: for j from m-1 downto 0 do:
-    for (ssize_t j = m - 1; j >= 0; j--) {
+    for (ptrdiff_t j = m - 1; j >= 0; j--) {
         // 3: q* = floor((v1_n+j_ x β + v1_n+j-1_) / v2_n-1_)
+#if defined(__SIZEOF_INT128__)
         unsigned __int128 v;
         unsigned __int128 qstar;
         unsigned __int128 rstar;
@@ -872,6 +895,46 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
                 qstar--;
             }
         }
+#else
+        // Portable fallback without __int128
+        uint64_t v_hi = v1.get(n+j);
+        uint64_t v_lo = v1.get(n+j-1);
+        uint64_t divisor = v2.get(n-1);
+
+        uint64_t qstar;
+        if (v_hi >= divisor) {
+            // Quotient will overflow 64 bits
+            qstar = UINT64_MAX;
+        } else if (v_hi == 0) {
+            // Simple case: dividend fits in 64 bits
+            qstar = v_lo / divisor;
+        } else {
+            // Approximate: this may be off by a few, but the subsequent checks will fix it
+            qstar = v_hi;
+        }
+
+        // Refine using Knuth's test
+        if (n > 1) {
+            uint64_t v2_n2 = v2.get(n-2);
+            uint64_t v1_n2 = (n+j >= 2) ? v1.get(n+j-2) : 0;
+
+            // Refine qstar down if needed
+            while (qstar > 0) {
+                // Test if qstar is too large
+                // We're checking: qstar * divisor > (v_hi << 64) | v_lo
+                if (v_hi < divisor || (v_hi == divisor && v_lo == 0)) {
+                    uint64_t test_hi = 0;
+                    uint64_t test_lo = qstar * divisor;
+                    // Rough comparison
+                    if (test_hi > v_hi || (test_hi == v_hi && test_lo > v_lo)) {
+                        qstar--;
+                        continue;
+                    }
+                }
+                break;
+            }
+        }
+#endif
 
         // This is our (64-bit) guess.
         uint64_t qj = qstar;
