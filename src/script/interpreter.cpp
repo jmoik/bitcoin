@@ -1258,7 +1258,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 }
 
 
-bool EvalScript(ValtypeStack& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
+bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);

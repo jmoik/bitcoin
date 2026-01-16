@@ -50,7 +50,7 @@ static void Val64UpShiftSmall(benchmark::Bench& bench)
         n++;
     });
 }
-BENCHMARK(Val64UpShiftSmall, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64UpShiftSmall);
 
 static void Val64DownShiftSmall(benchmark::Bench& bench)
 {
@@ -65,7 +65,7 @@ static void Val64DownShiftSmall(benchmark::Bench& bench)
         Val64::op_downshift(v1, v2, varcost);
     });
 }
-BENCHMARK(Val64DownShiftSmall, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64DownShiftSmall);
    
 static void Val64BothShiftSmall(benchmark::Bench& bench)
 {
@@ -83,7 +83,7 @@ static void Val64BothShiftSmall(benchmark::Bench& bench)
         n++;
     });
 }
-BENCHMARK(Val64BothShiftSmall, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64BothShiftSmall);
 
 static void Val64BothShiftLarge(benchmark::Bench& bench)
 {
@@ -101,7 +101,7 @@ static void Val64BothShiftLarge(benchmark::Bench& bench)
         n++;
     });
 }
-BENCHMARK(Val64BothShiftLarge, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64BothShiftLarge);
 
 static void Val64AddCarry(benchmark::Bench& bench)
 {
@@ -122,7 +122,7 @@ static void Val64AddCarry(benchmark::Bench& bench)
         assert(v642.last_word() == UINT64_C(0x0101010101010101));
     });
 }
-BENCHMARK(Val64AddCarry, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64AddCarry);
 
 static void Val64AddNoCarry(benchmark::Bench& bench)
 {
@@ -140,7 +140,7 @@ static void Val64AddNoCarry(benchmark::Bench& bench)
         Val64::op_add(v641, v642, varcost);
     });
 }
-BENCHMARK(Val64AddNoCarry, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64AddNoCarry);
 
 // This is called with various permutations, for a differential benchmark.
 // We want to see if different patterns of overflow have different performance
@@ -223,7 +223,7 @@ static void Val64AddPattern(benchmark::Bench& bench)
             Val64::op_add(v641, v642, varcost);
     });
 }
-BENCHMARK(Val64AddPattern, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64AddPattern);
 
 static void Val64SubUnderflow(benchmark::Bench& bench)
 {
@@ -252,7 +252,7 @@ static void Val64SubUnderflow(benchmark::Bench& bench)
         n++;
     });
 }
-BENCHMARK(Val64SubUnderflow, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64SubUnderflow);
 
 static void Val64SubNoUnderflow(benchmark::Bench& bench)
 {
@@ -272,7 +272,7 @@ static void Val64SubNoUnderflow(benchmark::Bench& bench)
         assert(v642.last_word() == 0);
     });
 }
-BENCHMARK(Val64SubNoUnderflow, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64SubNoUnderflow);
 
 static void Val64MulSpan(benchmark::Bench& bench)
 {
@@ -291,4 +291,4 @@ static void Val64MulSpan(benchmark::Bench& bench)
         assert(v642.last_word(1) == UINT64_C(0x0101010101010101));
     });
 }
-BENCHMARK(Val64MulSpan, benchmark::PriorityLevel::LOW);
+BENCHMARK(Val64MulSpan);

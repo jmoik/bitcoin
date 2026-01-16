@@ -151,5 +151,5 @@ static void VerifyTweakAdd(benchmark::Bench& bench)
 
 BENCHMARK(VerifyScriptBench);
 BENCHMARK(VerifyNestedIfScript);
-BENCHMARK(VerifySchnorr, benchmark::PriorityLevel::LOW);
-BENCHMARK(VerifyTweakAdd, benchmark::PriorityLevel::LOW);
+BENCHMARK(VerifySchnorr);
+BENCHMARK(VerifyTweakAdd);

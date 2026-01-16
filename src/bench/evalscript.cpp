@@ -78,7 +78,7 @@ static void EvalScriptNopNop(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptNopNop, benchmark::LOW);
+BENCHMARK(EvalScriptNopNop);
 
 // BIP#ops: We assume that the manipulation of the stack vector itself (e.g. OP_DROP) is negligible.
 static void EvalScriptDropDrop(benchmark::Bench& bench)
@@ -90,7 +90,7 @@ static void EvalScriptDropDrop(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropDrop, benchmark::LOW);
+BENCHMARK(EvalScriptDropDrop);
 
 // Verify both
 static void EvalScriptVerifyVerify(benchmark::Bench& bench)
@@ -105,7 +105,7 @@ static void EvalScriptVerifyVerify(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptVerifyVerify, benchmark::LOW);
+BENCHMARK(EvalScriptVerifyVerify);
 
 // Check they're equal
 static void EvalScriptEqual(benchmark::Bench& bench)
@@ -117,7 +117,7 @@ static void EvalScriptEqual(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptEqual, benchmark::LOW);
+BENCHMARK(EvalScriptEqual);
 
 // Make a copy, twice
 static void EvalScriptDropDupDropDup(benchmark::Bench& bench)
@@ -129,7 +129,7 @@ static void EvalScriptDropDupDropDup(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropDupDropDup, benchmark::LOW);
+BENCHMARK(EvalScriptDropDupDropDup);
 
 // This modifies the element, so we can compare read costs vs r/w costs.
 static void EvalScriptInvertDropInvert(benchmark::Bench& bench)
@@ -141,7 +141,7 @@ static void EvalScriptInvertDropInvert(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptInvertDropInvert, benchmark::LOW);
+BENCHMARK(EvalScriptInvertDropInvert);
 
 static void EvalScriptDropInvert(benchmark::Bench& bench)
 {
@@ -152,7 +152,7 @@ static void EvalScriptDropInvert(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropInvert, benchmark::LOW);
+BENCHMARK(EvalScriptDropInvert);
 
 static void EvalScriptInvert(benchmark::Bench& bench)
 {
@@ -163,7 +163,7 @@ static void EvalScriptInvert(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptInvert, benchmark::LOW);
+BENCHMARK(EvalScriptInvert);
 
 // Simple binary ops
 static void EvalScriptAnd(benchmark::Bench& bench)
@@ -175,7 +175,7 @@ static void EvalScriptAnd(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAnd, benchmark::LOW);
+BENCHMARK(EvalScriptAnd);
 
 static void EvalScriptOr(benchmark::Bench& bench)
 {
@@ -186,7 +186,7 @@ static void EvalScriptOr(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptOr, benchmark::LOW);
+BENCHMARK(EvalScriptOr);
 
 static void EvalScriptAdd(benchmark::Bench& bench)
 {
@@ -197,7 +197,7 @@ static void EvalScriptAdd(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAdd, benchmark::LOW);
+BENCHMARK(EvalScriptAdd);
 
 static void EvalScriptAddOverflow(benchmark::Bench& bench)
 {
@@ -209,7 +209,7 @@ static void EvalScriptAddOverflow(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAddOverflow, benchmark::LOW);
+BENCHMARK(EvalScriptAddOverflow);
 
 static void EvalScriptSub(benchmark::Bench& bench)
 {
@@ -220,7 +220,7 @@ static void EvalScriptSub(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptSub, benchmark::LOW);
+BENCHMARK(EvalScriptSub);
 
 static void EvalScriptMul(benchmark::Bench& bench)
 {
@@ -232,7 +232,7 @@ static void EvalScriptMul(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptMul, benchmark::LOW);
+BENCHMARK(EvalScriptMul);
 
 static void EvalScriptDiv(benchmark::Bench& bench)
 {
@@ -249,7 +249,7 @@ static void EvalScriptDiv(benchmark::Bench& bench)
 	
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDiv, benchmark::LOW);
+BENCHMARK(EvalScriptDiv);
 
 static void EvalScriptUpshift1(benchmark::Bench& bench)
 {
@@ -260,7 +260,7 @@ static void EvalScriptUpshift1(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift1, benchmark::LOW);
+BENCHMARK(EvalScriptUpshift1);
 
 static void EvalScriptUpshift16000001(benchmark::Bench& bench)
 {
@@ -274,7 +274,7 @@ static void EvalScriptUpshift16000001(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift16000001, benchmark::LOW);
+BENCHMARK(EvalScriptUpshift16000001);
 
 static void EvalScriptUpshift16000000(benchmark::Bench& bench)
 {
@@ -288,7 +288,7 @@ static void EvalScriptUpshift16000000(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift16000000, benchmark::LOW);
+BENCHMARK(EvalScriptUpshift16000000);
 
 static void EvalScriptDownshift1(benchmark::Bench& bench)
 {
@@ -300,7 +300,7 @@ static void EvalScriptDownshift1(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift1, benchmark::LOW);
+BENCHMARK(EvalScriptDownshift1);
 
 static void EvalScriptDownshift16000001(benchmark::Bench& bench)
 {
@@ -315,7 +315,7 @@ static void EvalScriptDownshift16000001(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift16000001, benchmark::LOW);
+BENCHMARK(EvalScriptDownshift16000001);
 
 static void EvalScriptDownshift16000000(benchmark::Bench& bench)
 {
@@ -330,7 +330,7 @@ static void EvalScriptDownshift16000000(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift16000000, benchmark::LOW);
+BENCHMARK(EvalScriptDownshift16000000);
 
 static void EvalScriptSHA256DropSHA256(benchmark::Bench& bench)
 {
@@ -341,4 +341,4 @@ static void EvalScriptSHA256DropSHA256(benchmark::Bench& bench)
 
 	BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptSHA256DropSHA256, benchmark::LOW);
+BENCHMARK(EvalScriptSHA256DropSHA256);
