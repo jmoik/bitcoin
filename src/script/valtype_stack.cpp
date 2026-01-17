@@ -97,7 +97,7 @@ void ValtypeStack::erase(size_t first, size_t last) {
     if (first >= last || last > stack.size()) {
         throw std::invalid_argument("Invalid range");
     }
-    
+
     for (size_t i = first; i < last; ++i) {
         update_size_tracking(stack[i], false);
     }
@@ -108,7 +108,7 @@ void ValtypeStack::insert(size_t index, const std::vector<unsigned char>& elemen
     if (index > stack.size()) {
         throw std::invalid_argument("Invalid index");
     }
-    
+
     update_size_tracking(element, true);
     stack.insert(stack.begin() + index, element);
 }
@@ -127,15 +127,15 @@ void ValtypeStack::resize(size_t n) {
 }
 
 void ValtypeStack::rotate(int a, int b, int c) {
-    std::rotate(stack.end() + a, stack.end() + b, stack.end() + c);        
+    std::rotate(stack.end() + a, stack.end() + b, stack.end() + c);
 }
 
 // more efficient than std::rotate
 void ValtypeStack::roll(size_t n) {
     // rotate start, newstart, end.
     auto element = std::move(stack[stack.size() - n - 1]);
-    stack.erase(stack.begin() + stack.size() - n - 1); 
-    stack.push_back(std::move(element)); 
+    stack.erase(stack.begin() + stack.size() - n - 1);
+    stack.push_back(std::move(element));
 }
 
 void ValtypeStack::swap(int a, int b) {

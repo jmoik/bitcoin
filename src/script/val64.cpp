@@ -142,7 +142,7 @@ void Val64::move_from_valtype(std::vector<unsigned char> &vch)
 std::vector<unsigned char> Val64::move_to_valtype()
 {
     std::vector<unsigned char> ret;
-    
+
     charvec_change_start();
     ret = std::move(m_charvec);
     charvec_change_end();
@@ -482,7 +482,7 @@ void Val64::op_downshift(Val64 &v1, const Val64 &v2, size_t &varcost)
     // |Length of BITS + MAX((Length of A - (Value of BITS) / 8), 0) * 2
 
     // We already added length of BITS in to_u64_ceil above.
-    
+
     // Shift past end?  Empty.  Also covers empty array.
     if (bytes >= v1.m_realsize) {
         v1 = Val64(0);
@@ -530,7 +530,7 @@ bool Val64::op_upshift(Val64 &v1, const Val64 &v2, size_t max_size, size_t &varc
     // |Length of BITS + (Value of BITS) / 8 + Length of A (LENGTHCONV + ZEROING + COPYING).
     // If BITS % 8 != 0, add (Length of A) * 2.
     varcost += prebytes + v1.m_realsize;
-    
+
     if (bits % 8 == 0) {
         // Simply insert bytes at the beginning.
         v1.prepend_zeros(prebytes);
@@ -554,7 +554,7 @@ bool Val64::bitshift_up_small(size_t bits)
     uint64_t prevbits = 0;
 
     // [B, A] lshift 1 => [B<<1, A<<1 | B >> 63]
-    for (size_t i = 0; i < m_u64span.size(); ++i) { 
+    for (size_t i = 0; i < m_u64span.size(); ++i) {
         uint64_t old_v = get(i);
         uint64_t new_v = (old_v << bits) | prevbits;
 
@@ -622,7 +622,7 @@ void Val64::binop_v1_longest(Val64 &v1, Val64 &v2)
     if (v1.m_realsize < v2.m_realsize)
         v1.swap(v2);
 }
-    
+
 void Val64::op_and(Val64 &v1, Val64 &v2, size_t &varcost)
 {
     binop_v1_longest(v1, v2);
@@ -780,7 +780,7 @@ Val64 Val64::op_mul(Val64 &v1, Val64 &v2)
     std::vector<le64_t> scratch(v2.m_u64span.size() + 1);
 
     size_t ret_nonzero_len = 0;
-    
+
     for (size_t i = 0; i < v1.m_u64span.size(); i++) {
         size_t nonzero_len;
         // Multiply v2 by v1[i] into scratch.
@@ -895,7 +895,7 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
 
         // Knuth suggests: (notation reworked to match us, the rest is a
         // direct quote):
-        
+
         // ... let r* be the remainer.
         // Now test if q* == β, or q* x v2_n-2_ > βr* + v1_n+j-2_:
         // if so, decrease q* by 1, increase r* by v2_n-1_, and
@@ -936,9 +936,6 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
 
         // Refine using Knuth's test
         if (n > 1) {
-            uint64_t v2_n2 = v2.get(n-2);
-            uint64_t v1_n2 = (n+j >= 2) ? v1.get(n+j-2) : 0;
-
             // Refine qstar down if needed
             while (qstar > 0) {
                 // Test if qstar is too large

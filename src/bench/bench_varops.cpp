@@ -187,7 +187,7 @@ inline bool ShouldSkipCase(const std::string& opname, const std::string& stack_n
         {"2OVER", {"2MBx2", "4MBx2"}},
         {"2SWAP", {"2MBx2", "4MBx2"}}
     };
-    
+
     for (const auto& [op, limited_stacks] : size_limited_operations) {
         if (opname.find(op) != std::string::npos) {
             for (const auto& limited_stack : limited_stacks) {
@@ -240,7 +240,7 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_LEFT:
         case OP_RIGHT:
             return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
-        
+
         case OP_MOD:
         case OP_CAT:
             return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
@@ -283,7 +283,7 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_INVERT:
         case OP_PICK:
             return {{opcode}};
-        
+
         // (0 in -> 2 out)
         case OP_2DUP:
             return {{opcode, OP_DROP, OP_DROP}};
@@ -303,8 +303,8 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
             return {};
     }
 }
-    
-    
+
+
 static ankerl::nanobench::Bench SetupBenchmark() {
     ankerl::nanobench::Bench bench;
     bench.output(nullptr)
@@ -323,12 +323,12 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
         }
         std::string opname = GetOpName(opcode);
         auto sequences = GetOpcodes(opcode);
-        
+
         if (sequences.empty()) {
             std::cout << strprintf("Skipping unsupported opcode 0x%02x (%s)\n", op, opname.c_str());
             continue;
         }
-        
+
         // Create a template for each sequence
         for (const auto& opcodes : sequences) {
             std::string sequence_name = GetSequenceName(opcodes);
@@ -339,14 +339,14 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
     return script_templates;
 }
 
-static bool HandleSpecialCases(const ScriptTemplate& script_template, 
+static bool HandleSpecialCases(const ScriptTemplate& script_template,
     const StackTemplate& stack_config,
     std::vector<BenchTestCase>& test_cases) {
     // Handle LEFT/RIGHT substring operations
     if (script_template.name.find("LEFT") != std::string::npos || script_template.name.find("RIGHT") != std::string::npos) {
         // Test with different offset positions
         std::vector<std::pair<std::string, uint64_t>> offsets;
-        
+
         if (stack_config.size >= 20) {
             offsets.push_back({"10B", 10});  // Small offset
         }
@@ -365,7 +365,7 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         if (stack_config.size >= 2000000) {
             offsets.push_back({"1MB", 1000000});  // 1MB offset
         }
-        
+
         for (const auto& [offset_name, offset_val] : offsets) {
             auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
             stack.push_back(Val64(offset_val).move_to_valtype());
@@ -375,12 +375,12 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         }
         return true;
     }
-    
+
     // Handle shift operations (LSHIFT, RSHIFT) - handled separately outside loop
     if (script_template.name.find("LSHIFT") != std::string::npos || script_template.name.find("RSHIFT") != std::string::npos) {
         return true;  // Skip in main loop
     }
-    
+
     // Handle SUBSTR - test with different offset and length combinations
     if (script_template.name.find("SUBSTR") != std::string::npos) {
         // Test case 1: Empty string
@@ -393,10 +393,10 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
             bool gsr_only = IsGsrOnly(script_template.opcodes, 0);
             test_cases.push_back({test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
         }
-        
+
         // Test case 2: Various offsets and lengths on sized data
         std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> tests;  // {name, {begin, length}}
-        
+
         if (stack_config.size >= 20) {
             tests.push_back({"10B_0_10", {0, 10}});
             tests.push_back({"10B_5_5", {5, 5}});
@@ -421,7 +421,7 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
             tests.push_back({"1MB_0_1000000", {0, 1000000}});
             tests.push_back({"1MB_500000_500000", {500000, 500000}});
         }
-        
+
         for (const auto& [test_name, params] : tests) {
             auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
             stack.push_back(Val64(params.first).move_to_valtype());   // Begin
@@ -448,10 +448,10 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
     }
 
     // Handle stack manipulation operations that need 6 elements on the stack
-    if (script_template.name.find("ROT") != std::string::npos || 
-    script_template.name.find("OVER") != std::string::npos || 
-    script_template.name.find("2OVER") != std::string::npos || 
-    script_template.name.find("2ROT") != std::string::npos || 
+    if (script_template.name.find("ROT") != std::string::npos ||
+    script_template.name.find("OVER") != std::string::npos ||
+    script_template.name.find("2OVER") != std::string::npos ||
+    script_template.name.find("2ROT") != std::string::npos ||
     script_template.name.find("2SWAP") != std::string::npos) {
         auto stack = InitStack(stack_config.size, 6, stack_config.pattern);
         bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
@@ -481,14 +481,14 @@ static std::vector<BenchTestCase> CreateTestCases() {
             if (HandleSpecialCases(script_template, stack_config, test_cases)) {
                 continue;
             }
-            
+
             // OP_3DUP requires 3 stack elements; skip 2MB case for these
             bool uses_3dup = ContainsOpcode(script_template.opcodes, OP_3DUP);
             if (uses_3dup && stack_config.name == "2MBx2") {
                 continue;
             }
             int stack_count = uses_3dup ? 3 : stack_config.count;
-            
+
             bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
             test_cases.push_back({
                 script_template.name + "_" + stack_config.name,
@@ -499,14 +499,14 @@ static std::vector<BenchTestCase> CreateTestCases() {
             });
         }
     }
-    
+
     std::sort(test_cases.begin(), test_cases.end(), [](const BenchTestCase& a, const BenchTestCase& b) { return a.name < b.name; });
     test_cases.erase(std::unique(test_cases.begin(), test_cases.end(), [](const BenchTestCase& a, const BenchTestCase& b) { return a.name == b.name; }), test_cases.end());
-    
+
     return test_cases;
 }
 
-static void RunBenchmark(ankerl::nanobench::Bench& bench, 
+static void RunBenchmark(ankerl::nanobench::Bench& bench,
                          BenchTestCase& test_case) {
     BaseSignatureChecker checker;
     ScriptExecutionData sdata;
@@ -557,7 +557,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
 
 static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::string& name) {
     bench.epochIterations(Timing::SCHNORR_EPOCH_ITERATIONS).epochs(Timing::SCHNORR_EPOCHS);
-    
+
     KeyPair::ECC_Start();
     CKey key;
     std::vector<unsigned char> test_key(32, 0);
@@ -598,10 +598,10 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
         std::cout << strprintf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
     }
     int bench_count = 0;
-    
+
     for (BenchTestCase& test_case : test_cases) {
         RunBenchmark(bench, test_case);
-        
+
         if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
             double schnorr_times = median_sec / schnorr_median_time;
@@ -620,7 +620,7 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
 static std::vector<BenchResult> CollectResults(const ankerl::nanobench::Bench& bench, const std::vector<BenchTestCase>& test_cases) {
     std::vector<BenchResult> results;
     results.reserve(test_cases.size());
-    
+
     for (const auto& test_case : test_cases) {
         if (const auto* result = FindResult(bench, test_case.name)) {
             double median_sec = result->median(ankerl::nanobench::Result::Measure::elapsed);
@@ -636,7 +636,7 @@ static std::vector<BenchResult> CollectResults(const ankerl::nanobench::Bench& b
 
     results.push_back({"Schnorr signature validation", schnorr_median_time * SIGNATURES_PER_BLOCK, 0, 0, false});
     std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) { return a.median_sec > b.median_sec; });
-    
+
     return results;
 }
 
@@ -646,7 +646,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
     std::cout << "\n================================================================================\n";
     std::cout << "SLOWEST OPERATIONS\n";
     std::cout << "================================================================================\n";
-    
+
     double schnorr_median_time = 0.0;
     for (const auto& result : results) {
         if (result.name == "Schnorr signature validation") {
@@ -654,18 +654,18 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             break;
         }
     }
-    
+
     // Calculate suggested maximum varops budget based on slowest 100% budget operation
     double slowest_100_percent_time = 0.0;
     for (const auto& result : results) {
-        if (result.name != "Schnorr signature validation" && 
+        if (result.name != "Schnorr signature validation" &&
             result.varops_consumed >= TOTAL_VAROPS_BUDGET * 0.99) {
             if (result.median_sec > slowest_100_percent_time) {
                 slowest_100_percent_time = result.median_sec;
             }
         }
     }
-    
+
     if (slowest_100_percent_time > 0 && schnorr_median_time > 0) {
         double suggested_budget = VAROPS_BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
         std::cout << "\nSUGGESTED MAXIMUM VAROPS BUDGET:\n";
@@ -676,12 +676,12 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
         std::cout << strprintf("   Formula: %d / %.3f * %.3f = %.0f\n\n",
                VAROPS_BUDGET_PER_BYTE, slowest_100_percent_time, schnorr_median_time, suggested_budget);
     }
-    
+
     // Separate results into slower and faster than Schnorr
     std::vector<BenchResult> slower_than_schnorr;
     std::vector<BenchResult> faster_than_schnorr;
     BenchResult* schnorr_result = nullptr;
-    
+
     for (auto& result : results) {
         if (result.name == "Schnorr signature validation") {
             schnorr_result = &result;
@@ -691,7 +691,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             faster_than_schnorr.push_back(result);
         }
     }
-    
+
     // Print operations slower than Schnorr
     if (!slower_than_schnorr.empty()) {
         std::cout << "\nSLOWER THAN SCHNORR SIGNATURE VALIDATION:\n\n";
@@ -706,7 +706,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             }
         }
     }
-    
+
     // Print Schnorr as divider
     if (schnorr_result) {
         std::cout << "\n" << std::string(80, '-') << "\n";
@@ -716,7 +716,7 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
                (double(schnorr_result->varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
         std::cout << std::string(80, '-') << "\n\n";
     }
-    
+
     // Print operations faster than Schnorr
     if (!faster_than_schnorr.empty()) {
         std::cout << "FASTER THAN SCHNORR SIGNATURE VALIDATION:\n\n";
@@ -732,13 +732,13 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
             }
         }
     }
-    
+
     std::cout << "================================================================================\n";
 }
 
 static std::string GetSystemInfo() {
     std::ostringstream info;
-    
+
     std::string cpu_name = "Unknown";
 #if defined(__APPLE__)
     FILE* fp = popen("sysctl -n machdep.cpu.brand_string", "r");
@@ -773,7 +773,7 @@ static std::string GetSystemInfo() {
         fclose(cpuinfo);
     }
 #endif
-    
+
     // Get architecture
     std::string architecture = "Unknown";
 #if defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)
@@ -785,7 +785,7 @@ static std::string GetSystemInfo() {
 #elif defined(__arm__) || defined(_M_ARM)
     architecture = "ARM";
 #endif
-    
+
     // Get compiler
     std::string compiler = "Unknown";
 #if defined(__clang__)
@@ -799,15 +799,15 @@ static std::string GetSystemInfo() {
 #elif defined(_MSC_VER)
     compiler = "MSVC " + util::ToString(_MSC_VER);
 #endif
-    
+
     // Get SHA256 implementation
     std::string sha256_impl = SHA256AutoDetect();
-    
+
     info << "# CPU: " << cpu_name << "\n";
     info << "# Architecture: " << architecture << "\n";
     info << "# Compiler: " << compiler << "\n";
     info << "# SHA256 Implementation: " << sha256_impl << "\n";
-    
+
     return info.str();
 }
 
@@ -817,7 +817,7 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
         std::cerr << "Error: Could not open file " << filepath << " for writing" << std::endl;
         return;
     }
-    
+
     double schnorr_median_time = 0.0;
     for (const auto& result : results) {
         if (result.name == "Schnorr signature validation") {
@@ -825,38 +825,38 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
             break;
         }
     }
-    
+
     file << GetSystemInfo();
     file << "#\n";
-    
+
     double slowest_100_percent_time = 0.0;
     for (const auto& result : results) {
-        if (result.name != "Schnorr signature validation" && 
+        if (result.name != "Schnorr signature validation" &&
             result.varops_consumed >= TOTAL_VAROPS_BUDGET * 0.99) {
             if (result.median_sec > slowest_100_percent_time) {
                 slowest_100_percent_time = result.median_sec;
             }
         }
     }
-    
+
     if (slowest_100_percent_time > 0 && schnorr_median_time > 0) {
         double suggested_budget = VAROPS_BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
         file << "# SUGGESTED MAXIMUM VAROPS BUDGET:\n";
-        file << "# Based on slowest 100% varops operation (" << slowest_100_percent_time 
+        file << "# Based on slowest 100% varops operation (" << slowest_100_percent_time
              << " sec) vs Schnorr (" << schnorr_median_time << " sec):\n";
-        file << "# Suggested budget: " << suggested_budget 
+        file << "# Suggested budget: " << suggested_budget
              << " varops per weight unit (current: " << VAROPS_BUDGET_PER_BYTE << ")\n";
-        file << "# Formula: " << VAROPS_BUDGET_PER_BYTE << " / " << slowest_100_percent_time 
+        file << "# Formula: " << VAROPS_BUDGET_PER_BYTE << " / " << slowest_100_percent_time
              << " * " << schnorr_median_time << " = " << suggested_budget << "\n";
         file << "#\n";
     }
-    
+
     file << "Rank,Name,Seconds,Schnorr_Equivalents,Varops_Percentage,Is_GSR_Only\n";
-    
+
     for (size_t i = 0; i < results.size(); i++) {
         double schnorr_times = schnorr_median_time > 0 ? results[i].median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
         double varops_percentage = (double(results[i].varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0;
-        
+
         file << (i + 1) << ","
              << results[i].name << ","
              << results[i].median_sec << ","
@@ -864,7 +864,7 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
              << varops_percentage << ","
              << (results[i].is_gsr_only ? "true" : "false") << "\n";
     }
-    
+
     file.close();
     if (!SILENT_MODE) {
         std::cout << "Results saved to: " << filepath << std::endl;
@@ -880,33 +880,33 @@ static opcodetype GetOpcodeFromName(const std::string& name) {
             if (opname != "OP_UNKNOWN") opcode_map[opname] = opcode;
         }
     }
-    
+
     std::string upper_name = name;
     std::transform(upper_name.begin(), upper_name.end(), upper_name.begin(), ::toupper);
-    
+
     if (opcode_map.count(upper_name)) return opcode_map[upper_name];
     if (opcode_map.count("OP_" + upper_name)) return opcode_map["OP_" + upper_name];
-    
+
     throw std::invalid_argument("Unknown opcode name: " + name);
 }
 
 static void ParseArguments(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        
+
         if (arg == "--opcodes") {
             i++;
             std::vector<std::string> opcode_names;
             while (i < argc && argv[i][0] != '-') {
                 opcode_names.push_back(argv[i++]);
             }
-            i--; 
-            
+            i--;
+
             if (opcode_names.empty()) {
                 std::cerr << "Error: --opcodes requires at least one opcode name" << std::endl;
                 exit(1);
             }
-            
+
             try {
                 if (!SILENT_MODE) {
                     std::cout << "Running benchmarks for opcodes: ";
@@ -967,7 +967,7 @@ static void ParseArguments(int argc, char* argv[]) {
 
 int main(int argc, char* argv[]) {
     ParseArguments(argc, argv);
-    
+
     ankerl::nanobench::Bench bench = SetupBenchmark();
     std::vector<BenchTestCase> test_cases = CreateTestCases();
 
@@ -975,7 +975,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<BenchResult> results = CollectResults(bench, test_cases);
     PrintWorstCases(results);
-    
+
     if (!OUTPUT_FILE.empty()) {
         SaveResultsToFile(results, OUTPUT_FILE);
     }
