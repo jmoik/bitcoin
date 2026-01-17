@@ -213,7 +213,7 @@ Val64& Val64::operator=(Val64&& other) noexcept {
     return *this;
 }
 
-void Val64::swap(Val64 &other)
+void Val64::swap(Val64 &other) noexcept
 {
     std::swap(m_charvec, other.m_charvec);
     std::swap(m_realsize, other.m_realsize);
@@ -918,39 +918,114 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
             }
         }
 #else
-        // Portable fallback without __int128
+        // Portable 128-bit by 64-bit division using 32-bit digits.
+        // Based on Hacker's Delight divlu() and Knuth's Algorithm D.
+        // Computes (v_hi:v_lo) / divisor where v_hi < divisor (guaranteed
+        // since divisor is normalized with top bit set).
         uint64_t v_hi = v1.get(n+j);
         uint64_t v_lo = v1.get(n+j-1);
         uint64_t divisor = v2.get(n-1);
 
         uint64_t qstar;
+        uint64_t rstar;
         if (v_hi >= divisor) {
-            // Quotient will overflow 64 bits
+            // Quotient would overflow 64 bits
             qstar = UINT64_MAX;
+            rstar = v_hi - divisor; // Not accurate but will be corrected
         } else if (v_hi == 0) {
             // Simple case: dividend fits in 64 bits
             qstar = v_lo / divisor;
+            rstar = v_lo % divisor;
         } else {
-            // Approximate: this may be off by a few, but the subsequent checks will fix it
-            qstar = v_hi;
+            // 128-bit by 64-bit division using 32-bit digit long division.
+            // The divisor has its top bit set (normalized), so we can safely
+            // use 32-bit chunks without overflow in intermediate calculations.
+            constexpr uint64_t B = 1ULL << 32; // Base (2^32)
+
+            // Split divisor into two 32-bit digits
+            uint64_t d1 = divisor >> 32;      // High 32 bits of divisor
+            uint64_t d0 = divisor & 0xFFFFFFFF; // Low 32 bits of divisor
+
+            // The dividend is (v_hi : v_lo), treat as 4 32-bit digits:
+            // v_hi = (u3 : u2), v_lo = (u1 : u0)
+            // We compute quotient one 32-bit digit at a time.
+
+            // First quotient digit q1: divide (v_hi : high32(v_lo)) by divisor
+            // Since divisor is normalized and v_hi < divisor, we know the result fits in 32 bits.
+            uint64_t u32 = v_hi; // This is the top 64 bits of the 96-bit partial dividend
+            uint64_t u1 = v_lo >> 32;
+            uint64_t u0 = v_lo & 0xFFFFFFFF;
+
+            // Estimate q1 = floor(u32 / d1)
+            uint64_t q1 = u32 / d1;
+            uint64_t r1 = u32 % d1;
+
+            // Refine: while q1 >= B or q1 * d0 > B * r1 + u1
+            while (q1 >= B || q1 * d0 > (r1 << 32) + u1) {
+                q1--;
+                r1 += d1;
+                if (r1 >= B) break;
+            }
+
+            // Update partial remainder for next digit
+            // u21 = (u32 * B + u1) - q1 * divisor
+            // Note: u32 * B would overflow, but we can compute:
+            // (r1 * B + u1) - q1 * d0 since u32 = q1 * d1 + r1
+            // Actually: u21 = (r1 << 32) + u1 - q1 * d0
+            // But we need to be careful about underflow.
+            // Safer: u21 = u32 * B + u1 - q1 * divisor
+            //           = (q1 * d1 + r1) * B + u1 - q1 * (d1 * B + d0)
+            //           = q1 * d1 * B + r1 * B + u1 - q1 * d1 * B - q1 * d0
+            //           = r1 * B + u1 - q1 * d0
+            uint64_t u21 = (r1 << 32) + u1 - q1 * d0;
+
+            // Second quotient digit q0: divide (u21 : u0) by divisor
+            uint64_t q0 = u21 / d1;
+            uint64_t r0 = u21 % d1;
+
+            // Refine q0
+            while (q0 >= B || q0 * d0 > (r0 << 32) + u0) {
+                q0--;
+                r0 += d1;
+                if (r0 >= B) break;
+            }
+
+            qstar = (q1 << 32) + q0;
+            // Remainder = (r0 << 32) + u0 - q0 * d0
+            rstar = (r0 << 32) + u0 - q0 * d0;
         }
 
-        // Refine using Knuth's test
+        // Apply Knuth's test on v2[n-2] if available
         if (n > 1) {
-            // Refine qstar down if needed
-            while (qstar > 0) {
-                // Test if qstar is too large
-                // We're checking: qstar * divisor > (v_hi << 64) | v_lo
-                if (v_hi < divisor || (v_hi == divisor && v_lo == 0)) {
-                    uint64_t test_hi = 0;
-                    uint64_t test_lo = qstar * divisor;
-                    // Rough comparison
-                    if (test_hi > v_hi || (test_hi == v_hi && test_lo > v_lo)) {
-                        qstar--;
-                        continue;
-                    }
+            uint64_t v2_n2 = v2.get(n-2);
+            uint64_t v1_nj2 = v1.get(n+j-2);
+            // Test: if qstar * v2[n-2] > (rstar << 64) + v1[n+j-2]
+            // Since rstar < divisor and divisor has top bit set, rstar < 2^63,
+            // so if (rstar >> 63) != 0, the condition is false.
+            while ((rstar >> 63) == 0) {
+                // Compute qstar * v2_n2 as 128-bit (prod_hi:prod_lo)
+                uint64_t prod_lo = qstar * v2_n2;
+                // For high part, use: a*b = (a_hi*B + a_lo)*(b_hi*B + b_lo)
+                // High 64 bits of 64x64->128 multiply:
+                uint64_t a_hi = qstar >> 32;
+                uint64_t a_lo = qstar & 0xFFFFFFFF;
+                uint64_t b_hi = v2_n2 >> 32;
+                uint64_t b_lo = v2_n2 & 0xFFFFFFFF;
+                uint64_t cross = a_hi * b_lo + a_lo * b_hi;
+                uint64_t prod_hi = a_hi * b_hi + (cross >> 32);
+                // Add carry from cross + (a_lo * b_lo >> 32)
+                uint64_t lo_cross = (a_lo * b_lo >> 32) + (cross & 0xFFFFFFFF);
+                prod_hi += (lo_cross >> 32);
+
+                // Compare (prod_hi:prod_lo) > (rstar:v1_nj2)
+                if (prod_hi > rstar || (prod_hi == rstar && prod_lo > v1_nj2)) {
+                    qstar--;
+                    rstar += divisor;
+                    // If rstar overflowed (>= 2^64), stop
+                    if (rstar < divisor) break;
+                } else {
+                    break;
                 }
-                break;
             }
         }
 #endif

@@ -127,7 +127,7 @@ protected:
     Val64(const Val64 &);
 
     // Swap with the other value
-    void swap(Val64& other);
+    void swap(Val64& other) noexcept;
 
     // Endian fixers - inline for performance
     inline void set(size_t index, uint64_t v)

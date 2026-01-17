@@ -24,7 +24,7 @@ BOOST_FIXTURE_TEST_SUITE(gsr_tests, BasicTestingSetup)
 
 
 
-static void PrintStackComparison(const std::string& test_name, 
+static void PrintStackComparison(const std::string& test_name,
     const std::vector<std::vector<unsigned char>>& actual_stack,
     const std::vector<std::vector<unsigned char>>& expected_stack)
 {
@@ -33,7 +33,7 @@ static void PrintStackComparison(const std::string& test_name,
         std::cerr << "  [" << i << "] ";
         if (i < expected_stack.size()) {
             std::cerr << "Expected: ";
-            std::ranges::for_each(expected_stack[i], 
+            std::ranges::for_each(expected_stack[i],
             [](auto c) { std::cerr << std::hex << +c << " "; });
         } else {
             std::cerr << "Expected: No element";
@@ -43,7 +43,7 @@ static void PrintStackComparison(const std::string& test_name,
 
         if (i < actual_stack.size()) {
             std::cerr << "Actual: ";
-            std::ranges::for_each(actual_stack[i], 
+            std::ranges::for_each(actual_stack[i],
             [](auto c) { std::cerr << std::hex << +c << " "; });
         } else {
             std::cerr << "Actual: No element";
@@ -181,20 +181,20 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
     if (hex.empty()) {
         return result;
     }
-    
+
     // Strip "0x" prefix if present
     std::string hex_data = hex;
     if (hex_data.length() >= 2 && hex_data[0] == '0' && (hex_data[1] == 'x' || hex_data[1] == 'X')) {
         hex_data = hex_data.substr(2);
     }
-    
+
     // Empty string after stripping prefix means empty byte vector
     if (hex_data.empty()) {
         return result;
     }
-    
+
     result.reserve(hex_data.length() / 2);
-    
+
     for (size_t i = 0; i < hex_data.length(); ) {
         // Check for expansion notation {n}
         if (i < hex_data.length() && hex_data[i] == '{') {
@@ -203,7 +203,7 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
             if (close_brace == std::string::npos) {
                 throw std::invalid_argument("Unclosed brace in hex string");
             }
-            
+
             std::string count_str = hex_data.substr(i + 1, close_brace - i - 1);
             auto repeat_count_opt = ToIntegral<uint64_t>(count_str);
             if (!repeat_count_opt) {
@@ -215,11 +215,11 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
                 throw std::invalid_argument("No previous byte to repeat");
             }
             unsigned char prev_byte = result.back();
-            
+
             for (uint64_t j = 0; j < repeat_count; ++j) {
                 result.push_back(prev_byte);
             }
-            
+
             i = close_brace + 1;
         } else {
             // Normal hex byte parsing
@@ -242,7 +242,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
 {
     for (const UniValue& category_val : tests.getValues()) {
         std::string category_name = category_val["category"].get_str();
-        
+
         for (const UniValue& test : category_val["tests"].getValues()) {
             std::string test_name = test["name"].get_str();
             std::string full_test_name = suite_name + "::" + test_name;
@@ -252,7 +252,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             CScript script;
             for (const UniValue& opcode_input : test["opcodes"].getValues()) {
                 try {
-                    std::string input_str = opcode_input.get_str();
+                    const std::string& input_str = opcode_input.get_str();
                     auto parsed_opcodes = ParseHexOrOpcode(input_str);
                     script.insert(script.end(), parsed_opcodes.cbegin(), parsed_opcodes.cend());
                 } catch (const std::exception& e) {
@@ -309,7 +309,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             bool success = EvalScript(valtype_stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror);
 
             BOOST_CHECK_MESSAGE(success == expected_success, "Test '" << full_test_name << "' failed success check.");
-            
+
             stack = valtype_stack.get_stack();
             if (expected_success) {
                 if (stack != expected_final_stack) {
@@ -321,7 +321,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
                     BOOST_CHECK_MESSAGE(budget_consumed == expected_varops_budget_consumed, "Test '" << full_test_name << "' failed varops cost check. budget_consumed: " << budget_consumed << ", Expected: " << expected_varops_budget_consumed);
                 }
             }
-            
+
             } catch (const std::exception& e) {
                 std::cerr << "Exception in test '" << full_test_name << "' (category: '" << category_name << "'): " << e.what() << std::endl;
                 throw;

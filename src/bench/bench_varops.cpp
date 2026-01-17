@@ -25,7 +25,7 @@ constexpr uint64_t MAX_BLOCK_WEIGHT_UINT64 = MAX_BLOCK_WEIGHT;
 constexpr uint64_t VAROPS_BUDGET_PER_BYTE_UINT64 = VAROPS_BUDGET_PER_BYTE;
 constexpr uint64_t TOTAL_VAROPS_BUDGET = MAX_BLOCK_WEIGHT_UINT64 * VAROPS_BUDGET_PER_BYTE_UINT64;
 bool SILENT_MODE = false;
-std::string OUTPUT_FILE = "";
+std::string OUTPUT_FILE;
 
 const std::set<opcodetype> GSR_ONLY_OPCODES = {
     OP_CAT, OP_SUBSTR, OP_LEFT, OP_RIGHT, OP_INVERT,
@@ -129,11 +129,11 @@ static CScript CreateScript(const std::vector<opcodetype>& opcodes) {
 }
 
 std::string GetSequenceName(const std::vector<opcodetype>& opcodes) {
-    std::string name = "";
+    std::string name;
     for (const auto& opcode : opcodes) {
       auto opname = GetOpName(opcode);
       // remove OP_ prefix
-      if (opname.find("OP_") == 0) {
+      if (opname.starts_with("OP_")) {
         opname = opname.substr(3);
       }
       name += opname + "_";
@@ -144,7 +144,7 @@ std::string GetSequenceName(const std::vector<opcodetype>& opcodes) {
 
 static bool ContainsGsrOnlyOpcode(const std::vector<opcodetype>& opcodes) {
     for (const auto& opcode : opcodes) {
-        if (GSR_ONLY_OPCODES.count(opcode)) {
+        if (GSR_ONLY_OPCODES.contains(opcode)) {
             return true;
         }
     }
@@ -318,7 +318,7 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
     std::vector<ScriptTemplate> script_templates;
     for (unsigned int op = 0x4c; op <= 0xba; op++) {
         opcodetype opcode = static_cast<opcodetype>(op);
-        if (!SELECTED_OPCODES.empty() && SELECTED_OPCODES.find(opcode) == SELECTED_OPCODES.end()) {
+        if (!SELECTED_OPCODES.empty() && !SELECTED_OPCODES.contains(opcode)) {
             continue;
         }
         std::string opname = GetOpName(opcode);
@@ -348,22 +348,22 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         std::vector<std::pair<std::string, uint64_t>> offsets;
 
         if (stack_config.size >= 20) {
-            offsets.push_back({"10B", 10});  // Small offset
+            offsets.emplace_back("10B", 10);  // Small offset
         }
         if (stack_config.size >= 200) {
-            offsets.push_back({"100B", 100});  // Medium offset
+            offsets.emplace_back("100B", 100);  // Medium offset
         }
         if (stack_config.size >= 2000) {
-            offsets.push_back({"1KB", 1000});  // 1KB offset
+            offsets.emplace_back("1KB", 1000);  // 1KB offset
         }
         if (stack_config.size >= 20000) {
-            offsets.push_back({"10KB", 10000});  // 10KB offset
+            offsets.emplace_back("10KB", 10000);  // 10KB offset
         }
         if (stack_config.size >= 200000) {
-            offsets.push_back({"100KB", 100000});  // 100KB offset
+            offsets.emplace_back("100KB", 100000);  // 100KB offset
         }
         if (stack_config.size >= 2000000) {
-            offsets.push_back({"1MB", 1000000});  // 1MB offset
+            offsets.emplace_back("1MB", 1000000);  // 1MB offset
         }
 
         for (const auto& [offset_name, offset_val] : offsets) {
@@ -567,7 +567,7 @@ static void RunSchnorrBenchmark(ankerl::nanobench::Bench &bench, const std::stri
 
     std::vector<unsigned char> vchSig(64);
     const uint256 hash = uint256::ONE;
-    key.SignSchnorr(hash, vchSig, NULL, hash);
+    key.SignSchnorr(hash, vchSig, nullptr, hash);
 
     XOnlyPubKey xpub(pubkey);
     std::span<const unsigned char> sigbytes{vchSig.data(), vchSig.size()};
@@ -884,8 +884,8 @@ static opcodetype GetOpcodeFromName(const std::string& name) {
     std::string upper_name = name;
     std::transform(upper_name.begin(), upper_name.end(), upper_name.begin(), ::toupper);
 
-    if (opcode_map.count(upper_name)) return opcode_map[upper_name];
-    if (opcode_map.count("OP_" + upper_name)) return opcode_map["OP_" + upper_name];
+    if (opcode_map.contains(upper_name)) return opcode_map[upper_name];
+    if (opcode_map.contains("OP_" + upper_name)) return opcode_map["OP_" + upper_name];
 
     throw std::invalid_argument("Unknown opcode name: " + name);
 }
@@ -898,7 +898,7 @@ static void ParseArguments(int argc, char* argv[]) {
             i++;
             std::vector<std::string> opcode_names;
             while (i < argc && argv[i][0] != '-') {
-                opcode_names.push_back(argv[i++]);
+                opcode_names.emplace_back(argv[i++]);
             }
             i--;
 

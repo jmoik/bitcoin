@@ -27,11 +27,11 @@ public:
 
 static size_t bench_size(const char *varname = "MICRO_BENCH_BYTES")
 {
-	const char *env = getenv(varname);
-	if (!env)
-		return DEFAULT_BENCH_SIZE;
-	auto val = ToIntegral<long>(env);
-	return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
+    const char *env = getenv(varname);
+    if (!env)
+        return DEFAULT_BENCH_SIZE;
+    auto val = ToIntegral<long>(env);
+    return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
 }
 
 // For a simple speed comparison

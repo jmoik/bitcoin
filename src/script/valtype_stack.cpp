@@ -139,7 +139,8 @@ void ValtypeStack::roll(size_t n) {
 }
 
 void ValtypeStack::swap(int a, int b) {
-    std::swap(stack.at(stack.size() + a), stack.at(stack.size() + b));
+    std::swap(stack.at(static_cast<size_t>(static_cast<ptrdiff_t>(stack.size()) + a)),
+              stack.at(static_cast<size_t>(static_cast<ptrdiff_t>(stack.size()) + b)));
 }
 
 size_t ValtypeStack::get_total_size() const {
