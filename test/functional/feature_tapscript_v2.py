@@ -35,9 +35,6 @@ from test_framework.script import (
     OP_MUL,
     OP_SHA256,
     OP_CHECKLOCKTIMEVERIFY,
-    OP_AND,
-    OP_OR,
-    OP_INVERT,
 )
 from test_framework.segwit_addr import encode_segwit_address
 from test_framework.test_framework import BitcoinTestFramework
