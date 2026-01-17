@@ -1454,14 +1454,14 @@ class TapscriptV2Test(BitcoinTestFramework):
 
                 # broadcast transaction
                 self.nodes[0].sendrawtransaction(spending_tx.serialize().hex())
-                self.log.debug(f"✓ TAPSCRIPT_V2 transaction broadcasted")
+                self.log.debug("✓ TAPSCRIPT_V2 transaction broadcasted")
                 self.generate(self.nodes[0], 1)
 
                 # wait for mempool to clear
                 self.generate(self.nodes[0], 1)
-                self.log.debug(f"✓ TAPSCRIPT_V2 transaction mempool cleared")
+                self.log.debug("✓ TAPSCRIPT_V2 transaction mempool cleared")
                 self.generate(self.nodes[0], 1)
-                self.log.debug(f"✓ TAPSCRIPT_V2 transaction mined")
+                self.log.debug("✓ TAPSCRIPT_V2 transaction mined")
             else:
                 self.log.debug(f"✗ TAPSCRIPT_V2 transaction rejected: {result.get('reject-reason', 'Unknown reason')}")
                 self.log.debug(f"Stack top: {spending_tx.wit.vtxinwit[0].scriptWitness.stack[-1].hex()}")

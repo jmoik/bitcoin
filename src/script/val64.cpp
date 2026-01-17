@@ -716,8 +716,8 @@ void Val64::mul_span(std::span<le64_t> res,
 #if defined(__SIZEOF_INT128__) && !defined(PORTABLE_64BIT_MATH)
         unsigned __int128 product;
         product = ((unsigned __int128)(le64toh_internal(src[i]))) * mul;
-        hi = product >> 64;
-        lo = product;
+        hi = static_cast<uint64_t>(product >> 64);
+        lo = static_cast<uint64_t>(product);
 
         oldhi = le64toh_internal(res[i]);
         /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
