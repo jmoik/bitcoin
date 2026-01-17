@@ -1,10 +1,10 @@
 #include <bench/bench.h>
 
+#include <cstdlib>
 #include <consensus/consensus.h>
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/val64.h>
-#include <unistd.h>
 #include <script/valtype_stack.h>
 #include <util/strencodings.h>
 

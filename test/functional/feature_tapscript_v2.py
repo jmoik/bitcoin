@@ -22,6 +22,7 @@ from test_framework.script import (
     OP_2,
     OP_3,
     OP_EQUAL,
+    OP_NUMEQUAL,
     OP_CHECKSIG,
     OP_CHECKSIGADD,
     OP_CAT,
@@ -154,8 +155,8 @@ class TapscriptV2Test(BitcoinTestFramework):
             key2.generate()
             pubkey2_xonly, _ = compute_xonly_pubkey(key2.get_bytes())
 
-            # 2-of-2 multisig: <pubkey1> OP_CHECKSIG <pubkey2> OP_CHECKSIGADD OP_2 OP_EQUAL
-            locking_script = CScript([pubkey1_xonly, OP_CHECKSIG, pubkey2_xonly, OP_CHECKSIGADD, OP_2, OP_EQUAL])
+            # 2-of-2 multisig: <pubkey1> OP_CHECKSIG <pubkey2> OP_CHECKSIGADD OP_2 OP_NUMEQUAL
+            locking_script = CScript([pubkey1_xonly, OP_CHECKSIG, pubkey2_xonly, OP_CHECKSIGADD, OP_2, OP_NUMEQUAL])
 
             utxo_info = self.create_tapscript_v2_funding_tx(locking_script, amount=0.1)
 

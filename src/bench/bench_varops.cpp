@@ -239,7 +239,7 @@ std::vector<std::vector<opcodetype>> GetOpcodes(opcodetype opcode) {
         case OP_RSHIFT:
         case OP_LEFT:
         case OP_RIGHT:
-            return {{OP_DUP, opcode, OP_DROP, OP_DUP}, {opcode, OP_DUP}};
+            return {{OP_DUP, opcode, OP_DROP, OP_DUP}};
         
         case OP_MOD:
         case OP_CAT:
@@ -376,14 +376,59 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         return true;
     }
     
-    // Handle shift operations (LSHIFT, RSHIFT)
+    // Handle shift operations (LSHIFT, RSHIFT) - handled separately outside loop
     if (script_template.name.find("LSHIFT") != std::string::npos || script_template.name.find("RSHIFT") != std::string::npos) {
-        if (stack_config.name == "1MB") {
-            auto stack = InitStack(stack_config.size, stack_config.count, stack_config.pattern);
-            stack.pop_back();
-            stack.push_back(std::vector<unsigned char>(1, 1));
+        return true;  // Skip in main loop
+    }
+    
+    // Handle SUBSTR - test with different offset and length combinations
+    if (script_template.name.find("SUBSTR") != std::string::npos) {
+        // Test case 1: Empty string
+        {
+            ValtypeStack stack;
+            stack.push_back(std::vector<unsigned char>(0));  // Empty string
+            stack.push_back(Val64(0).move_to_valtype());     // Begin 0
+            stack.push_back(Val64(0).move_to_valtype());     // Length 0
+            std::string test_name = script_template.name + "_empty_string";
+            bool gsr_only = IsGsrOnly(script_template.opcodes, 0);
+            test_cases.push_back({test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
+        }
+        
+        // Test case 2: Various offsets and lengths on sized data
+        std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> tests;  // {name, {begin, length}}
+        
+        if (stack_config.size >= 20) {
+            tests.push_back({"10B_0_10", {0, 10}});
+            tests.push_back({"10B_5_5", {5, 5}});
+        }
+        if (stack_config.size >= 200) {
+            tests.push_back({"100B_0_100", {0, 100}});
+            tests.push_back({"100B_50_50", {50, 50}});
+        }
+        if (stack_config.size >= 2000) {
+            tests.push_back({"1KB_0_1000", {0, 1000}});
+            tests.push_back({"1KB_500_500", {500, 500}});
+        }
+        if (stack_config.size >= 20000) {
+            tests.push_back({"10KB_0_10000", {0, 10000}});
+            tests.push_back({"10KB_5000_5000", {5000, 5000}});
+        }
+        if (stack_config.size >= 200000) {
+            tests.push_back({"100KB_0_100000", {0, 100000}});
+            tests.push_back({"100KB_50000_50000", {50000, 50000}});
+        }
+        if (stack_config.size >= 2000000) {
+            tests.push_back({"1MB_0_1000000", {0, 1000000}});
+            tests.push_back({"1MB_500000_500000", {500000, 500000}});
+        }
+        
+        for (const auto& [test_name, params] : tests) {
+            auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
+            stack.push_back(Val64(params.first).move_to_valtype());   // Begin
+            stack.push_back(Val64(params.second).move_to_valtype());  // Length
+            std::string full_test_name = script_template.name + "_" + stack_config.name + "_" + test_name;
             bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
-            test_cases.push_back({script_template.name + "_" + stack_config.name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
+            test_cases.push_back({full_test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
         }
         return true;
     }

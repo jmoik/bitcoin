@@ -2021,7 +2021,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
 
                     valtype numvec;
                     Val64 num;
-                    if (!stack.pop64(num, -2)) {
+                    if (!stack.pop64(num, stack.size() - 2)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
 

@@ -1759,18 +1759,18 @@ static void BenchEvalScript(const CScript &script,
 
 		stack[0] = op2;
         for (size_t i = 0; i < stack[0].size(); i++)
-            stack[0][i] += cooling++;
+            stack[0][i] += static_cast<unsigned char>(cooling++);
 
 		// In case we want to clear cache.
         for (size_t i = 0; i < cool1.size(); i++) {
-            cool1[i] += cooling; 
-            cool2[i] += cooling;
+            cool1[i] += static_cast<unsigned char>(cooling);
+            cool2[i] += static_cast<unsigned char>(cooling);
         }
 
 		// Set up stack: this does a copy, so these won't be cold.
 		stack[1] = op1;
         for (size_t i = 0; i < stack[1].size(); i++)
-            stack[1][i] += cooling++;
+            stack[1][i] += static_cast<unsigned char>(cooling++);
 
         uint64_t varops_budget = 1e10;
         ValtypeStack valtype_stack{stack};
