@@ -280,6 +280,7 @@ bool Val64::span_is_allzero(const std::span<le64_t> span)
 int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
+    if (maxlen == 0) return 0;
 
     for (ptrdiff_t i = maxlen-1; i >= 0; --i) {
         uint64_t iv1, iv2;
