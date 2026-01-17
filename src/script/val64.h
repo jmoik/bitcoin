@@ -72,7 +72,7 @@ public:
     // &varcost here is always increased by the operation.
 
     // Convert to a 64 bit, or max if it's too large.
-    uint64_t to_u64_ceil(size_t max, size_t &varcost) const;
+    uint64_t to_u64_ceil(uint64_t max, size_t &varcost) const;
 
     // Invert this to convert to boolean.
     bool is_zero(size_t &varcost) const;

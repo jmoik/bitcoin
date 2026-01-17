@@ -240,7 +240,7 @@ void Val64::append_one()
     charvec_change_end();
 }
 
-uint64_t Val64::to_u64_ceil(size_t max, size_t &varcost) const
+uint64_t Val64::to_u64_ceil(uint64_t max, size_t &varcost) const
 {
     uint64_t v;
 
