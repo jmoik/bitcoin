@@ -246,10 +246,10 @@ static void EvalScriptDiv(benchmark::Bench& bench)
     script << OP_DIV;
 
     for (size_t i = 0; i < op1.size(); i++)
-        op1[i] = 255-i;
+        op1[i] = static_cast<unsigned char>(255 - (i % 256));
 
     for (size_t i = 0; i < op2.size(); i++)
-        op2[i] = 1+i;
+        op2[i] = static_cast<unsigned char>(1 + (i % 256));
 
     BenchEvalScript(bench, script, op1, op2);
 }
