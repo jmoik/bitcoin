@@ -298,7 +298,7 @@ jobs:
             $exeName = $_.Name
 
             # Skip as they currently do not have manifests
-            if ($exeName -eq "fuzz.exe" -or $exeName -eq "bench_bitcoin.exe" -or $exeName -eq "bench_varops.exe" -or $exeName -eq "test_bitcoin-qt.exe" -or $exeName -eq "test_kernel.exe" -or $exeName -eq "bitcoin-chainstate.exe") {
+            if ($exeName -eq "fuzz.exe" -or $exeName -eq "bench_bitcoin.exe" -or $exeName -eq "test_bitcoin-qt.exe" -or $exeName -eq "test_kernel.exe" -or $exeName -eq "bitcoin-chainstate.exe") {
               Write-Host "Skipping $exeName (no manifest present)"
               return
             }
