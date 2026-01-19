@@ -61,10 +61,13 @@ add_executable(bench_varops
   nanobench.cpp
 )
 
+add_windows_application_manifest(bench_varops)
+
 target_link_libraries(bench_varops
   core_interface
   test_util
   bitcoin_node
+  secp256k1
   Boost::headers
 )
 
@@ -77,6 +80,7 @@ target_link_libraries(bench_bitcoin
   core_interface
   test_util
   bitcoin_node
+  secp256k1
   Boost::headers
 )
 

@@ -12,7 +12,7 @@
                 "description": "LENGTHCONV: len(OFFSET) = len(0x03) = 1"
             },
             {
-                "name": "OP_RIGHT - basic functionality", 
+                "name": "OP_RIGHT - basic functionality",
                 "initial stack": ["68656C6C6F", "02"],
                 "opcodes": ["OP_RIGHT"],
                 "success": true,
@@ -291,7 +291,7 @@
         ]
     },
     {
-        "category": "OP_INVERT tests", 
+        "category": "OP_INVERT tests",
         "tests": [
             {
                 "name": "OP_INVERT - basic bitwise inversion",

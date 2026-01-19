@@ -72,7 +72,7 @@ public:
     // &varcost here is always increased by the operation.
 
     // Convert to a 64 bit, or max if it's too large.
-    uint64_t to_u64_ceil(size_t max, size_t &varcost) const;
+    uint64_t to_u64_ceil(uint64_t max, size_t &varcost) const;
 
     // Invert this to convert to boolean.
     bool is_zero(size_t &varcost) const;
@@ -127,14 +127,14 @@ protected:
     Val64(const Val64 &);
 
     // Swap with the other value
-    void swap(Val64& other);
+    void swap(Val64& other) noexcept;
 
     // Endian fixers - inline for performance
     inline void set(size_t index, uint64_t v)
     {
         m_u64span[index] = htole64_internal(v);
     }
-    
+
     inline uint64_t get(size_t index) const
     {
         return le64toh_internal(m_u64span[index]);
@@ -161,7 +161,7 @@ protected:
 
     // False if any non-zero bytes in span.
     static bool span_is_allzero(const std::span<le64_t> span);
-    
+
     // (*this) cmp (v2 << shift_words*64)
     static int cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2);
 
@@ -174,7 +174,7 @@ protected:
     // If returns false, nonzero_len is one past the last non-zero u64 in v1
     // (which helps optimize trim_tail)
     static bool sub_span(std::span<le64_t> v1, const std::span<le64_t> v2, size_t &nonzero_len);
-    
+
     // res = src * mul
     static void mul_span(std::span<le64_t> res,
                          const std::span<le64_t> src,
@@ -184,7 +184,7 @@ protected:
         VAL64_DIV,
         VAL64_MOD,
     };
-    
+
     // Div: v1 = v1 / v2.  Mod: v1 = v1 % v2.  False if v2 is zero.
     static bool div_mod(Val64 &v1, Val64 &v2, divmod_op op);
 

@@ -95,7 +95,7 @@ typedef enum ScriptError_t
     SCRIPT_ERR_SUB_UNDERFLOW,
     SCRIPT_ERR_VAROP_COUNT,
     SCRIPT_ERR_VAROP_NULL,
-    
+
     SCRIPT_ERR_ERROR_COUNT
 } ScriptError;
 

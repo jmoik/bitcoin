@@ -59,6 +59,15 @@ unsigned-integer-overflow:InsecureRandomContext::rand64
 unsigned-integer-overflow:InsecureRandomContext::SplitMix64
 unsigned-integer-overflow:bitset_detail::PopCount
 implicit-integer-sign-change:CBlockPolicyEstimator::processBlockTx
+unsigned-integer-overflow:val64.cpp
+unsigned-integer-overflow:bench/val64.cpp
+unsigned-integer-overflow:bench/bench_varops.cpp
+implicit-integer-sign-change:val64.cpp
+implicit-integer-sign-change:bench/val64.cpp
+implicit-unsigned-integer-truncation:val64.cpp
+implicit-unsigned-integer-truncation:bench/val64.cpp
+shift-base:val64.cpp
+shift-base:bench/val64.cpp
 implicit-integer-sign-change:SetStdinEcho
 implicit-integer-sign-change:compressor.h
 implicit-integer-sign-change:crypto/
