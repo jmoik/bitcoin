@@ -11,6 +11,7 @@
 #include <vector>
 #include <crypto/sha256.h>
 #include <script/val64.h>
+#include <util/strencodings.h>
 
 // A de-privatizing child.
 class Val64Test: public Val64 {
@@ -26,10 +27,11 @@ public:
 
 static size_t bench_size(const char *varname = "MICRO_BENCH_BYTES")
 {
-	const char *env = getenv(varname);
-	if (!env)
-		return DEFAULT_BENCH_SIZE;
-	return atol(env);
+    const char *env = getenv(varname);
+    if (!env)
+        return DEFAULT_BENCH_SIZE;
+    auto val = ToIntegral<long>(env);
+    return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
 }
 
 // For a simple speed comparison
@@ -66,9 +68,9 @@ static void MicroReadMemchr(benchmark::Bench& bench)
     std::vector<unsigned char> v2(size, 1);
 
     bench.run([&] {
-        if (memchr(v1.data(), 0, size) != nullptr)
+        if (size > 0 && memchr(v1.data(), 0, size) != nullptr)
             abort();
-        if (memchr(v2.data(), 0, size) != nullptr)
+        if (size > 0 && memchr(v2.data(), 0, size) != nullptr)
             abort();
     });
 }
@@ -107,8 +109,8 @@ static void MicroWriteMemset(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), n, v1.size()) == nullptr);
-    assert(memchr(v2.data(), n, v2.size()) == nullptr);
+    assert(v1.empty() || memchr(v1.data(), n, v1.size()) == nullptr);
+    assert(v2.empty() || memchr(v2.data(), n, v2.size()) == nullptr);
 }
 BENCHMARK(MicroWriteMemset);
 
@@ -151,8 +153,8 @@ static void MicroRWInvert(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), 2, v1.size()) == nullptr);
-    assert(memchr(v2.data(), 2, v2.size()) == nullptr);
+    assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
+    assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
 BENCHMARK(MicroRWInvert);
 
@@ -192,8 +194,8 @@ static void MicroRWOpAnd(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), 2, v1.size()) == nullptr);
-    assert(memchr(v2.data(), 2, v2.size()) == nullptr);
+    assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
+    assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
 BENCHMARK(MicroRWOpAnd);
 
@@ -212,8 +214,10 @@ static void MicroRWAdd(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), 1, v1.size()) == nullptr
-           || memchr(v1.data(), 1, v1.size()) != memchr(v2.data(), 1, v2.size()));
+    if (!v1.empty()) {
+        assert(memchr(v1.data(), 1, v1.size()) == nullptr
+               || memchr(v1.data(), 1, v1.size()) != memchr(v2.data(), 1, v2.size()));
+    }
 }
 BENCHMARK(MicroRWAdd);
 
@@ -229,8 +233,8 @@ static void MicroRWCopy(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), 2, v1.size()) == nullptr);
-    assert(memchr(v2.data(), 2, v2.size()) == nullptr);
+    assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
+    assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
 BENCHMARK(MicroRWCopy);
 
@@ -254,7 +258,7 @@ static void MicroRWCopyManual(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(memchr(v1.data(), 2, v1.size()) == nullptr);
-    assert(memchr(v2.data(), 2, v2.size()) == nullptr);
+    assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
+    assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
 BENCHMARK(MicroRWCopyManual);

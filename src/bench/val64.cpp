@@ -11,6 +11,7 @@
 #include <vector>
 #include <crypto/sha256.h>
 #include <script/val64.h>
+#include <util/strencodings.h>
 
 // A de-privatizing child.
 class Val64Test: public Val64 {
@@ -18,7 +19,7 @@ public:
     static void set_force_unaligned(bool val) { Val64::force_unaligned = val; }
     uint64_t &last_word(size_t off = 0) { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
     const uint64_t &last_word(size_t off = 0) const { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
-    const std::span<le64_t> span() const { return Val64::m_u64span; }
+    std::span<le64_t> span() const { return Val64::m_u64span; }
     std::span<le64_t> span() { return Val64::m_u64span; }
     static void mul_span(std::span<le64_t> res,
                          const std::span<le64_t> src,
@@ -29,10 +30,11 @@ public:
 
 static size_t bench_size(const char *varname = "VAL64_BENCH_BYTES")
 {
-	const char *env = getenv(varname);
-	if (!env)
-		return DEFAULT_BENCH_SIZE;
-	return atol(env);
+    const char *env = getenv(varname);
+    if (!env)
+        return DEFAULT_BENCH_SIZE;
+    auto val = ToIntegral<long>(env);
+    return val ? static_cast<size_t>(*val) : DEFAULT_BENCH_SIZE;
 }
 
 static void Val64UpShiftSmall(benchmark::Bench& bench)
@@ -66,19 +68,19 @@ static void Val64DownShiftSmall(benchmark::Bench& bench)
     });
 }
 BENCHMARK(Val64DownShiftSmall);
-   
+
 static void Val64BothShiftSmall(benchmark::Bench& bench)
 {
     size_t size = bench_size();
     std::vector<unsigned char> v1vec(size, 255);
     Val64 v1(v1vec);
     Val64 v2(1);
-    size_t n;
+    size_t n = 0;
     size_t varcost;
 
     bench.run([&] {
         Val64::op_downshift(v1, v2, varcost);
-        bool ok = Val64::op_upshift(v1, v2, size + n, varcost);
+        bool ok = Val64::op_upshift(v1, v2, size * 2 + n, varcost);
         assert(ok);
         n++;
     });
@@ -91,12 +93,12 @@ static void Val64BothShiftLarge(benchmark::Bench& bench)
     std::vector<unsigned char> v1vec(size, 255);
     Val64 v1(v1vec);
     Val64 v2(size / 2 + 1);
-    size_t n;
+    size_t n = 0;
     size_t varcost;
 
     bench.run([&] {
         Val64::op_downshift(v1, v2, varcost);
-        bool ok = Val64::op_upshift(v1, v2, size + n, varcost);
+        bool ok = Val64::op_upshift(v1, v2, size * 2 + n, varcost);
         assert(ok);
         n++;
     });
@@ -178,7 +180,8 @@ static void Val64AddPattern(benchmark::Bench& bench)
 
     std::vector<unsigned char> template1, template2;
 
-    size_t pval = env ? atol(env) : 0;
+    auto parsed = env ? ToIntegral<long>(env) : std::nullopt;
+    size_t pval = parsed ? static_cast<size_t>(*parsed) : 0;
 
     for (size_t i = 0; i < 8; i++) {
         switch (pval % 3) {

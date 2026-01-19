@@ -50,9 +50,9 @@ class Val64Test: public Val64 {
 public:
     // Unlike Val64, this makes a copy.
     Val64Test(std::vector<unsigned char> v): Val64(v) { };
-    Val64Test(const Val64Test &v): Val64(v) { };
+    Val64Test(const Val64Test &) = default;
     Val64Test(uint64_t v): Val64(v) { };
-    Val64Test() { };
+    Val64Test() = default;
 
     std::span<le64_t> span() const { return Val64::m_u64span; }
     size_t u64_size() const { return Val64::m_u64span.size(); }
@@ -69,12 +69,13 @@ public:
     static int cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2) { return Val64::cmp_span(v1, v2); }
     std::vector<uint64_t> copy_vector() {
         std::vector<uint64_t> v;
+        v.reserve(u64_size());
         for (size_t i = 0; i < u64_size(); i++) {
             v.push_back(get(i));
         }
         return v;
     }
-};    
+};
 
 static Val64Test val64_singleton(uint64_t val)
 {
@@ -124,7 +125,7 @@ static std::vector<unsigned char> mpz_to_vector(const mpz_t &num, size_t len = -
 static std::vector<unsigned char> ParseVec8(const UniValue &arr)
 {
     std::vector<unsigned char> ret;
-
+    ret.reserve(arr.size());
     for (size_t i = 0; i < arr.size(); i++) {
         ret.push_back(arr[i].getInt<unsigned char>());
     }
@@ -134,7 +135,7 @@ static std::vector<unsigned char> ParseVec8(const UniValue &arr)
 static std::vector<uint64_t> ParseVec64(const UniValue &arr)
 {
     std::vector<uint64_t> ret;
-
+    ret.reserve(arr.size());
     for (size_t i = 0; i < arr.size(); i++) {
         ret.push_back(arr[i].getInt<uint64_t>());
     }
@@ -174,11 +175,11 @@ BOOST_AUTO_TEST_CASE(val64_unaligned)
     Val64Test::set_suppress_alignment_warnings(true);
     Val64Test::set_force_unaligned(true);
 
-    std::vector<unsigned char> v_in_empty;        
+    std::vector<unsigned char> v_in_empty;
     std::vector<unsigned char> v_in_small = {1,2,3};
     std::vector<unsigned char> v_in_word = {1,2,3,4,5,6,7,8};
     std::vector<unsigned char> v_in_large = {1,2,3,4,5,6,7,8,9};
-        
+
     // We don't mess with empty vectors (they're always "aligned")
     Val64Test v1(v_in_empty);
     CHECK(v1.u64_size() == 0);
@@ -397,7 +398,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
 
             bool res = Val64::op_sub(v64a, v64zero, varcost);
             CHECK(res);
-        
+
             CHECK(v64a.move_to_valtype() == vec_setbit(i));
         }
 
@@ -607,7 +608,7 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
                     expected = vec_setbit(i - j);
 
                 // Definitionally, downshift only removes one byte for every 8 bits shifted.
-                if (j / 8 <= (i + 8) / 8) 
+                if (j / 8 <= (i + 8) / 8)
                     expected.resize((i + 8) / 8 - j / 8);
 
                 BOOST_TEST_MESSAGE("Got " << vector_to_string(va) << " expected " << vector_to_string(expected));
@@ -664,7 +665,7 @@ BOOST_AUTO_TEST_CASE(val64_add_span)
     assert(res.get(1) == 0);
     assert(nonzero_len == 0);
     assert(!carry);
-    
+
     // Add at offset 0.
     carry = Val64Test::add_span(res.span(), u64_max.span(), nonzero_len);
     assert(res.get(0) == 0xFFFFFFFFFFFFFFFFULL);
@@ -686,7 +687,7 @@ BOOST_AUTO_TEST_CASE(val64_add_span)
     assert(res.get(1) == 0);
     assert(carry);
 }
-    
+
 BOOST_AUTO_TEST_CASE(val64_sub_span)
 {
     Val64Test res(std::vector<unsigned char>(sizeof(uint64_t) * 2, 0xFF));
@@ -727,7 +728,7 @@ BOOST_AUTO_TEST_CASE(val64_sub_span)
     assert(res.get(1) == 0xFFFFFFFFFFFFFFFFULL);
     assert(underflow);
 }
-    
+
 BOOST_AUTO_TEST_CASE(val64_mul_span)
 {
     Val64Test::set_force_unaligned(false);
@@ -814,7 +815,7 @@ BOOST_AUTO_TEST_CASE(val64_mul)
 
                 CHECK(retvec == expected);
             }
-        }        
+        }
 
 #ifdef USE_GMP
         for (size_t i = 0; i < 1000; i++) {
