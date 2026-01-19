@@ -214,8 +214,10 @@ static void MicroRWAdd(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(v1.empty() || memchr(v1.data(), 1, v1.size()) == nullptr
-           || memchr(v1.data(), 1, v1.size()) != memchr(v2.data(), 1, v2.size()));
+    if (!v1.empty()) {
+        assert(memchr(v1.data(), 1, v1.size()) == nullptr
+               || memchr(v1.data(), 1, v1.size()) != memchr(v2.data(), 1, v2.size()));
+    }
 }
 BENCHMARK(MicroRWAdd);
 
