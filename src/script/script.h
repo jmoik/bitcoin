@@ -23,7 +23,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
-        
+
 // Maximum number of bytes pushable to the stack (up to Tapscript v2)
 static constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
 

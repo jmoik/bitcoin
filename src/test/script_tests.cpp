@@ -1729,10 +1729,13 @@ BOOST_AUTO_TEST_CASE(formatscriptflags)
 
 static size_t get_val(size_t default_val, const char *var)
 {
-	const char *env = getenv(var);
-	if (!env || atol(env) == 0)
-		return default_val;
-	return atol(env);
+    const char *env = getenv(var);
+    if (!env)
+        return default_val;
+    auto val = ToIntegral<long>(env);
+    if (!val || *val == 0)
+        return default_val;
+    return static_cast<size_t>(*val);
 }
 
 static void BenchEvalScript(const CScript &script,
@@ -1740,65 +1743,65 @@ static void BenchEvalScript(const CScript &script,
                             const std::vector<unsigned char> &op2,
                             const char *name)
 {
-	BaseSignatureChecker checker;
-	ScriptExecutionData sdata;
-	ScriptError serror;
-	size_t cooling = get_val(0, "EVALSCRIPT_COOLING_BYTES");
+    BaseSignatureChecker checker;
+    ScriptExecutionData sdata;
+    ScriptError serror;
+    size_t cooling = get_val(0, "EVALSCRIPT_COOLING_BYTES");
 
-	std::vector<unsigned char> cool1(cooling/2, cooling/7), cool2(cooling/2, cooling/15);
+    std::vector<unsigned char> cool1(cooling/2, cooling/7), cool2(cooling/2, cooling/15);
     if (cooling/2)
         std::cerr << "Cooling using " << cooling << "bytes!" << std::endl;
 
     using namespace std::chrono;
 
-	for (int i = 0; i < 10; ++i) {
-		std::vector<std::vector<unsigned char> > stack(2);
+    for (int i = 0; i < 10; ++i) {
+        std::vector<std::vector<unsigned char> > stack(2);
 
-		stack[0] = op2;
+        stack[0] = op2;
         for (size_t i = 0; i < stack[0].size(); i++)
-            stack[0][i] += cooling++;
+            stack[0][i] += static_cast<unsigned char>(cooling++);
 
-		// In case we want to clear cache.
+        // In case we want to clear cache.
         for (size_t i = 0; i < cool1.size(); i++) {
-            cool1[i] += cooling; 
-            cool2[i] += cooling;
+            cool1[i] += static_cast<unsigned char>(cooling);
+            cool2[i] += static_cast<unsigned char>(cooling);
         }
 
-		// Set up stack: this does a copy, so these won't be cold.
-		stack[1] = op1;
+        // Set up stack: this does a copy, so these won't be cold.
+        stack[1] = op1;
         for (size_t i = 0; i < stack[1].size(); i++)
-            stack[1][i] += cooling++;
+            stack[1][i] += static_cast<unsigned char>(cooling++);
 
         uint64_t varops_budget = 1e10;
         ValtypeStack valtype_stack{stack};
         if (!EvalScript(valtype_stack, script, 0, checker,
-						SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror)) {
-			std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
-			assert(0);
-		}
-	}
+                        SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror)) {
+            std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
+            assert(0);
+        }
+    }
 
     assert(cooling);
 }
 
 BOOST_AUTO_TEST_CASE(invert_cold)
 {
-	std::vector<unsigned char> op1(4000000), op2(4000000);
-	CScript script;
+    std::vector<unsigned char> op1(4000000), op2(4000000);
+    CScript script;
 
-	script << OP_DROP << OP_INVERT;
+    script << OP_DROP << OP_INVERT;
 
-	BenchEvalScript(script, op1, op2, "invert_cold");
+    BenchEvalScript(script, op1, op2, "invert_cold");
 }
 
 BOOST_AUTO_TEST_CASE(invert_hot)
 {
-	std::vector<unsigned char> op1(4000000), op2(4000000);
-	CScript script;
+    std::vector<unsigned char> op1(4000000), op2(4000000);
+    CScript script;
 
-	script << OP_INVERT;
+    script << OP_INVERT;
 
-	BenchEvalScript(script, op1, op2, "invert_hot");
+    BenchEvalScript(script, op1, op2, "invert_hot");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

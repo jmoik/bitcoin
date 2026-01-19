@@ -66,13 +66,16 @@ std::vector<unsigned char> ValtypeStack::pop_back_valtype() {
     return result;
 }
 
-bool ValtypeStack::pop64(Val64 &v, int index /* = -1 */) {
+bool ValtypeStack::pop64(Val64 &v, std::optional<size_t> index /* = std::nullopt */) {
     if (stack.empty())
         return false;
 
-    update_size_tracking(stack.at(stack.size() + index), false);
-    v.move_from_valtype(stack.at(stack.size() + index));
-    stack.erase(stack.begin() + stack.size() + index);
+    // if no index provided, pop from the back (last element)
+    const size_t index_to_pop = index.value_or(stack.size() - 1);
+
+    update_size_tracking(stack.at(index_to_pop), false);
+    v.move_from_valtype(stack.at(index_to_pop));
+    stack.erase(stack.begin() + index_to_pop);
     return true;
 }
 
@@ -94,7 +97,7 @@ void ValtypeStack::erase(size_t first, size_t last) {
     if (first >= last || last > stack.size()) {
         throw std::invalid_argument("Invalid range");
     }
-    
+
     for (size_t i = first; i < last; ++i) {
         update_size_tracking(stack[i], false);
     }
@@ -105,7 +108,7 @@ void ValtypeStack::insert(size_t index, const std::vector<unsigned char>& elemen
     if (index > stack.size()) {
         throw std::invalid_argument("Invalid index");
     }
-    
+
     update_size_tracking(element, true);
     stack.insert(stack.begin() + index, element);
 }
@@ -124,19 +127,20 @@ void ValtypeStack::resize(size_t n) {
 }
 
 void ValtypeStack::rotate(int a, int b, int c) {
-    std::rotate(stack.end() + a, stack.end() + b, stack.end() + c);        
+    std::rotate(stack.end() + a, stack.end() + b, stack.end() + c);
 }
 
 // more efficient than std::rotate
 void ValtypeStack::roll(size_t n) {
     // rotate start, newstart, end.
     auto element = std::move(stack[stack.size() - n - 1]);
-    stack.erase(stack.begin() + stack.size() - n - 1); 
-    stack.push_back(std::move(element)); 
+    stack.erase(stack.begin() + stack.size() - n - 1);
+    stack.push_back(std::move(element));
 }
 
 void ValtypeStack::swap(int a, int b) {
-    std::swap(stack.at(stack.size() + a), stack.at(stack.size() + b));
+    std::swap(stack.at(static_cast<size_t>(static_cast<ptrdiff_t>(stack.size()) + a)),
+              stack.at(static_cast<size_t>(static_cast<ptrdiff_t>(stack.size()) + b)));
 }
 
 size_t ValtypeStack::get_total_size() const {

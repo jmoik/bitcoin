@@ -10,6 +10,8 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <test/util/random.h>
+#include <util/strencodings.h>
+#include <util/string.h>
 #include <util/vector.h>
 #include <univalue.h>
 #include <boost/test/unit_test.hpp>
@@ -22,7 +24,7 @@ BOOST_FIXTURE_TEST_SUITE(gsr_tests, BasicTestingSetup)
 
 
 
-static void PrintStackComparison(const std::string& test_name, 
+static void PrintStackComparison(const std::string& test_name,
     const std::vector<std::vector<unsigned char>>& actual_stack,
     const std::vector<std::vector<unsigned char>>& expected_stack)
 {
@@ -31,7 +33,7 @@ static void PrintStackComparison(const std::string& test_name,
         std::cerr << "  [" << i << "] ";
         if (i < expected_stack.size()) {
             std::cerr << "Expected: ";
-            std::ranges::for_each(expected_stack[i], 
+            std::ranges::for_each(expected_stack[i],
             [](auto c) { std::cerr << std::hex << +c << " "; });
         } else {
             std::cerr << "Expected: No element";
@@ -41,7 +43,7 @@ static void PrintStackComparison(const std::string& test_name,
 
         if (i < actual_stack.size()) {
             std::cerr << "Actual: ";
-            std::ranges::for_each(actual_stack[i], 
+            std::ranges::for_each(actual_stack[i],
             [](auto c) { std::cerr << std::hex << +c << " "; });
         } else {
             std::cerr << "Actual: No element";
@@ -56,7 +58,7 @@ static opcodetype GetOpCode(const std::string& name)
     if (name == "0") return OP_0;
     if (name == "-1") return OP_1NEGATE;
     for (int i = 1; i <= 16; ++i) {
-        if (name == std::to_string(i)) return static_cast<opcodetype>(OP_1 + i - 1);
+        if (name == util::ToString(i)) return static_cast<opcodetype>(OP_1 + i - 1);
     }
 
     // Handle named opcodes
@@ -179,20 +181,20 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
     if (hex.empty()) {
         return result;
     }
-    
+
     // Strip "0x" prefix if present
     std::string hex_data = hex;
     if (hex_data.length() >= 2 && hex_data[0] == '0' && (hex_data[1] == 'x' || hex_data[1] == 'X')) {
         hex_data = hex_data.substr(2);
     }
-    
+
     // Empty string after stripping prefix means empty byte vector
     if (hex_data.empty()) {
         return result;
     }
-    
+
     result.reserve(hex_data.length() / 2);
-    
+
     for (size_t i = 0; i < hex_data.length(); ) {
         // Check for expansion notation {n}
         if (i < hex_data.length() && hex_data[i] == '{') {
@@ -201,26 +203,35 @@ static std::vector<unsigned char> ParseHex(const std::string& hex)
             if (close_brace == std::string::npos) {
                 throw std::invalid_argument("Unclosed brace in hex string");
             }
-            
+
             std::string count_str = hex_data.substr(i + 1, close_brace - i - 1);
-            uint64_t repeat_count = std::stoull(count_str) - 1;
-            
+            auto repeat_count_opt = ToIntegral<uint64_t>(count_str);
+            if (!repeat_count_opt) {
+                throw std::invalid_argument("Invalid repeat count");
+            }
+            uint64_t repeat_count = *repeat_count_opt - 1;
+
             if (result.empty()) {
                 throw std::invalid_argument("No previous byte to repeat");
             }
             unsigned char prev_byte = result.back();
-            
+
             for (uint64_t j = 0; j < repeat_count; ++j) {
                 result.push_back(prev_byte);
             }
-            
+
             i = close_brace + 1;
         } else {
             // Normal hex byte parsing
             if (i + 1 >= hex_data.length()) {
                 throw std::invalid_argument("Incomplete hex byte");
             }
-            result.push_back(std::stoi(hex_data.substr(i, 2), nullptr, 16));
+            unsigned char byte_val = 0;
+            auto [ptr, ec] = std::from_chars(hex_data.data() + i, hex_data.data() + i + 2, byte_val, 16);
+            if (ec != std::errc{}) {
+                throw std::invalid_argument("Invalid hex byte");
+            }
+            result.push_back(byte_val);
             i += 2;
         }
     }
@@ -231,7 +242,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
 {
     for (const UniValue& category_val : tests.getValues()) {
         std::string category_name = category_val["category"].get_str();
-        
+
         for (const UniValue& test : category_val["tests"].getValues()) {
             std::string test_name = test["name"].get_str();
             std::string full_test_name = suite_name + "::" + test_name;
@@ -241,7 +252,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             CScript script;
             for (const UniValue& opcode_input : test["opcodes"].getValues()) {
                 try {
-                    std::string input_str = opcode_input.get_str();
+                    const std::string& input_str = opcode_input.get_str();
                     auto parsed_opcodes = ParseHexOrOpcode(input_str);
                     script.insert(script.end(), parsed_opcodes.cbegin(), parsed_opcodes.cend());
                 } catch (const std::exception& e) {
@@ -298,7 +309,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             bool success = EvalScript(valtype_stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror);
 
             BOOST_CHECK_MESSAGE(success == expected_success, "Test '" << full_test_name << "' failed success check.");
-            
+
             stack = valtype_stack.get_stack();
             if (expected_success) {
                 if (stack != expected_final_stack) {
@@ -310,7 +321,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
                     BOOST_CHECK_MESSAGE(budget_consumed == expected_varops_budget_consumed, "Test '" << full_test_name << "' failed varops cost check. budget_consumed: " << budget_consumed << ", Expected: " << expected_varops_budget_consumed);
                 }
             }
-            
+
             } catch (const std::exception& e) {
                 std::cerr << "Exception in test '" << full_test_name << "' (category: '" << category_name << "'): " << e.what() << std::endl;
                 throw;

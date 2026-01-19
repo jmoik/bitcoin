@@ -208,7 +208,7 @@ Val64& Val64::operator=(Val64&& other) noexcept {
     return *this;
 }
 
-void Val64::swap(Val64 &other)
+void Val64::swap(Val64 &other) noexcept
 {
     std::swap(m_charvec, other.m_charvec);
     std::swap(m_realsize, other.m_realsize);
@@ -235,7 +235,7 @@ void Val64::append_one()
     charvec_change_end();
 }
 
-uint64_t Val64::to_u64_ceil(size_t max, size_t &varcost) const
+uint64_t Val64::to_u64_ceil(uint64_t max, size_t &varcost) const
 {
     uint64_t v;
 
@@ -275,8 +275,9 @@ bool Val64::span_is_allzero(const std::span<le64_t> span)
 int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
+    if (maxlen == 0) return 0;
 
-    for (ssize_t i = maxlen-1; i >= 0; --i) {
+    for (ptrdiff_t i = maxlen-1; i >= 0; --i) {
         uint64_t iv1, iv2;
 
         iv1 = size_t(i) < v1.size() ? le64toh_internal(v1[i]) : 0;
@@ -840,7 +841,7 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
     std::vector<le64_t> scratch((v2.m_u64span.size() + 1) * sizeof(uint64_t));
 
     // 2: for j from m-1 downto 0 do:
-    for (ssize_t j = m - 1; j >= 0; j--) {
+    for (ptrdiff_t j = m - 1; j >= 0; j--) {
         // 3: q* = floor((v1_n+j_ x β + v1_n+j-1_) / v2_n-1_)
         unsigned __int128 v;
         unsigned __int128 qstar;

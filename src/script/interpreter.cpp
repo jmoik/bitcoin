@@ -1990,11 +1990,11 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
-                                        
+
                     if (fSuccess) {
                         varcost += VAROPS_COST_PER_SIGOP;
                     }
-                    
+
                     popstack(stack);
                     popstack(stack);
                     stack.push_back(fSuccess ? vchTrue : vchFalse);
@@ -2025,7 +2025,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
 
                     valtype numvec;
                     Val64 num;
-                    if (!stack.pop64(num, -2)) {
+                    if (!stack.pop64(num, stack.size() - 2)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
 
@@ -2055,17 +2055,17 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // BIP#ops:
                     // |OP_CAT
                     // |Sum of two operand lengths (COPYING)
-                    
+
                     // Pop in reverse order (top first, then second-to-top)
                     valtype vch2 = stack.pop_back_valtype();
-                    valtype vch1 = stack.pop_back_valtype();    
+                    valtype vch1 = stack.pop_back_valtype();
                     varcost += vch1.size() + vch2.size();
 
                     vch1.insert(vch1.end(), vch2.begin(), vch2.end());
                     stack.push_back(std::move(vch1));
                 }
                 break;
-                    
+
                 case OP_SUBSTR:
                 {
                     // A BEGIN LEN -- A[BEGIN:BEGIN+LEN]
@@ -2092,7 +2092,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     stack.push_back(std::move(vch2));
                 }
                 break;
-                    
+
                 case OP_LEFT:
                 {
                     // A OFFSET -- A[:OFFSET]
@@ -2126,7 +2126,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // |Length of OFFSET operand + MIN(Length of A, Value of OFFSET) (LENGTHCONV + COPYING)
                     uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
                     valtype vch = stack.pop_back_valtype();  // Move instead of copy
-                    
+
                     if (offset >= vch.size()) {
                         varcost += vch.size();
                     } else {
@@ -2223,7 +2223,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         varcost = Val64::op_mod_varcost(v64a, v64b);
                         if (varcost > varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
-                        if (!Val64::op_mod(v64a, v64b)) 
+                        if (!Val64::op_mod(v64a, v64b))
                             return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
                         break;
 
@@ -2265,7 +2265,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
             // Note: with all ops so far, violator would have to be top of stack
             if (largest_element_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
                 return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
-                
+
             }
 
             // Budget limits
