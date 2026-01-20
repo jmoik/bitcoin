@@ -190,6 +190,7 @@ protected:
 
     // Test helpers
     static bool force_unaligned;
+    static bool force_portable_math;
 public:
     static bool suppress_alignment_warnings;
 };
