@@ -342,45 +342,77 @@ static std::vector<ScriptTemplate> CreateScriptTemplates() {
 static bool HandleSpecialCases(const ScriptTemplate& script_template,
     const StackTemplate& stack_config,
     std::vector<BenchTestCase>& test_cases) {
-    if (script_template.name.find("LEFT") != std::string::npos || script_template.name.find("RIGHT") != std::string::npos) {
-        // Test with different offset positions
-        std::vector<std::pair<std::string, uint64_t>> offsets;
+    if (script_template.name.find("LEFT") != std::string::npos) {
+        std::vector<opcodetype> left_sequence = {OP_2DUP, OP_LEFT, OP_DROP};
+        CScript left_script = CreateScript(left_sequence);
+        std::string sequence_name = GetSequenceName(left_sequence);
 
+        std::vector<std::pair<std::string, uint64_t>> offsets;
         if (stack_config.size >= 20) {
-            offsets.emplace_back("10B", 10);  // Small offset
+            offsets.emplace_back("10B", 10);
         }
         if (stack_config.size >= 200) {
-            offsets.emplace_back("100B", 100);  // Medium offset
+            offsets.emplace_back("100B", 100);
         }
         if (stack_config.size >= 2000) {
-            offsets.emplace_back("1KB", 1000);  // 1KB offset
+            offsets.emplace_back("1KB", 1000);
         }
         if (stack_config.size >= 20000) {
-            offsets.emplace_back("10KB", 10000);  // 10KB offset
+            offsets.emplace_back("10KB", 10000);
         }
         if (stack_config.size >= 200000) {
-            offsets.emplace_back("100KB", 100000);  // 100KB offset
+            offsets.emplace_back("100KB", 100000);
         }
         if (stack_config.size >= 2000000) {
-            offsets.emplace_back("1MB", 1000000);  // 1MB offset
+            offsets.emplace_back("1MB", 1000000);
         }
 
         for (const auto& [offset_name, offset_val] : offsets) {
             auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
             stack.push_back(Val64(offset_val).move_to_valtype());
-            std::string test_name = script_template.name + "_" + stack_config.name + "_offset_" + offset_name;
-            bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
-            test_cases.push_back({test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
+            std::string test_name = sequence_name + "_" + stack_config.name + "_offset_" + offset_name;
+            bool gsr_only = IsGsrOnly(left_sequence, stack_config.size);
+            test_cases.push_back({test_name, stack, left_script, 0, gsr_only});
+        }
+        return true;
+    }
+
+    if (script_template.name.find("RIGHT") != std::string::npos) {
+        std::vector<opcodetype> right_sequence = {OP_2DUP, OP_RIGHT, OP_DROP};
+        CScript right_script = CreateScript(right_sequence);
+        std::string sequence_name = GetSequenceName(right_sequence);
+
+        std::vector<std::pair<std::string, uint64_t>> offsets;
+        if (stack_config.size >= 20) {
+            offsets.emplace_back("10B", 10);
+        }
+        if (stack_config.size >= 200) {
+            offsets.emplace_back("100B", 100);
+        }
+        if (stack_config.size >= 2000) {
+            offsets.emplace_back("1KB", 1000);
+        }
+        if (stack_config.size >= 20000) {
+            offsets.emplace_back("10KB", 10000);
+        }
+        if (stack_config.size >= 200000) {
+            offsets.emplace_back("100KB", 100000);
+        }
+        if (stack_config.size >= 2000000) {
+            offsets.emplace_back("1MB", 1000000);
+        }
+
+        for (const auto& [offset_name, offset_val] : offsets) {
+            auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
+            stack.push_back(Val64(offset_val).move_to_valtype());
+            std::string test_name = sequence_name + "_" + stack_config.name + "_offset_" + offset_name;
+            bool gsr_only = IsGsrOnly(right_sequence, stack_config.size);
+            test_cases.push_back({test_name, stack, right_script, 0, gsr_only});
         }
         return true;
     }
 
     if (script_template.name.find("LSHIFT") != std::string::npos) {
-        // LSHIFT grows the result, so we need a special script sequence that:
-        // 1. Preserves the original [data, shift] stack across iterations
-        // 2. Drops the grown result to avoid stack overflow
-        // Sequence: OP_2DUP OP_LSHIFT OP_DROP
-        // [data, shift] -> [data, shift, data, shift] -> [data, shift, result] -> [data, shift]
         std::vector<opcodetype> lshift_sequence = {OP_2DUP, OP_LSHIFT, OP_DROP};
         CScript lshift_script = CreateScript(lshift_sequence);
         std::string sequence_name = GetSequenceName(lshift_sequence);
@@ -415,9 +447,6 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
     }
 
     if (script_template.name.find("RSHIFT") != std::string::npos) {
-        // RSHIFT shrinks or maintains size, but we still want to preserve [data, shift]
-        // to avoid using data as shift amount in subsequent iterations
-        // Sequence: OP_2DUP OP_RSHIFT OP_DROP
         std::vector<opcodetype> rshift_sequence = {OP_2DUP, OP_RSHIFT, OP_DROP};
         CScript rshift_script = CreateScript(rshift_sequence);
         std::string sequence_name = GetSequenceName(rshift_sequence);
@@ -452,9 +481,11 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
     }
 
     if (script_template.name.find("SUBSTR") != std::string::npos) {
-        // Test with different start positions and lengths
-        std::vector<std::tuple<std::string, uint64_t, uint64_t>> substr_params;
+        std::vector<opcodetype> substr_sequence = {OP_3DUP, OP_SUBSTR, OP_DROP};
+        CScript substr_script = CreateScript(substr_sequence);
+        std::string sequence_name = GetSequenceName(substr_sequence);
 
+        std::vector<std::tuple<std::string, uint64_t, uint64_t>> substr_params;
         if (stack_config.size >= 20) {
             substr_params.emplace_back("start0_len10B", 0, 10);
             substr_params.emplace_back("start5B_len10B", 5, 10);
@@ -484,9 +515,9 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
             auto stack = InitStack(stack_config.size, 1, stack_config.pattern);
             stack.push_back(Val64(start_val).move_to_valtype());
             stack.push_back(Val64(len_val).move_to_valtype());
-            std::string test_name = script_template.name + "_" + stack_config.name + "_" + param_name;
-            bool gsr_only = IsGsrOnly(script_template.opcodes, stack_config.size);
-            test_cases.push_back({test_name, stack, CreateScript(script_template.opcodes), 0, gsr_only});
+            std::string test_name = sequence_name + "_" + stack_config.name + "_" + param_name;
+            bool gsr_only = IsGsrOnly(substr_sequence, stack_config.size);
+            test_cases.push_back({test_name, stack, substr_script, 0, gsr_only});
         }
         return true;
     }
