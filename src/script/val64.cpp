@@ -10,8 +10,15 @@
 #include <compat/endian.h>
 #include <iostream>
 
+// MSVC compatibility: __int128 and __builtin_add_overflow are not available
+#if !defined(__SIZEOF_INT128__) && defined(_MSC_VER)
+#define PORTABLE_64BIT_MATH 1
+#endif
+
+
 // For testing.
 bool Val64::force_unaligned = false;
+bool Val64::force_portable_math = false;
 bool Val64::suppress_alignment_warnings = false;
 
 void Val64::warn_alignment_once(const void *p, size_t len)
@@ -137,7 +144,7 @@ void Val64::move_from_valtype(std::vector<unsigned char> &vch)
 std::vector<unsigned char> Val64::move_to_valtype()
 {
     std::vector<unsigned char> ret;
-    
+
     charvec_change_start();
     ret = std::move(m_charvec);
     charvec_change_end();
@@ -478,7 +485,7 @@ void Val64::op_downshift(Val64 &v1, const Val64 &v2, size_t &varcost)
     // |Length of BITS + MAX((Length of A - (Value of BITS) / 8), 0) * 2
 
     // We already added length of BITS in to_u64_ceil above.
-    
+
     // Shift past end?  Empty.  Also covers empty array.
     if (bytes >= v1.m_realsize) {
         v1 = Val64(0);
@@ -526,7 +533,7 @@ bool Val64::op_upshift(Val64 &v1, const Val64 &v2, size_t max_size, size_t &varc
     // |Length of BITS + (Value of BITS) / 8 + Length of A (LENGTHCONV + ZEROING + COPYING).
     // If BITS % 8 != 0, add (Length of A) * 2.
     varcost += prebytes + v1.m_realsize;
-    
+
     if (bits % 8 == 0) {
         // Simply insert bytes at the beginning.
         v1.prepend_zeros(prebytes);
@@ -550,7 +557,7 @@ bool Val64::bitshift_up_small(size_t bits)
     uint64_t prevbits = 0;
 
     // [B, A] lshift 1 => [B<<1, A<<1 | B >> 63]
-    for (size_t i = 0; i < m_u64span.size(); ++i) { 
+    for (size_t i = 0; i < m_u64span.size(); ++i) {
         uint64_t old_v = get(i);
         uint64_t new_v = (old_v << bits) | prevbits;
 
@@ -618,7 +625,7 @@ void Val64::binop_v1_longest(Val64 &v1, Val64 &v2)
     if (v1.m_realsize < v2.m_realsize)
         v1.swap(v2);
 }
-    
+
 void Val64::op_and(Val64 &v1, Val64 &v2, size_t &varcost)
 {
     binop_v1_longest(v1, v2);
@@ -707,19 +714,60 @@ void Val64::mul_span(std::span<le64_t> res,
     for (size_t i = 0; i < src.size(); ++i) {
         uint64_t hi, lo, oldhi;
 
-        // Take advantage of 64 bit multiplier if platform
-        // has it (otherwise falls back to software)
-        unsigned __int128 product;
+        // Take advantage of 64 bit multiplier if platform has it
+#if defined(__SIZEOF_INT128__)
+        if (!force_portable_math) {
+            unsigned __int128 product;
+            product = ((unsigned __int128)(le64toh_internal(src[i]))) * mul;
+            hi = static_cast<uint64_t>(product >> 64);
+            lo = static_cast<uint64_t>(product & (unsigned __int128)UINT64_MAX);
 
-        product = (__int128)(le64toh_internal(src[i])) * mul;
-        hi = product >> 64;
-        lo = product;
+            oldhi = le64toh_internal(res[i]);
+            /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
+             * gives an upper u64 which is < UINT64MAX. */
+#ifdef __has_builtin
+#if __has_builtin(__builtin_add_overflow)
+            if (__builtin_add_overflow(lo, oldhi, &lo))
+                hi++;
+#else
+            // Fallback without __builtin_add_overflow
+            uint64_t new_lo = lo + oldhi;
+            if (new_lo < lo)  // overflow in addition
+                hi++;
+            lo = new_lo;
+#endif
+#else
+            // Fallback for compilers without __has_builtin
+            uint64_t new_lo = lo + oldhi;
+            if (new_lo < lo)  // overflow in addition
+                hi++;
+            lo = new_lo;
+#endif
+        } else
+#endif
+        {
+            // Portable fallback: 64x64->128 bit multiplication
+            uint64_t a = le64toh_internal(src[i]);
+            uint64_t a_lo = a & 0xFFFFFFFFULL;
+            uint64_t a_hi = a >> 32;
+            uint64_t b_lo = mul & 0xFFFFFFFFULL;
+            uint64_t b_hi = mul >> 32;
 
-        oldhi = le64toh_internal(res[i]);
-        /* Note: hi cannot overflow since UINT64MAX * UINT64MAX
-         * gives an upper u64 which is < UINT64MAX. */
-        if (__builtin_add_overflow(lo, oldhi, &lo))
-            hi++;
+            uint64_t p0 = a_lo * b_lo;
+            uint64_t p1 = a_lo * b_hi;
+            uint64_t p2 = a_hi * b_lo;
+            uint64_t p3 = a_hi * b_hi;
+
+            uint64_t carry = ((p0 >> 32) + (p1 & 0xFFFFFFFFULL) + (p2 & 0xFFFFFFFFULL)) >> 32;
+            lo = p0 + (p1 << 32) + (p2 << 32);
+            hi = p3 + (p1 >> 32) + (p2 >> 32) + carry;
+
+            oldhi = le64toh_internal(res[i]);
+            uint64_t new_lo = lo + oldhi;
+            if (new_lo < lo)  // overflow in addition
+                hi++;
+            lo = new_lo;
+        }
         res[i] = htole64_internal(lo);
         res[i+1] = htole64_internal(hi);
     }
@@ -738,7 +786,7 @@ Val64 Val64::op_mul(Val64 &v1, Val64 &v2)
     std::vector<le64_t> scratch(v2.m_u64span.size() + 1);
 
     size_t ret_nonzero_len = 0;
-    
+
     for (size_t i = 0; i < v1.m_u64span.size(); i++) {
         size_t nonzero_len;
         // Multiply v2 by v1[i] into scratch.
@@ -843,34 +891,159 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
     // 2: for j from m-1 downto 0 do:
     for (ptrdiff_t j = m - 1; j >= 0; j--) {
         // 3: q* = floor((v1_n+j_ x β + v1_n+j-1_) / v2_n-1_)
-        unsigned __int128 v;
-        unsigned __int128 qstar;
-        unsigned __int128 rstar;
+        uint64_t qstar;
+        uint64_t rstar;
 
-        v = ((unsigned __int128)v1.get(n+j)) << 64 | v1.get(n+j-1);
-        qstar = v / v2.get(n-1);
+#if defined(__SIZEOF_INT128__)
+        if (!force_portable_math) {
+            unsigned __int128 v;
+            unsigned __int128 qstar128;
+            unsigned __int128 rstar128;
 
-        // Knuth suggests: (notation reworked to match us, the rest is a
-        // direct quote):
-        
-        // ... let r* be the remainer.
-        // Now test if q* == β, or q* x v2_n-2_ > βr* + v1_n+j-2_:
-        // if so, decrease q* by 1, increase r* by v2_n-1_, and
-        // repeat this test if r* < β. (The test on v2_n-2_ determines at
-        // high speed most of the cases in which the trial value q* is
-        // one too large, and it eliminates /all/ cases where q* is
-        // two too large
-        rstar = v % v2.get(n-1);
+            v = ((unsigned __int128)v1.get(n+j)) << 64 | v1.get(n+j-1);
+            qstar128 = v / v2.get(n-1);
 
-        if ((qstar >> 64) != 0
-            || (n > 1 && qstar * v2.get(n-2)
-                > (rstar << 64) + v1.get(n+j-2))) {
-            qstar--;
-            rstar += v2.get(n-1);
-            if ((rstar >> 64) == 0
-                && (n > 1 && qstar * v2.get(n-2)
-                    > (rstar << 64) + v1.get(n+j-2))) {
-                qstar--;
+            // Knuth suggests: (notation reworked to match us, the rest is a
+            // direct quote):
+
+            // ... let r* be the remainer.
+            // Now test if q* == β, or q* x v2_n-2_ > βr* + v1_n+j-2_:
+            // if so, decrease q* by 1, increase r* by v2_n-1_, and
+            // repeat this test if r* < β. (The test on v2_n-2_ determines at
+            // high speed most of the cases in which the trial value q* is
+            // one too large, and it eliminates /all/ cases where q* is
+            // two too large
+            rstar128 = v % v2.get(n-1);
+
+            if ((qstar128 >> 64) != 0
+                || (n > 1 && qstar128 * v2.get(n-2)
+                    > (rstar128 << 64) + v1.get(n+j-2))) {
+                qstar128--;
+                rstar128 += v2.get(n-1);
+                if ((rstar128 >> 64) == 0
+                    && (n > 1 && qstar128 * v2.get(n-2)
+                        > (rstar128 << 64) + v1.get(n+j-2))) {
+                    qstar128--;
+                }
+            }
+            qstar = static_cast<uint64_t>(qstar128);
+            rstar = static_cast<uint64_t>(rstar128);
+        } else
+#endif
+        {
+            // Portable 128-bit by 64-bit division using 32-bit digits.
+            // Based on Hacker's Delight divlu() and Knuth's Algorithm D.
+            // Computes (v_hi:v_lo) / divisor where v_hi < divisor (guaranteed
+            // since divisor is normalized with top bit set).
+            uint64_t v_hi = v1.get(n+j);
+            uint64_t v_lo = v1.get(n+j-1);
+            uint64_t divisor = v2.get(n-1);
+
+            if (v_hi >= divisor) {
+                // Quotient would overflow 64 bits
+                qstar = UINT64_MAX;
+                rstar = v_hi - divisor; // Not accurate but will be corrected
+            } else if (v_hi == 0) {
+                // Simple case: dividend fits in 64 bits
+                qstar = v_lo / divisor;
+                rstar = v_lo % divisor;
+            } else {
+                // 128-bit by 64-bit division using 32-bit digit long division.
+                // The divisor has its top bit set (normalized), so we can safely
+                // use 32-bit chunks without overflow in intermediate calculations.
+                constexpr uint64_t B = 1ULL << 32; // Base (2^32)
+
+                // Split divisor into two 32-bit digits
+                uint64_t d1 = divisor >> 32;      // High 32 bits of divisor
+                uint64_t d0 = divisor & 0xFFFFFFFF; // Low 32 bits of divisor
+
+                // The dividend is (v_hi : v_lo), treat as 4 32-bit digits:
+                // v_hi = (u3 : u2), v_lo = (u1 : u0)
+                // We compute quotient one 32-bit digit at a time.
+
+                // First quotient digit q1: divide (v_hi : high32(v_lo)) by divisor
+                // Since divisor is normalized and v_hi < divisor, we know the result fits in 32 bits.
+                uint64_t u32 = v_hi; // This is the top 64 bits of the 96-bit partial dividend
+                uint64_t u1 = v_lo >> 32;
+                uint64_t u0 = v_lo & 0xFFFFFFFF;
+
+                // Estimate q1 = floor(u32 / d1)
+                uint64_t q1 = u32 / d1;
+                uint64_t r1 = u32 % d1;
+
+                // Refine: while q1 >= B or q1 * d0 > B * r1 + u1
+                while (q1 >= B || q1 * d0 > (r1 << 32) + u1) {
+                    q1--;
+                    r1 += d1;
+                    if (r1 >= B) break;
+                }
+
+                // Update partial remainder for next digit
+                // u21 = (u32 * B + u1) - q1 * divisor
+                // Note: u32 * B would overflow, but we can compute:
+                // (r1 * B + u1) - q1 * d0 since u32 = q1 * d1 + r1
+                // Actually: u21 = (r1 << 32) + u1 - q1 * d0
+                // But we need to be careful about underflow.
+                // Safer: u21 = u32 * B + u1 - q1 * divisor
+                //           = (q1 * d1 + r1) * B + u1 - q1 * (d1 * B + d0)
+                //           = q1 * d1 * B + r1 * B + u1 - q1 * d1 * B - q1 * d0
+                //           = r1 * B + u1 - q1 * d0
+                uint64_t u21 = (r1 << 32) + u1 - q1 * d0;
+
+                // Second quotient digit q0: divide (u21 : u0) by divisor
+                uint64_t q0 = u21 / d1;
+                uint64_t r0 = u21 % d1;
+
+                // Refine q0
+                while (q0 >= B || q0 * d0 > (r0 << 32) + u0) {
+                    q0--;
+                    r0 += d1;
+                    if (r0 >= B) break;
+                }
+
+                qstar = (q1 << 32) + q0;
+                // Remainder = (r0 << 32) + u0 - q0 * d0
+                rstar = (r0 << 32) + u0 - q0 * d0;
+            }
+
+            // Apply Knuth's test on v2[n-2] if available
+            if (n > 1) {
+                uint64_t v2_n2 = v2.get(n-2);
+                uint64_t v1_nj2 = v1.get(n+j-2);
+                uint64_t divisor = v2.get(n-1);
+                // Test: if qstar * v2[n-2] > (rstar << 64) + v1[n+j-2]
+                // Since rstar < divisor and divisor has top bit set, rstar < 2^63,
+                // so if (rstar >> 63) != 0, the condition is false.
+                while ((rstar >> 63) == 0) {
+                    // Compute qstar * v2_n2 as 128-bit (prod_hi:prod_lo)
+                    uint64_t prod_lo = qstar * v2_n2;
+                    // For high part, use: a*b = (a_hi*B + a_lo)*(b_hi*B + b_lo)
+                    // High 64 bits of 64x64->128 multiply:
+                    uint64_t a_hi = qstar >> 32;
+                    uint64_t a_lo = qstar & 0xFFFFFFFF;
+                    uint64_t b_hi = v2_n2 >> 32;
+                    uint64_t b_lo = v2_n2 & 0xFFFFFFFF;
+                    // Note: a_hi * b_lo + a_lo * b_hi can overflow uint64_t,
+                    // so we must track the carry separately.
+                    uint64_t p1 = a_hi * b_lo;
+                    uint64_t p2 = a_lo * b_hi;
+                    uint64_t cross = p1 + p2;
+                    uint64_t cross_carry = (cross < p1) ? (1ULL << 32) : 0;
+                    uint64_t prod_hi = a_hi * b_hi + (cross >> 32) + cross_carry;
+                    // Add carry from cross + (a_lo * b_lo >> 32)
+                    uint64_t lo_cross = (a_lo * b_lo >> 32) + (cross & 0xFFFFFFFF);
+                    prod_hi += (lo_cross >> 32);
+
+                    // Compare (prod_hi:prod_lo) > (rstar:v1_nj2)
+                    if (prod_hi > rstar || (prod_hi == rstar && prod_lo > v1_nj2)) {
+                        qstar--;
+                        rstar += divisor;
+                        // If rstar overflowed (>= 2^64), stop
+                        if (rstar < divisor) break;
+                    } else {
+                        break;
+                    }
+                }
             }
         }
 

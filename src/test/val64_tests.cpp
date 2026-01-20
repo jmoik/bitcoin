@@ -60,6 +60,7 @@ public:
     uint64_t get(size_t i) const { return Val64::get(i); }
     static void set_force_unaligned(bool val) { Val64::force_unaligned = val; }
     static void set_suppress_alignment_warnings(bool val) { Val64::suppress_alignment_warnings = val; }
+    static void set_force_portable_math(bool val) { Val64::force_portable_math = val; }
 
     void set(size_t index, uint64_t v) { Val64::set(index, v); }
     const uint64_t *access_u64() const { return m_u64span.data(); }
@@ -733,6 +734,9 @@ BOOST_AUTO_TEST_CASE(val64_mul_span)
 {
     Val64Test::set_force_unaligned(false);
 
+    for (bool portable_math : {false, true}) {
+        Val64Test::set_force_portable_math(portable_math);
+
     // Mulitply this by mul, place into res.
     for (size_t i = 0; i < 128; i++) {
         for (size_t j = 0; j < 65; j++) {
@@ -757,12 +761,17 @@ BOOST_AUTO_TEST_CASE(val64_mul_span)
             CHECK(res64.move_to_valtype() == expected);
         }
     }
+
+    } // end for portable_math
+    Val64Test::set_force_portable_math(false);
 }
 
 BOOST_AUTO_TEST_CASE(val64_mul)
 {
     // FIXME: Test varcosts!
     size_t varcost = 0;
+    for (bool portable_math : {false, true}) {
+        Val64Test::set_force_portable_math(portable_math);
     for (bool unaligned: {false, true}) {
         Val64Test::set_force_unaligned(unaligned);
 
@@ -847,6 +856,8 @@ BOOST_AUTO_TEST_CASE(val64_mul)
         }
 #endif
     }
+    } // end for portable_math
+    Val64Test::set_force_portable_math(false);
     Val64Test::set_suppress_alignment_warnings(false);
 }
 
@@ -977,6 +988,8 @@ BOOST_AUTO_TEST_CASE(val64_2div)
 
 BOOST_AUTO_TEST_CASE(val64_div_mod)
 {
+    for (bool portable_math : {false, true}) {
+        Val64Test::set_force_portable_math(portable_math);
     for (bool unaligned: {false, true}) {
         Val64Test::set_force_unaligned(unaligned);
 
@@ -1059,6 +1072,140 @@ BOOST_AUTO_TEST_CASE(val64_div_mod)
         }
 #endif
     }
+    } // end for portable_math
+    Val64Test::set_force_portable_math(false);
     Val64Test::set_suppress_alignment_warnings(false);
 }
+
+// Test edge cases for the portable 64-bit math implementation (used on Windows/MSVC).
+// These tests specifically target edge cases that could trigger overflow bugs in
+// the 128-bit arithmetic emulation.
+BOOST_AUTO_TEST_CASE(val64_portable_math_edge_cases)
+{
+    Val64Test::set_suppress_alignment_warnings(true);
+
+    for (bool portable_math : {false, true}) {
+        Val64Test::set_force_portable_math(portable_math);
+        BOOST_TEST_MESSAGE("Testing with force_portable_math=" << portable_math);
+
+    // Test multiplication edge case: (2^64-1) * (2^64-1)
+    // This tests the mul_span portable implementation
+    {
+        std::vector<unsigned char> max_u64(8, 0xFF);
+        Val64Test v64a(max_u64);
+        Val64Test v64b(max_u64);
+        Val64 ret = Val64::op_mul(v64a, v64b);
+        auto retvec = ret.move_to_valtype();
+
+        // (2^64-1)^2 = 2^128 - 2^65 + 1
+        // In little-endian bytes: 0x01, 0x00, ..., 0x00, 0xFE, 0xFF, ..., 0xFF
+        std::vector<unsigned char> expected = {
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // low word
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF   // high word
+        };
+        CHECK(retvec == expected);
+    }
+
+    // Test division edge case that exercises the Knuth refinement loop
+    // We need a dividend and divisor that produce a large qstar estimate
+    // and where v2[n-2] is also large, triggering the cross overflow.
+    {
+        // Dividend: a large number with multiple 64-bit words
+        // 0xFFFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF (two words of all 1s)
+        std::vector<unsigned char> dividend(16, 0xFF);
+
+        // Divisor: 0x8000000000000001 (normalized, with second word considerations)
+        // This divisor has the top bit set (normalized) and will produce
+        // a quotient estimate that exercises the refinement.
+        std::vector<unsigned char> divisor = {
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80
+        };
+
+        Val64Test v64a_div(dividend);
+        Val64Test v64b_div(divisor);
+        bool div_ret = Val64Test::op_div(v64a_div, v64b_div);
+        CHECK(div_ret == true);
+
+        auto div_vec = v64a_div.move_to_valtype();
+        std::vector<unsigned char> expected_div = {
+            0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01
+        };
+        CHECK(div_vec == expected_div);
+    }
+
+    // Test another division edge case: dividend that produces qstar close to 2^64
+    {
+        std::vector<unsigned char> dividend = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+        std::vector<unsigned char> divisor(8, 0xFF);
+
+        Val64Test v64a_div(dividend);
+        Val64Test v64b_div(divisor);
+        bool div_ret = Val64Test::op_div(v64a_div, v64b_div);
+        CHECK(div_ret == true);
+
+        auto div_vec = v64a_div.move_to_valtype();
+        std::vector<unsigned char> expected_div(8, 0xFF);
+        expected_div[0] = 0xFE;
+        CHECK(div_vec == expected_div);
+    }
+
+    // Test mod with the same edge case
+    {
+        std::vector<unsigned char> dividend = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+        std::vector<unsigned char> divisor(8, 0xFF);
+
+        Val64Test v64a_mod(dividend);
+        Val64Test v64b_mod(divisor);
+        bool mod_ret = Val64Test::op_mod(v64a_mod, v64b_mod);
+        CHECK(mod_ret == true);
+
+        auto mod_vec = v64a_mod.move_to_valtype();
+        std::vector<unsigned char> expected_mod = {
+            0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+        CHECK(mod_vec == expected_mod);
+    }
+
+    // Test case specifically designed to trigger cross overflow in Knuth refinement.
+    // We need: qstar close to 2^64 and v2[n-2] close to 2^64.
+    // This happens when the dividend's top two words form a value just under
+    // (divisor[n-1] * 2^64), and divisor[n-2] is large.
+    {
+        // Create a 3-word dividend and 2-word divisor to exercise the refinement.
+        // Dividend: 0x7FFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF
+        std::vector<unsigned char> dividend = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F
+        };
+
+        // Divisor: 0x8000000000000000_FFFFFFFFFFFFFFFF
+        // This has a normalized high word and a large second word.
+        std::vector<unsigned char> divisor = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80
+        };
+
+        Val64Test v64a_div(dividend);
+        Val64Test v64b_div(divisor);
+        bool div_ret = Val64Test::op_div(v64a_div, v64b_div);
+        CHECK(div_ret == true);
+
+        // Verify by multiplying back: quotient * divisor + remainder = dividend
+        // For this test, we just verify the operation completes without error.
+        // A more thorough check would use GMP (which is done in the random tests above).
+    }
+
+    }
+
+    Val64Test::set_force_portable_math(false);
+    Val64Test::set_suppress_alignment_warnings(false);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
