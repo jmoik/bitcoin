@@ -268,7 +268,7 @@ bool Val64::is_zero(size_t &varcost) const
     return span_is_allzero(m_u64span);
 }
 
-bool Val64::span_is_allzero(const std::span<le64_t> span)
+bool Val64::span_is_allzero(std::span<le64_t> span)
 {
     if (span.size() == 0)
         return true;
@@ -279,7 +279,7 @@ bool Val64::span_is_allzero(const std::span<le64_t> span)
 }
 
 // If v1 > v2: 1.  If v1 < v2: -1.  Else 0
-int Val64::cmp_span(const std::span<le64_t> v1, const std::span<le64_t> v2)
+int Val64::cmp_span(std::span<le64_t> v1, std::span<le64_t> v2)
 {
     size_t maxlen = std::max(v1.size(), v2.size());
     if (maxlen == 0) return 0;
@@ -305,7 +305,7 @@ int Val64::cmp(const Val64 &v2, size_t &varcost) const
 }
 
 // v1 += v2 (size v2 <= v1).  Return true if carry overflowed.
-bool Val64::add_span(std::span<le64_t> v1, const std::span<le64_t> v2,
+bool Val64::add_span(std::span<le64_t> v1, std::span<le64_t> v2,
                      size_t &nonzero_len)
 {
     assert(v1.size() >= v2.size());
@@ -380,7 +380,7 @@ void Val64::op_1add(Val64 &v1, size_t &varcost)
 }
 
 // v1 -= v2
-bool Val64::sub_span(std::span<le64_t> v1, const std::span<le64_t> v2, size_t &nonzero_len)
+bool Val64::sub_span(std::span<le64_t> v1, std::span<le64_t> v2, size_t &nonzero_len)
 {
     auto common_len = std::min(v1.size(), v2.size());
 
@@ -703,7 +703,7 @@ void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
 }
 
 void Val64::mul_span(std::span<le64_t> res,
-                     const std::span<le64_t> src,
+                     std::span<le64_t> src,
                      uint64_t mul)
 {
     // Result must be (at least) 1 word larger, for carry.
