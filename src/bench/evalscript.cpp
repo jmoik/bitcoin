@@ -82,7 +82,7 @@ static void EvalScriptNopNop(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptNopNop);
+BENCHMARK(EvalScriptNopNop, benchmark::PriorityLevel::HIGH);
 
 // BIP#ops: We assume that the manipulation of the stack vector itself (e.g. OP_DROP) is negligible.
 static void EvalScriptDropDrop(benchmark::Bench& bench)
@@ -94,7 +94,7 @@ static void EvalScriptDropDrop(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropDrop);
+BENCHMARK(EvalScriptDropDrop, benchmark::PriorityLevel::HIGH);
 
 // Verify both
 static void EvalScriptVerifyVerify(benchmark::Bench& bench)
@@ -109,7 +109,7 @@ static void EvalScriptVerifyVerify(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptVerifyVerify);
+BENCHMARK(EvalScriptVerifyVerify, benchmark::PriorityLevel::HIGH);
 
 // Check they're equal
 static void EvalScriptEqual(benchmark::Bench& bench)
@@ -121,7 +121,7 @@ static void EvalScriptEqual(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptEqual);
+BENCHMARK(EvalScriptEqual, benchmark::PriorityLevel::HIGH);
 
 // Make a copy, twice
 static void EvalScriptDropDupDropDup(benchmark::Bench& bench)
@@ -133,7 +133,7 @@ static void EvalScriptDropDupDropDup(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropDupDropDup);
+BENCHMARK(EvalScriptDropDupDropDup, benchmark::PriorityLevel::HIGH);
 
 // This modifies the element, so we can compare read costs vs r/w costs.
 static void EvalScriptInvertDropInvert(benchmark::Bench& bench)
@@ -145,7 +145,7 @@ static void EvalScriptInvertDropInvert(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptInvertDropInvert);
+BENCHMARK(EvalScriptInvertDropInvert, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptDropInvert(benchmark::Bench& bench)
 {
@@ -156,7 +156,7 @@ static void EvalScriptDropInvert(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDropInvert);
+BENCHMARK(EvalScriptDropInvert, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptInvert(benchmark::Bench& bench)
 {
@@ -167,7 +167,7 @@ static void EvalScriptInvert(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptInvert);
+BENCHMARK(EvalScriptInvert, benchmark::PriorityLevel::HIGH);
 
 // Simple binary ops
 static void EvalScriptAnd(benchmark::Bench& bench)
@@ -179,7 +179,7 @@ static void EvalScriptAnd(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAnd);
+BENCHMARK(EvalScriptAnd, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptOr(benchmark::Bench& bench)
 {
@@ -190,7 +190,7 @@ static void EvalScriptOr(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptOr);
+BENCHMARK(EvalScriptOr, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptAdd(benchmark::Bench& bench)
 {
@@ -201,7 +201,7 @@ static void EvalScriptAdd(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAdd);
+BENCHMARK(EvalScriptAdd, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptAddOverflow(benchmark::Bench& bench)
 {
@@ -213,7 +213,7 @@ static void EvalScriptAddOverflow(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptAddOverflow);
+BENCHMARK(EvalScriptAddOverflow, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptSub(benchmark::Bench& bench)
 {
@@ -224,7 +224,7 @@ static void EvalScriptSub(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptSub);
+BENCHMARK(EvalScriptSub, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptMul(benchmark::Bench& bench)
 {
@@ -236,7 +236,7 @@ static void EvalScriptMul(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptMul);
+BENCHMARK(EvalScriptMul, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptDiv(benchmark::Bench& bench)
 {
@@ -253,7 +253,7 @@ static void EvalScriptDiv(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDiv);
+BENCHMARK(EvalScriptDiv, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptUpshift1(benchmark::Bench& bench)
 {
@@ -264,7 +264,7 @@ static void EvalScriptUpshift1(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift1);
+BENCHMARK(EvalScriptUpshift1, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptUpshift16000001(benchmark::Bench& bench)
 {
@@ -278,7 +278,7 @@ static void EvalScriptUpshift16000001(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift16000001);
+BENCHMARK(EvalScriptUpshift16000001, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptUpshift16000000(benchmark::Bench& bench)
 {
@@ -292,7 +292,7 @@ static void EvalScriptUpshift16000000(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptUpshift16000000);
+BENCHMARK(EvalScriptUpshift16000000, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptDownshift1(benchmark::Bench& bench)
 {
@@ -304,7 +304,7 @@ static void EvalScriptDownshift1(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift1);
+BENCHMARK(EvalScriptDownshift1, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptDownshift16000001(benchmark::Bench& bench)
 {
@@ -319,7 +319,7 @@ static void EvalScriptDownshift16000001(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift16000001);
+BENCHMARK(EvalScriptDownshift16000001, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptDownshift16000000(benchmark::Bench& bench)
 {
@@ -334,7 +334,7 @@ static void EvalScriptDownshift16000000(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptDownshift16000000);
+BENCHMARK(EvalScriptDownshift16000000, benchmark::PriorityLevel::HIGH);
 
 static void EvalScriptSHA256DropSHA256(benchmark::Bench& bench)
 {
@@ -345,4 +345,4 @@ static void EvalScriptSHA256DropSHA256(benchmark::Bench& bench)
 
     BenchEvalScript(bench, script, op1, op2);
 }
-BENCHMARK(EvalScriptSHA256DropSHA256);
+BENCHMARK(EvalScriptSHA256DropSHA256, benchmark::PriorityLevel::HIGH);
