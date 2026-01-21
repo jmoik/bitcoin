@@ -16,6 +16,7 @@
 // A de-privatizing child.
 class Val64Test: public Val64 {
 public:
+    using Val64::Val64;
     static void set_force_unaligned(bool val) { Val64::force_unaligned = val; }
     uint64_t &last_word(size_t off = 0) { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
     const uint64_t &last_word(size_t off = 0) const { return Val64::m_u64span[m_u64span.size() - 1 - off]; }
