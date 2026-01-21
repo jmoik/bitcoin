@@ -43,7 +43,7 @@ static void MicroSHA256(benchmark::Bench& bench)
         CSHA256().Write(v1.data(), v1.size()).Finalize(v1.data());
     });
 }
-BENCHMARK(MicroSHA256);
+BENCHMARK(MicroSHA256, benchmark::PriorityLevel::HIGH);
 
 /* Read-only benchmarks */
 static void MicroReadMemcmpSelf(benchmark::Bench& bench)
@@ -59,7 +59,7 @@ static void MicroReadMemcmpSelf(benchmark::Bench& bench)
             abort();
     });
 }
-BENCHMARK(MicroReadMemcmpSelf);
+BENCHMARK(MicroReadMemcmpSelf, benchmark::PriorityLevel::HIGH);
 
 static void MicroReadMemchr(benchmark::Bench& bench)
 {
@@ -74,7 +74,7 @@ static void MicroReadMemchr(benchmark::Bench& bench)
             abort();
     });
 }
-BENCHMARK(MicroReadMemchr);
+BENCHMARK(MicroReadMemchr, benchmark::PriorityLevel::HIGH);
 
 static void MicroReadManual(benchmark::Bench& bench)
 {
@@ -92,7 +92,7 @@ static void MicroReadManual(benchmark::Bench& bench)
         }
     });
 }
-BENCHMARK(MicroReadManual);
+BENCHMARK(MicroReadManual, benchmark::PriorityLevel::HIGH);
 
 /* Write benchmarks. */
 static void MicroWriteMemset(benchmark::Bench& bench)
@@ -112,7 +112,7 @@ static void MicroWriteMemset(benchmark::Bench& bench)
     assert(v1.empty() || memchr(v1.data(), n, v1.size()) == nullptr);
     assert(v2.empty() || memchr(v2.data(), n, v2.size()) == nullptr);
 }
-BENCHMARK(MicroWriteMemset);
+BENCHMARK(MicroWriteMemset, benchmark::PriorityLevel::HIGH);
 
 static void MicroWriteManual(benchmark::Bench& bench)
 {
@@ -131,7 +131,7 @@ static void MicroWriteManual(benchmark::Bench& bench)
             v642.set(i, n);
     });
 }
-BENCHMARK(MicroWriteManual);
+BENCHMARK(MicroWriteManual, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWInvert(benchmark::Bench& bench)
 {
@@ -156,7 +156,7 @@ static void MicroRWInvert(benchmark::Bench& bench)
     assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
     assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
-BENCHMARK(MicroRWInvert);
+BENCHMARK(MicroRWInvert, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWAnd(benchmark::Bench& bench)
 {
@@ -177,7 +177,7 @@ static void MicroRWAnd(benchmark::Bench& bench)
             p2[i] &= p1[i];
     });
 }
-BENCHMARK(MicroRWAnd);
+BENCHMARK(MicroRWAnd, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWOpAnd(benchmark::Bench& bench)
 {
@@ -197,7 +197,7 @@ static void MicroRWOpAnd(benchmark::Bench& bench)
     assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
     assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
-BENCHMARK(MicroRWOpAnd);
+BENCHMARK(MicroRWOpAnd, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWAdd(benchmark::Bench& bench)
 {
@@ -219,7 +219,7 @@ static void MicroRWAdd(benchmark::Bench& bench)
                || memchr(v1.data(), 1, v1.size()) != memchr(v2.data(), 1, v2.size()));
     }
 }
-BENCHMARK(MicroRWAdd);
+BENCHMARK(MicroRWAdd, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWCopy(benchmark::Bench& bench)
 {
@@ -236,7 +236,7 @@ static void MicroRWCopy(benchmark::Bench& bench)
     assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
     assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
-BENCHMARK(MicroRWCopy);
+BENCHMARK(MicroRWCopy, benchmark::PriorityLevel::HIGH);
 
 static void MicroRWCopyManual(benchmark::Bench& bench)
 {
@@ -261,4 +261,4 @@ static void MicroRWCopyManual(benchmark::Bench& bench)
     assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
     assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
 }
-BENCHMARK(MicroRWCopyManual);
+BENCHMARK(MicroRWCopyManual, benchmark::PriorityLevel::HIGH);
