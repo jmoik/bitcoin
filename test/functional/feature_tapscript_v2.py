@@ -116,7 +116,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                 0,  # hash_type (SIGHASH_DEFAULT)
                 scriptpath=True,
                 leaf_script=locking_script,
-                codeseparator_pos=0xffffffff,
+                codeseparator_pos=-1,
                 leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
             )
 
@@ -170,7 +170,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                 0,
                 scriptpath=True,
                 leaf_script=locking_script,
-                codeseparator_pos=0xffffffff,
+                codeseparator_pos=-1,
                 leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
             )
 
@@ -394,7 +394,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                         0,  # input_index = 0
                         scriptpath=True,
                         leaf_script=locking_script,
-                        codeseparator_pos=0xffffffff,
+                        codeseparator_pos=-1,
                         leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
                     )
 
@@ -1265,7 +1265,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                         0,
                         scriptpath=True,
                         leaf_script=locking_script,
-                        codeseparator_pos=0xffffffff,
+                        codeseparator_pos=-1,
                         leaf_ver=LEAF_VERSION_TAPSCRIPT_V2
                     )
 
