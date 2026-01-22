@@ -61,6 +61,9 @@ struct ScriptTemplate {
     std::string name;
     std::vector<opcodetype> opcodes;
     std::string sequence_name;
+
+    ScriptTemplate(std::string n, std::vector<opcodetype> o, std::string s)
+        : name(std::move(n)), opcodes(std::move(o)), sequence_name(std::move(s)) {}
 };
 
 struct BenchTestCase {
