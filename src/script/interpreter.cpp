@@ -1536,21 +1536,6 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 case OP_NOP:
                     break;
 
-                case OP_CAT:
-                {
-                    assert(flags & SCRIPT_VERIFY_OP_CAT); // unreachable otherwise
-
-                    if (stack.size() < 2)
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    valtype& vch1 = stacktop(-2);
-                    valtype& vch2 = stacktop(-1);
-                    if (vch1.size() + vch2.size() > MAX_SCRIPT_ELEMENT_SIZE)
-                        return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
-                    vch1.insert(vch1.end(), vch2.begin(), vch2.end());
-                    stack.pop_back();
-                    break;
-                }
-
                 case OP_CHECKLOCKTIMEVERIFY:
                 {
                     if (!(flags & SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY)) {
@@ -1624,42 +1609,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     break;
                 }
 
-                case OP_CHECKTEMPLATEVERIFY:
-                {
-                    if (flags & SCRIPT_VERIFY_DISCOURAGE_CHECKTEMPLATEVERIFY) {
-                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
-                    }
-
-                    // if flags not enabled; treat as a NOP4
-                    if (!(flags & SCRIPT_VERIFY_CHECKTEMPLATEVERIFY)) {
-                        break;
-                    }
-
-                    if (stack.size() < 1) {
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    }
-
-                    // If the argument was not 32 bytes, treat as OP_NOP4:
-                    switch (stack.back().size()) {
-                        case 32:
-                        {
-                            const Span<const unsigned char> hash{stack.back()};
-                            if (!checker.CheckDefaultCheckTemplateVerifyHash(hash)) {
-                                return set_error(serror, SCRIPT_ERR_TEMPLATE_MISMATCH);
-                            }
-                            break;
-                        }
-                        default:
-                            // future upgrade can add semantics for this opcode with different length args
-                            // so discourage use when applicable
-                            if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_CHECK_TEMPLATE_VERIFY_HASH) {
-                                return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
-                            }
-                    }
-                }
-                break;
-
-                case OP_NOP1: case OP_NOP5:
+                case OP_NOP1: case OP_NOP4: case OP_NOP5:
                 case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10:
                 {
                     if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS)
@@ -2280,53 +2230,6 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     }
                 }
                 break;
-
-                case OP_CHECKSIGFROMSTACK: {
-
-                    // DISCOURAGE for OP_CHECKSIGFROMSTACK is handled in OP_SUCCESS handling
-                    // OP_CHECKSIGFROMSTACK is only available in Tapscript
-                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) {
-                        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                    }
-
-                    // If fewer than 3 elements are on the stack, the script MUST fail and terminate immediately
-                    if (stack.size() < 3) {
-                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                    }
-
-                    // The public key (top element)
-                    // message (second to top element),
-                    // and signature (third from top element) are read from the stack.
-                    const valtype& pubkey = stacktop(-1);
-                    const valtype& msg = stacktop(-2);
-                    const valtype& sig = stacktop(-3);
-
-                    bool push_success = true;
-                    if (!EvalChecksigFromStack(sig, msg, pubkey, execdata, flags, sigversion, serror, push_success)) {
-                        return false; // serror set by EvalChecksigFromStack
-                    }
-
-                    popstack(stack);
-                    popstack(stack);
-                    popstack(stack);
-
-                    stack.push_back(push_success ? vchTrue : vchFalse);
-
-                    break;
-                }
-
-                case OP_INTERNALKEY: {
-                    // OP_INTERNALKEY is only available in Tapscript
-                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) {
-                        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                    }
-                    // Always present in Tapscript
-                    assert(flags & SCRIPT_VERIFY_INTERNALKEY);
-                    assert(sigversion == SigVersion::TAPSCRIPT);
-                    assert(execdata.m_internal_key);
-                    stack.emplace_back(execdata.m_internal_key->begin(), execdata.m_internal_key->end());
-                    break;
-                }
 
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
