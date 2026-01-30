@@ -620,7 +620,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     uint64_t warmup_budget = varops_block_budget;
     ScriptError warmup_error;
     ValtypeStack warmup_stack;
-    EvalScript(warmup_stack, warmup_script, 0, checker,
+    EvalGsrScript(warmup_stack, warmup_script, 0, checker,
                 SigVersion::TAPSCRIPT_V2, sdata, warmup_budget, &warmup_error);
 
 
@@ -628,7 +628,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
         assert(stack_index < stack_pool_size);
         ValtypeStack& working_stack = stack_pool[stack_index];
         working_budget = varops_block_budget;
-        result = EvalScript(working_stack, test_case.script, 0, checker,
+        result = EvalGsrScript(working_stack, test_case.script, 0, checker,
                         SigVersion::TAPSCRIPT_V2, sdata, working_budget, &serror);
         ++stack_index;
     });

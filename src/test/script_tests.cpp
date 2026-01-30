@@ -1888,7 +1888,7 @@ static void BenchEvalScript(const CScript &script,
 
         uint64_t varops_budget = 1e10;
         ValtypeStack valtype_stack{stack};
-        if (!EvalScript(valtype_stack, script, 0, checker,
+        if (!EvalGsrScript(valtype_stack, script, 0, checker,
                         SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror)) {
             std::cerr << "EvalScript error " << ScriptErrorString(serror) << std::endl;
             assert(0);

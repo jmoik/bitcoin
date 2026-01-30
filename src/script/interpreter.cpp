@@ -1421,7 +1421,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
 }
 
 
-bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
+bool EvalGsrScript(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, uint64_t& varops_budget, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
     static const CScriptNum bnOne(1);
@@ -3227,7 +3227,7 @@ static bool ExecuteWitnessScript(const Span<const valtype>& stack_span, const CS
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
         if (!varops_budget) return set_error(serror, SCRIPT_ERR_VAROP_NULL);
         ValtypeStack valtype_stack{stack};
-        if (!EvalScript(valtype_stack, exec_script, flags, checker, sigversion, execdata, *varops_budget, serror)) return false;
+        if (!EvalGsrScript(valtype_stack, exec_script, flags, checker, sigversion, execdata, *varops_budget, serror)) return false;
 
         // Scripts inside witness implicitly require cleanstack behaviour
         if (valtype_stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);

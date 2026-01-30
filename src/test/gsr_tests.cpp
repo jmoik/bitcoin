@@ -306,7 +306,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             constexpr uint64_t budget = 100'000'000;
             uint64_t varops_budget = budget;
             ValtypeStack valtype_stack{stack};
-            bool success = EvalScript(valtype_stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror);
+            bool success = EvalGsrScript(valtype_stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror);
 
             BOOST_CHECK_MESSAGE(success == expected_success, "Test '" << full_test_name << "' failed success check.");
 

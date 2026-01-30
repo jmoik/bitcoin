@@ -77,7 +77,7 @@ BOOST_AUTO_TEST_CASE(valtype_stack_size_tracking)
         CScript script;
         script << OP_ADD;
 
-        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror));
+        BOOST_CHECK(EvalGsrScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror));
         BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
 
         BOOST_CHECK_EQUAL(stack.size(), 1);
@@ -159,7 +159,7 @@ BOOST_AUTO_TEST_CASE(valtype_stack_size_tracking)
         ScriptError serror;
         uint64_t varops_budget = 1000000;
 
-        BOOST_CHECK(EvalScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror));
+        BOOST_CHECK(EvalGsrScript(stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror));
         BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_OK);
         BOOST_CHECK_EQUAL(stack.size(), 1);
 
