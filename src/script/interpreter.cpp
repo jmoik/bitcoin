@@ -1889,7 +1889,9 @@ bool EvalGsrScript(ValtypeStack& stack, const CScript& script, script_verify_fla
                     // |OP_TUCK
                     // |Length of second-from-top stack entry (before) (COPYING)
                     varcost += vch.size();
-                    stack.insert(stack.size() - 2, vch);
+                    // (x1 x2) -> push x2 -> (x1 x2 x2) -> swap(-2,-3) -> (x2 x1 x2)
+                    stack.push_back(vch);
+                    stack.swap(-2, -3);
                 }
                 break;
 
