@@ -737,7 +737,7 @@ BOOST_AUTO_TEST_CASE(val64_mul_span)
     for (bool portable_math : {false, true}) {
         Val64Test::set_force_portable_math(portable_math);
 
-    // Mulitply this by mul, place into res.
+    // Multiply this by mul, place into res.
     for (size_t i = 0; i < 128; i++) {
         for (size_t j = 0; j < 65; j++) {
             Val64Test v64a(vec_setbit(i));
