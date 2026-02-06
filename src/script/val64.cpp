@@ -906,7 +906,7 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
             // Knuth suggests: (notation reworked to match us, the rest is a
             // direct quote):
 
-            // ... let r* be the remainer.
+            // ... let r* be the remainder.
             // Now test if q* == β, or q* x v2_n-2_ > βr* + v1_n+j-2_:
             // if so, decrease q* by 1, increase r* by v2_n-1_, and
             // repeat this test if r* < β. (The test on v2_n-2_ determines at
