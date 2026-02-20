@@ -603,7 +603,7 @@ static void RunBenchmark(ankerl::nanobench::Bench& bench,
     ScriptError serror;
 
     const uint64_t varops_block_budget = TOTAL_VAROPS_BUDGET;
-    assert(varops_block_budget > 2e10);
+    assert(varops_block_budget > 1e10);
     uint64_t working_budget = varops_block_budget;
     bool result = false;
 
@@ -687,6 +687,7 @@ static void RunAllBenchmarks(ankerl::nanobench::Bench& bench, std::vector<BenchT
     if (!SILENT_MODE) {
         std::cout << strprintf("Schnorr block time: %.3f seconds\n", schnorr_block_time);
     }
+
     int bench_count = 0;
 
     for (BenchTestCase& test_case : test_cases) {
@@ -734,93 +735,85 @@ static void PrintWorstCases(std::vector<BenchResult>& results) {
     std::sort(results.begin(), results.end(), [](const BenchResult& a, const BenchResult& b) { return a.median_sec > b.median_sec; });
 
     std::cout << "\n================================================================================\n";
-    std::cout << "SLOWEST OPERATIONS\n";
+    std::cout << "WORST-CASE COMPARISON\n";
     std::cout << "================================================================================\n";
 
-    double schnorr_median_time = 0.0;
+    // Find worst existing (non-GSR) and worst GSR operations
+    const BenchResult* worst_existing = nullptr;
+    const BenchResult* worst_gsr = nullptr;
+    const BenchResult* schnorr_result = nullptr;
+
     for (const auto& result : results) {
-        if (result.name == "Schnorr signature validation") {
-            schnorr_median_time = result.median_sec;
-            break;
-        }
-    }
-
-    // Calculate suggested maximum varops budget based on slowest 100% budget operation
-    double slowest_100_percent_time = 0.0;
-    for (const auto& result : results) {
-        if (result.name != "Schnorr signature validation" &&
-            result.varops_consumed >= TOTAL_VAROPS_BUDGET * 0.99) {
-            if (result.median_sec > slowest_100_percent_time) {
-                slowest_100_percent_time = result.median_sec;
-            }
-        }
-    }
-
-    if (slowest_100_percent_time > 0 && schnorr_median_time > 0) {
-        double suggested_budget = VAROPS_BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
-        std::cout << "\nSUGGESTED MAXIMUM VAROPS BUDGET:\n";
-        std::cout << strprintf("   Based on slowest 100%% varops operation (%.3f sec) vs Schnorr (%.3f sec):\n",
-               slowest_100_percent_time, schnorr_median_time);
-        std::cout << strprintf("   Suggested budget: %.0f varops per weight unit (current: %d)\n",
-               suggested_budget, VAROPS_BUDGET_PER_BYTE);
-        std::cout << strprintf("   Formula: %d / %.3f * %.3f = %.0f\n\n",
-               VAROPS_BUDGET_PER_BYTE, slowest_100_percent_time, schnorr_median_time, suggested_budget);
-    }
-
-    // Separate results into slower and faster than Schnorr
-    std::vector<BenchResult> slower_than_schnorr;
-    std::vector<BenchResult> faster_than_schnorr;
-    BenchResult* schnorr_result = nullptr;
-
-    for (auto& result : results) {
         if (result.name == "Schnorr signature validation") {
             schnorr_result = &result;
-        } else if (schnorr_median_time > 0 && result.median_sec > schnorr_median_time) {
-            slower_than_schnorr.push_back(result);
+            continue;
+        }
+        if (!result.is_gsr_only) {
+            if (!worst_existing || result.median_sec > worst_existing->median_sec) {
+                worst_existing = &result;
+            }
         } else {
-            faster_than_schnorr.push_back(result);
-        }
-    }
-
-    // Print operations slower than Schnorr
-    if (!slower_than_schnorr.empty()) {
-        std::cout << "\nSLOWER THAN SCHNORR SIGNATURE VALIDATION:\n\n";
-        size_t printed_count = 0;
-        for (size_t i = 0; i < slower_than_schnorr.size(); i++) {
-            const auto& result = slower_than_schnorr[i];
-            double schnorr_times = schnorr_median_time > 0 ? result.median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
-            if (schnorr_times > SIGNATURES_PER_BLOCK / 2) {
-                std::cout << strprintf("%zu. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
-                       ++printed_count, result.name.c_str(), result.median_sec, schnorr_times,
-                       (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
+            if (!worst_gsr || result.median_sec > worst_gsr->median_sec) {
+                worst_gsr = &result;
             }
         }
     }
 
-    // Print Schnorr as divider
+    // Also consider realistic Schnorr (~15K ops) as existing worst case data point
+    double schnorr_15k = schnorr_result ? schnorr_result->median_sec * 15000.0 / SIGNATURES_PER_BLOCK : 0;
+    double existing_worst_time = worst_existing ? worst_existing->median_sec : 0;
+    bool schnorr_is_binding = schnorr_15k > existing_worst_time;
+    if (schnorr_is_binding) existing_worst_time = schnorr_15k;
+
+    // Print existing worst case
+    std::cout << "\nEXISTING WORST CASE (pre-GSR):\n";
+    if (worst_existing) {
+        std::cout << strprintf("  %-50s %.3f sec (%5.1f%% varops)\n",
+               worst_existing->name.c_str(), worst_existing->median_sec,
+               (double(worst_existing->varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
+    }
     if (schnorr_result) {
-        std::cout << "\n" << std::string(80, '-') << "\n";
-        double schnorr_times = SIGNATURES_PER_BLOCK;
-        std::cout << strprintf("%-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
-               schnorr_result->name.c_str(), schnorr_result->median_sec, schnorr_times,
-               (double(schnorr_result->varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
-        std::cout << std::string(80, '-') << "\n\n";
+        std::cout << strprintf("  Schnorr signature validation (80K)        %10.3f sec\n", schnorr_result->median_sec);
+        std::cout << strprintf("  Schnorr realistic (~15K, weight-limited)  %10.3f sec%s\n",
+               schnorr_15k, schnorr_is_binding ? "  <-- binding" : "");
     }
 
-    // Print operations faster than Schnorr
-    if (!faster_than_schnorr.empty()) {
-        std::cout << "FASTER THAN SCHNORR SIGNATURE VALIDATION:\n\n";
-        int count = std::min(100 - static_cast<int>(slower_than_schnorr.size()) - 1, static_cast<int>(faster_than_schnorr.size()));
-        int printed_count = 0;
-        for (int i = 0; i < count; i++) {
-            const auto& result = faster_than_schnorr[i];
-            double schnorr_times = schnorr_median_time > 0 ? result.median_sec / schnorr_median_time * SIGNATURES_PER_BLOCK : 0;
-            if (schnorr_times > SIGNATURES_PER_BLOCK / 2) {
-                std::cout << strprintf("%d. %-30s %.3f seconds (%6.0f Schnorrs, %6.1f%% varops used)\n",
-                       ++printed_count, result.name.c_str(), result.median_sec, schnorr_times,
-                       (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
-            }
-        }
+    // Print GSR worst case
+    std::cout << "\nGSR WORST CASE:\n";
+    if (worst_gsr) {
+        std::cout << strprintf("  %-50s %.3f sec (%5.1f%% varops)\n",
+               worst_gsr->name.c_str(), worst_gsr->median_sec,
+               (double(worst_gsr->varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
+    }
+
+    // Print ratio
+    if (worst_gsr && existing_worst_time > 0) {
+        double ratio = worst_gsr->median_sec / existing_worst_time;
+        std::cout << strprintf("\n  RATIO (GSR worst / existing worst): %.3f\n", ratio);
+    }
+
+    // Print top 10 slowest GSR ops
+    std::cout << "\nTOP 10 SLOWEST GSR OPERATIONS:\n\n";
+    int gsr_count = 0;
+    for (const auto& result : results) {
+        if (result.name == "Schnorr signature validation") continue;
+        if (!result.is_gsr_only) continue;
+        std::cout << strprintf("%2d. %-50s %.3f sec  (%5.1f%% varops)\n",
+               ++gsr_count, result.name.c_str(), result.median_sec,
+               (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
+        if (gsr_count >= 10) break;
+    }
+
+    // Print top 5 slowest existing ops
+    std::cout << "\nTOP 5 SLOWEST EXISTING OPERATIONS:\n\n";
+    int existing_count = 0;
+    for (const auto& result : results) {
+        if (result.name == "Schnorr signature validation") continue;
+        if (result.is_gsr_only) continue;
+        std::cout << strprintf("%2d. %-50s %.3f sec  (%5.1f%% varops)\n",
+               ++existing_count, result.name.c_str(), result.median_sec,
+               (double(result.varops_consumed) / TOTAL_VAROPS_BUDGET) * 100.0);
+        if (existing_count >= 5) break;
     }
 
     std::cout << "================================================================================\n";
