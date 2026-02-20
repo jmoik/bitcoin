@@ -610,8 +610,8 @@ void Val64::op_invert(Val64 &v1, size_t &varcost)
 {
     // BIP#ops:
     // |OP_INVERT
-    // |length(A) * 2 (ZEROING@2)
-    varcost += v1.m_realsize * 2;
+    // |length(A) * 4 (OTHER@4)
+    varcost += v1.m_realsize * 4;
 
     // Endian doesn't matter, so access raw.
     for (auto &v: v1.m_u64span) {
@@ -679,8 +679,8 @@ void Val64::op_min(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_MIN
-    // |(Greater of two operand lengths) * 2
-    varcost += v1.m_realsize * 2;
+    // |(Greater of two operand lengths) * 4 (OTHER@4)
+    varcost += v1.m_realsize * 4;
 
     if (cmp_span(v1.m_u64span, v2.m_u64span) > 0) {
         v1 = std::move(v2);
@@ -694,8 +694,8 @@ void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_MAX
-    // |(Greater of two operand lengths) * 2
-    varcost += v1.m_realsize * 2;
+    // |(Greater of two operand lengths) * 4 (OTHER@4)
+    varcost += v1.m_realsize * 4;
 
     if (cmp_span(v1.m_u64span, v2.m_u64span) < 0) {
         v1 = std::move(v2);

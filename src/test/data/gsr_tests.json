@@ -522,8 +522,8 @@
                 "final stack": [
                     "00"
                 ],
-                "varops cost": 2,
-                "description": "COPYING: len(A) = 1"
+                "varops cost": 4,
+                "description": "OTHER: len(A) = 1"
             },
             {
                 "name": "OP_INVERT with all zeros",
@@ -538,7 +538,7 @@
                     ""
                 ],
                 "varops cost": 0,
-                "description": "COPYING: len(A) = 0"
+                "description": "OTHER: len(A) = 0"
             },
             {
                 "name": "OP_INVERT with multi-byte value",
@@ -552,8 +552,8 @@
                 "final stack": [
                     "00ED"
                 ],
-                "varops cost": 4,
-                "description": "COPYING: len(A) = 2"
+                "varops cost": 8,
+                "description": "OTHER: len(A) = 2"
             },
             {
                 "name": "OP_INVERT with all ones",
@@ -567,8 +567,8 @@
                 "final stack": [
                     "0000000000000000"
                 ],
-                "varops cost": 16,
-                "description": "COPYING: len(A) = 8"
+                "varops cost": 32,
+                "description": "OTHER: len(A) = 8"
             },
             {
                 "name": "OP_INVERT with alternating bit pattern",
@@ -582,8 +582,8 @@
                 "final stack": [
                     "5555555555555555"
                 ],
-                "varops cost": 16,
-                "description": "COPYING: len(A) = 8"
+                "varops cost": 32,
+                "description": "OTHER: len(A) = 8"
             },
             {
                 "name": "OP_INVERT with insufficient stack elements should fail",
