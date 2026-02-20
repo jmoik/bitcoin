@@ -811,6 +811,208 @@
         ]
     },
     {
+        "category": "OP_DIV tests",
+        "tests": [
+            {
+                "name": "OP_DIV: 6 / 2 = 3",
+                "initial stack": ["0x06", "0x02"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x03"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_DIV: 10 / 3 = 3",
+                "initial stack": ["0x0a", "0x03"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x03"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_DIV: 255 / 16 = 15",
+                "initial stack": ["0xff", "0x10"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x0f"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_DIV: 256 / 2 = 128",
+                "initial stack": ["0x0001", "0x02"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x80"],
+                "varops cost": 42
+            },
+            {
+                "name": "OP_DIV: 65535 / 256 = 255",
+                "initial stack": ["0xffff", "0x0001"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0xff"],
+                "varops cost": 46
+            },
+            {
+                "name": "OP_DIV: 0 / 1 = 0",
+                "initial stack": ["0x", "0x01"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x"],
+                "varops cost": 4
+            },
+            {
+                "name": "OP_DIV: 1 / 1 = 1",
+                "initial stack": ["0x01", "0x01"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x01"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_DIV: 1 / 2 = 0",
+                "initial stack": ["0x01", "0x02"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_DIV: divide by zero fails",
+                "initial stack": ["0x0a", "0x"],
+                "opcodes": ["OP_DIV"],
+                "success": false
+            },
+            {
+                "name": "OP_DIV: divide by explicit zero fails",
+                "initial stack": ["0x0a", "0x00"],
+                "opcodes": ["OP_DIV"],
+                "success": false
+            },
+            {
+                "name": "OP_DIV: empty stack fails",
+                "initial stack": [],
+                "opcodes": ["OP_DIV"],
+                "success": false
+            },
+            {
+                "name": "OP_DIV: one element on stack fails",
+                "initial stack": ["0x0a"],
+                "opcodes": ["OP_DIV"],
+                "success": false
+            },
+            {
+                "name": "OP_DIV: 4-byte / 2-byte (16777217 / 256 = 65536)",
+                "initial stack": ["0x01000001", "0x0001"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x000001"],
+                "varops cost": 90
+            },
+            {
+                "name": "OP_DIV: 8-byte / 1-byte",
+                "initial stack": ["0x0100000000000001", "0x02"],
+                "opcodes": ["OP_DIV"],
+                "success": true,
+                "final stack": ["0x00000000000080"],
+                "varops cost": 190
+            }
+        ]
+    },
+    {
+        "category": "OP_MOD tests",
+        "tests": [
+            {
+                "name": "OP_MOD: 10 % 3 = 1",
+                "initial stack": ["0x0a", "0x03"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x01"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_MOD: 7 % 7 = 0",
+                "initial stack": ["0x07", "0x07"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_MOD: 255 % 16 = 15",
+                "initial stack": ["0xff", "0x10"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x0f"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_MOD: 256 % 10 = 6",
+                "initial stack": ["0x0001", "0x0a"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x06"],
+                "varops cost": 42
+            },
+            {
+                "name": "OP_MOD: 0 % 1 = 0",
+                "initial stack": ["0x", "0x01"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x"],
+                "varops cost": 4
+            },
+            {
+                "name": "OP_MOD: 1 % 2 = 1",
+                "initial stack": ["0x01", "0x02"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x01"],
+                "varops cost": 22
+            },
+            {
+                "name": "OP_MOD: 65535 % 256 = 255",
+                "initial stack": ["0xffff", "0x0001"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0xff"],
+                "varops cost": 46
+            },
+            {
+                "name": "OP_MOD: mod by zero fails",
+                "initial stack": ["0x0a", "0x"],
+                "opcodes": ["OP_MOD"],
+                "success": false
+            },
+            {
+                "name": "OP_MOD: mod by explicit zero fails",
+                "initial stack": ["0x0a", "0x00"],
+                "opcodes": ["OP_MOD"],
+                "success": false
+            },
+            {
+                "name": "OP_MOD: empty stack fails",
+                "initial stack": [],
+                "opcodes": ["OP_MOD"],
+                "success": false
+            },
+            {
+                "name": "OP_MOD: one element on stack fails",
+                "initial stack": ["0x0a"],
+                "opcodes": ["OP_MOD"],
+                "success": false
+            },
+            {
+                "name": "OP_MOD: 4-byte % 2-byte",
+                "initial stack": ["0x05000001", "0x0001"],
+                "opcodes": ["OP_MOD"],
+                "success": true,
+                "final stack": ["0x05"],
+                "varops cost": 90
+            }
+        ]
+    },
+    {
         "category": "Numeric Operations",
         "tests": [
             {
