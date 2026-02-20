@@ -12,7 +12,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             },
             {
@@ -25,7 +25,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 4,
+                "varops cost": 8,
                 "description": "COMPARINGZERO: len(A) = 4"
             },
             {
@@ -49,7 +49,7 @@
             {
                 "name": "OP_VERIFY fail (multi-zero)",
                 "initial stack": [
-                "00{4000000}"
+                    "00{4000000}"
                 ],
                 "opcodes": [
                     "69"
@@ -59,17 +59,17 @@
             {
                 "name": "OP_VERIFY success (only last byte non-zero)",
                 "initial stack": [
-                  "00{3999999}01"
+                    "00{3999999}01"
                 ],
                 "opcodes": [
-                  "69"
+                    "69"
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARINGZERO: len(A) = 4000000"
-              },
-                          {
+            },
+            {
                 "name": "OP_VERIFY stack presence test (zero followed by 01)",
                 "initial stack": [
                     "00",
@@ -82,7 +82,7 @@
                 "final stack": [
                     "00"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             }
         ]
@@ -102,7 +102,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             },
             {
@@ -117,7 +117,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 4,
+                "varops cost": 8,
                 "description": "COMPARINGZERO: len(A) = 4"
             },
             {
@@ -140,22 +140,22 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             },
             {
                 "name": "OP_NOT success (multi-byte all zero)",
                 "initial stack": [
-                "00{4000000}"
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                "91"
+                    "91"
                 ],
                 "success": true,
                 "final stack": [
-                "01"
+                    "01"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARINGZERO: len(A) = 4000000"
             },
             {
@@ -176,18 +176,18 @@
             {
                 "name": "OP_NOT success (only last byte non-zero)",
                 "initial stack": [
-                  "00{3999999}01"
+                    "00{3999999}01"
                 ],
                 "opcodes": [
-                  "91"
+                    "91"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARINGZERO: len(A) = 4000000"
-              }
+            }
         ]
     },
     {
@@ -205,7 +205,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             },
             {
@@ -220,7 +220,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 4,
+                "varops cost": 8,
                 "description": "COMPARINGZERO: len(A) = 4"
             },
             {
@@ -243,54 +243,54 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) = 1"
             },
             {
                 "name": "OP_0NOTEQUAL success (explicit empty string becomes empty)",
                 "initial stack": [
-                  ""
+                    ""
                 ],
                 "opcodes": [
-                  "92"
+                    "92"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
                 "varops cost": 0,
                 "description": "COMPARINGZERO: len(A) = 0"
-              },
-              {
+            },
+            {
                 "name": "OP_0NOTEQUAL success (multi-byte zero becomes empty)",
                 "initial stack": [
-                  "00{4000000}"
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                  "92"
+                    "92"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARINGZERO: len(A) = 4000000"
-              },
-              {
+            },
+            {
                 "name": "OP_0NOTEQUAL success (only last byte non-zero becomes 01)",
                 "initial stack": [
-                  "00{3999999}01"
+                    "00{3999999}01"
                 ],
                 "opcodes": [
-                  "92"
+                    "92"
                 ],
                 "success": true,
                 "final stack": [
-                  "01"
+                    "01"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARINGZERO: len(A) = 4000000"
-              }
+            }
         ]
     },
     {
@@ -309,7 +309,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARING: len(A) = 2 (same length, so compare)"
             },
             {
@@ -341,7 +341,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARING: len(A) = 2 (same length, so compare)"
             },
             {
@@ -363,15 +363,15 @@
             {
                 "name": "OP_EQUAL fail (prefix match only)",
                 "initial stack": [
-                  "01",
-                  "01{3999999}"
+                    "01",
+                    "01{3999999}"
                 ],
                 "opcodes": [
-                  "87"
+                    "87"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
                 "varops cost": 0,
                 "description": "COMPARING: 0 (different lengths, no comparison needed)"
@@ -410,7 +410,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARING: len(A) = 2 (same length, so compare)"
             },
             {
@@ -452,11 +452,11 @@
             {
                 "name": "OP_EQUALVERIFY fail (prefix match only)",
                 "initial stack": [
-                  "01",
-                  "01{3999999}"
+                    "01",
+                    "01{3999999}"
                 ],
                 "opcodes": [
-                  "88"
+                    "88"
                 ],
                 "success": false
             },
@@ -499,7 +499,7 @@
                     "01",
                     "02"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -523,71 +523,71 @@
             {
                 "name": "OP_2DUP success (stack total size exactly 8000000)",
                 "initial stack": [
-                  "aa",
-                  "ff{3999999}"
+                    "aa",
+                    "ff{3999999}"
                 ],
                 "opcodes": [
-                  "6e"
+                    "6e"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "ff{3999999}",
-                  "aa",
-                  "ff{3999999}"
+                    "aa",
+                    "ff{3999999}",
+                    "aa",
+                    "ff{3999999}"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 12000000,
                 "description": "COPYING: len(A) + len(B) = 1 + 3999999 = 4000000"
-              },
-              {
+            },
+            {
                 "name": "OP_2DUP fail (stack total size equals 8000001)",
                 "initial stack": [
-                  "ffffff",
-                  "ff{2000000}",
-                  "ff{1999999}"
+                    "ffffff",
+                    "ff{2000000}",
+                    "ff{1999999}"
                 ],
                 "opcodes": [
-                  "6e"
+                    "6e"
                 ],
                 "success": false
-              },
-              {
+            },
+            {
                 "name": "OP_2DUP success (stack total size exactly 8000000 including altstack)",
                 "initial stack": [
-                  "aa",
-                  "ff{3999998}",
-                  "bbcc"
+                    "aa",
+                    "ff{3999998}",
+                    "bbcc"
                 ],
                 "opcodes": [
-                  "6b",
-                  "6e"
+                    "6b",
+                    "6e"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "ff{3999998}",
-                  "aa",
-                  "ff{3999998}"
+                    "aa",
+                    "ff{3999998}",
+                    "aa",
+                    "ff{3999998}"
                 ],
                 "final altstack": [
-                  "bbcc"
+                    "bbcc"
                 ],
-                "varops cost": 3999999,
+                "varops cost": 11999997,
                 "description": "COPYING: OP_2DUP (len(A) + len(B) = 1 + 3999998) = 3999999"
-              },
-              {
+            },
+            {
                 "name": "OP_2DUP fail (stack total size including altstack equals 8000001)",
                 "initial stack": [
-                  "ff{2000000}",
-                  "ff{1999999}",
-                  "ffffff"
+                    "ff{2000000}",
+                    "ff{1999999}",
+                    "ffffff"
                 ],
                 "opcodes": [
-                  "6b",
-                  "6e"
+                    "6b",
+                    "6e"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -612,7 +612,7 @@
                     "02",
                     "03"
                 ],
-                "varops cost": 3,
+                "varops cost": 9,
                 "description": "COPYING: len(A) + len(B) + len(C) = 1 + 1 + 1 = 3"
             },
             {
@@ -647,78 +647,78 @@
             {
                 "name": "OP_DUP3 success (stack total size exactly 8000000)",
                 "initial stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999998}"
+                    "aa",
+                    "bb",
+                    "ff{3999998}"
                 ],
                 "opcodes": [
-                  "6f"
+                    "6f"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999998}",
-                  "aa",
-                  "bb",
-                  "ff{3999998}"
+                    "aa",
+                    "bb",
+                    "ff{3999998}",
+                    "aa",
+                    "bb",
+                    "ff{3999998}"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 12000000,
                 "description": "COPYING: len(A) + len(B) + len(C) = 1 + 1 + 3999998 = 4000000"
-              },
-              {
+            },
+            {
                 "name": "OP_DUP3 fail (stack total size equals 8000001)",
                 "initial stack": [
-                  "ffffff",
-                  "ff{2000000}",
-                  "ff{1999999}"
+                    "ffffff",
+                    "ff{2000000}",
+                    "ff{1999999}"
                 ],
                 "opcodes": [
-                  "6f"
+                    "6f"
                 ],
                 "success": false
-              },
-              {
+            },
+            {
                 "name": "OP_DUP3 success (stack total size exactly 8000000 including altstack)",
                 "initial stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999995}",
-                  "ccdd"
+                    "aa",
+                    "bb",
+                    "ff{3999995}",
+                    "ccdd"
                 ],
                 "opcodes": [
-                  "6b",
-                  "6f"
+                    "6b",
+                    "6f"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999995}",
-                  "aa",
-                  "bb",
-                  "ff{3999995}"
+                    "aa",
+                    "bb",
+                    "ff{3999995}",
+                    "aa",
+                    "bb",
+                    "ff{3999995}"
                 ],
                 "final altstack": [
-                  "ccdd"
+                    "ccdd"
                 ],
-                "varops cost": 3999997,
+                "varops cost": 11999991,
                 "description": "COPYING: OP_3DUP (1 + 1 + 3999995) = 3999997"
-              },
-              {
+            },
+            {
                 "name": "OP_DUP3 fail (stack+altstack total size = 8000001)",
                 "initial stack": [
-                  "ff{2000000}",
-                  "ff{1999999}",
-                  "ffffff",
-                  "aabbcc"
+                    "ff{2000000}",
+                    "ff{1999999}",
+                    "ffffff",
+                    "aabbcc"
                 ],
                 "opcodes": [
-                  "6b",
-                  "6f"
+                    "6b",
+                    "6f"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -744,7 +744,7 @@
                     "a1",
                     "b2"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(C) + len(D) = 1 + 1 = 2"
             },
             {
@@ -791,82 +791,82 @@
             {
                 "name": "OP_2OVER success (stack total size exactly 8000000)",
                 "initial stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999998}",
-                  "00"
+                    "aa",
+                    "bb",
+                    "ff{3999998}",
+                    "00"
                 ],
                 "opcodes": [
-                  "70"
+                    "70"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999998}",
-                  "00",
-                  "aa",
-                  "bb"
+                    "aa",
+                    "bb",
+                    "ff{3999998}",
+                    "00",
+                    "aa",
+                    "bb"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(C) + len(D) = 1 + 1 = 2"
-              },
-              {
+            },
+            {
                 "name": "OP_2OVER fail (stack total size exceeds 8000000)",
                 "initial stack": [
-                  "01",
-                  "02",
-                  "ff{4000000}",
-                  "ff{3999999}"
+                    "01",
+                    "02",
+                    "ff{4000000}",
+                    "ff{3999999}"
                 ],
                 "opcodes": [
-                  "70"
+                    "70"
                 ],
                 "success": false
-              },
-              {
+            },
+            {
                 "name": "OP_2OVER fail (stack+altstack exceeds 8000000)",
                 "initial stack": [
-                  "ff{1999999}",
-                  "ff{1999999}",
-                  "ff{1999999}",
-                  "ff{1999999}",
-                  "deadbeef"
+                    "ff{1999999}",
+                    "ff{1999999}",
+                    "ff{1999999}",
+                    "ff{1999999}",
+                    "deadbeef"
                 ],
                 "opcodes": [
-                  "6b",
-                  "70"
+                    "6b",
+                    "70"
                 ],
                 "success": false
-              },
-              {
+            },
+            {
                 "name": "OP_2OVER success (stack+altstack exactly 8000000)",
                 "initial stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999997}",
-                  "cc",
-                  "dd"
+                    "aa",
+                    "bb",
+                    "ff{3999997}",
+                    "cc",
+                    "dd"
                 ],
                 "opcodes": [
-                  "6b",
-                  "70"
+                    "6b",
+                    "70"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "bb",
-                  "ff{3999997}",
-                  "cc",
-                  "aa",
-                  "bb"
+                    "aa",
+                    "bb",
+                    "ff{3999997}",
+                    "cc",
+                    "aa",
+                    "bb"
                 ],
                 "final altstack": [
-                  "dd"
+                    "dd"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: OP_2OVER (1 + 1) = 2"
-              }
+            }
         ]
     },
     {
@@ -885,7 +885,7 @@
                     "01",
                     "01"
                 ],
-                "varops cost": 2,
+                "varops cost": 5,
                 "description": "COMPARINGZERO + COPYING: len(A) * 2 = 1 * 2 = 2"
             },
             {
@@ -901,7 +901,7 @@
                     "0001",
                     "0001"
                 ],
-                "varops cost": 4,
+                "varops cost": 10,
                 "description": "COMPARINGZERO + COPYING: len(A) * 2 = 2 * 2 = 4"
             },
             {
@@ -922,32 +922,32 @@
             {
                 "name": "OP_IFDUP success (all-zero multi-byte is zero)",
                 "initial stack": [
-                  "00{4000000}"
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                  "73"
+                    "73"
                 ],
                 "success": true,
                 "final stack": [
-                  "00{4000000}"
+                    "00{4000000}"
                 ],
-                "varops cost": 8000000,
+                "varops cost": 20000000,
                 "description": "COMPARINGZERO + COPYING: len(A) * 2 = 4000000 * 2 = 8000000"
-              },
-              {
+            },
+            {
                 "name": "OP_IFDUP success (last byte non-zero triggers duplication)",
                 "initial stack": [
-                  "00{3999999}01"
+                    "00{3999999}01"
                 ],
                 "opcodes": [
-                  "73"
+                    "73"
                 ],
                 "success": true,
                 "final stack": [
-                  "00{3999999}01",
-                  "00{3999999}01"
+                    "00{3999999}01",
+                    "00{3999999}01"
                 ],
-                "varops cost": 8000000,
+                "varops cost": 20000000,
                 "description": "COMPARINGZERO + COPYING: len(A) * 2 = 4000000 * 2 = 8000000"
             },
             {
@@ -965,32 +965,32 @@
                     "ff{3999998}"
                 ],
                 "opcodes": [
-                  "6b",
-                  "73"
+                    "6b",
+                    "73"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "aa"
+                    "aa",
+                    "aa"
                 ],
                 "final altstack": [
-                  "ff{3999998}"
+                    "ff{3999998}"
                 ],
-                "varops cost": 2,
+                "varops cost": 5,
                 "description": "COPYING: OP_IFDUP (len=1 check) = 1 * 2 = 2"
-              },
-              {
+            },
+            {
                 "name": "OP_IFDUP fail (duplication causes stack+altstack > 8000000)",
                 "initial stack": [
-                  "ff{4000000}",
-                  "ab"
+                    "ff{4000000}",
+                    "ab"
                 ],
                 "opcodes": [
-                  "6b",
-                  "73"
+                    "6b",
+                    "73"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -1009,7 +1009,7 @@
                     "ff",
                     "ff"
                 ],
-                "varops cost": 1,
+                "varops cost": 3,
                 "description": "COPYING: len(A) = 1"
             },
             {
@@ -1025,7 +1025,7 @@
                     "abcd",
                     "abcd"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(A) = 2"
             },
             {
@@ -1055,36 +1055,35 @@
             {
                 "name": "OP_DUP success (stack+altstack exactly 8000000 after dup)",
                 "initial stack": [
-                  "aa",
-                  "ff{3999998}"
+                    "aa",
+                    "ff{3999998}"
                 ],
                 "opcodes": [
-                  "6b",
-                  "76"
+                    "6b",
+                    "76"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "aa"
+                    "aa",
+                    "aa"
                 ],
                 "final altstack": [
-                  "ff{3999998}"
+                    "ff{3999998}"
                 ],
-                "varops cost": 1
-
-              },
-              {
+                "varops cost": 3
+            },
+            {
                 "name": "OP_DUP fail (stack+altstack > 8000000 after dup)",
                 "initial stack": [
-                  "ff{4000000}",
-                  "ab"
+                    "ff{4000000}",
+                    "ab"
                 ],
                 "opcodes": [
-                  "6b",
-                  "76"
+                    "6b",
+                    "76"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -1105,7 +1104,7 @@
                     "02",
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 3,
                 "description": "COPYING: len(B) = 1"
             },
             {
@@ -1123,7 +1122,7 @@
                     "ef",
                     "abcd"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(B) = 2"
             },
             {
@@ -1169,34 +1168,34 @@
                     "bb",
                     "ff{3999998}"
                 ],
-                  "opcodes": [
-                  "6b",
-                  "78"
+                "opcodes": [
+                    "6b",
+                    "78"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "bb",
-                  "aa"
+                    "aa",
+                    "bb",
+                    "aa"
                 ],
                 "final altstack": [
-                  "ff{3999998}"
+                    "ff{3999998}"
                 ],
-                "varops cost": 1,
+                "varops cost": 3,
                 "description": "COPYING: OP_OVER (len=1) = 1"
-              },
-              {
+            },
+            {
                 "name": "OP_OVER fail (stack+altstack > 8000000)",
                 "initial stack": [
-                  "ff{4000000}",
-                  "a1"
+                    "ff{4000000}",
+                    "a1"
                 ],
                 "opcodes": [
-                  "6b",
-                  "78"
+                    "6b",
+                    "78"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -1217,7 +1216,7 @@
                     "01",
                     "02"
                 ],
-                "varops cost": 1,
+                "varops cost": 3,
                 "description": "COPYING: len(A) = 1"
             },
             {
@@ -1235,7 +1234,7 @@
                     "a1",
                     "abcd"
                 ],
-                "varops cost": 2,
+                "varops cost": 6,
                 "description": "COPYING: len(A) = 2"
             },
             {
@@ -1277,39 +1276,39 @@
             {
                 "name": "OP_TUCK success (stack+altstack exactly 8000000)",
                 "initial stack": [
-                  "aa",
-                  "ff{3999999}",
-                  "bb"
+                    "aa",
+                    "ff{3999999}",
+                    "bb"
                 ],
                 "opcodes": [
-                  "6b",
-                  "7d"
+                    "6b",
+                    "7d"
                 ],
                 "success": true,
                 "final stack": [
-                  "ff{3999999}",
-                  "aa",
-                  "ff{3999999}"
+                    "ff{3999999}",
+                    "aa",
+                    "ff{3999999}"
                 ],
                 "final altstack": [
-                  "bb"
+                    "bb"
                 ],
-                "varops cost": 3999999,
+                "varops cost": 11999997,
                 "description": "COPYING: OP_TUCK (len=3999999) = 3999999"
-              },
-              {
+            },
+            {
                 "name": "OP_TUCK fail (stack+altstack > 8000000)",
                 "initial stack": [
-                  "aa",
-                  "ff{3999999}",
-                  "bbbb"
+                    "aa",
+                    "ff{3999999}",
+                    "bbbb"
                 ],
                 "opcodes": [
-                  "6b",
-                  "7d"
+                    "6b",
+                    "7d"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -1329,7 +1328,7 @@
                     "aa",
                     "aa"
                 ],
-                "varops cost": 1,
+                "varops cost": 3,
                 "description": "LENGTHCONV + COPYING: len(A) + len(picked) = 0 + 1 = 1"
             },
             {
@@ -1348,26 +1347,26 @@
                     "bb",
                     "aa"
                 ],
-                "varops cost": 2,
+                "varops cost": 5,
                 "description": "LENGTHCONV + COPYING: len(A) + len(picked) = 1 + 1 = 2"
             },
             {
                 "name": "OP_PICK success (multi-byte target and index)",
                 "initial stack": [
-                  "ff{100}",
-                  "ee",
-                  "0100"
+                    "ff{100}",
+                    "ee",
+                    "0100"
                 ],
                 "opcodes": [
-                  "79"
+                    "79"
                 ],
                 "success": true,
                 "final stack": [
-                  "ff{100}",
-                  "ee",
-                  "ff{100}"
+                    "ff{100}",
+                    "ee",
+                    "ff{100}"
                 ],
-                "varops cost": 102,
+                "varops cost": 304,
                 "description": "LENGTHCONV + COPYING: len(A) + len(picked) = 2 + 100 = 102"
             },
             {
@@ -1433,7 +1432,7 @@
                     "aa",
                     "aa"
                 ],
-                "varops cost": 3,
+                "varops cost": 7,
                 "description": "LENGTHCONV + COPYING: len(A) + len(picked) = 2 + 1 = 3"
             },
             {
@@ -1456,34 +1455,34 @@
                     "ff{3999999}"
                 ],
                 "opcodes": [
-                  "6b",
-                  "79"
+                    "6b",
+                    "79"
                 ],
                 "success": true,
                 "final stack": [
-                  "aa",
-                  "eeee",
-                  "aa"
+                    "aa",
+                    "eeee",
+                    "aa"
                 ],
                 "final altstack": [
-                  "ff{3999999}"
+                    "ff{3999999}"
                 ],
-                "varops cost": 2,
+                "varops cost": 5,
                 "description": "COPYING: OP_PICK (len(A) + len(picked) = 1 + 1) = 2"
-              },
-              {
+            },
+            {
                 "name": "OP_PICK fail (stack+altstack > 8000000)",
                 "initial stack": [
-                  "ff{4000000}",
-                  "",
-                  "ab"
+                    "ff{4000000}",
+                    "",
+                    "ab"
                 ],
                 "opcodes": [
-                  "6b",
-                  "79"
+                    "6b",
+                    "79"
                 ],
                 "success": false
-              }
+            }
         ]
     },
     {
@@ -1520,7 +1519,7 @@
                     "bb",
                     "aa"
                 ],
-                "varops cost": 25,
+                "varops cost": 50,
                 "description": "LENGTHCONV + ROLL: len(A) + 24 * val(A) = 1 + 24 * 1 = 25"
             },
             {
@@ -1540,7 +1539,7 @@
                     "c3",
                     "a1"
                 ],
-                "varops cost": 49,
+                "varops cost": 98,
                 "description": "LENGTHCONV + ROLL: len(A) + 24 * val(A) = 1 + 24 * 2 = 49"
             },
             {
@@ -1556,7 +1555,7 @@
                 "final stack": [
                     "aa"
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "LENGTHCONV + ROLL: len(A) + 24 * val(A) = 2 + 24 * 0 = 2"
             },
             {
@@ -1617,7 +1616,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARINGZERO: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -1633,7 +1632,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 5,
+                "varops cost": 10,
                 "description": "COMPARINGZERO: len(A) + len(B) = 4 + 1 = 5"
             },
             {
@@ -1649,7 +1648,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARINGZERO: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -1665,7 +1664,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARINGZERO: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -1687,33 +1686,33 @@
             {
                 "name": "OP_BOOLAND success (both multi-byte zero) FIXME (why is this true?)",
                 "initial stack": [
-                  "00{4000000}",
-                  "00{4000000}"
+                    "00{4000000}",
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                  "9a"
+                    "9a"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
-                "varops cost": 8000000,
+                "varops cost": 16000000,
                 "description": "COMPARINGZERO: len(A) + len(B) = 4000000 + 4000000 = 8000000"
-              },
-              {
+            },
+            {
                 "name": "OP_BOOLAND success (one non-zero at the end)",
                 "initial stack": [
-                  "00{3999999}01",
-                  "00{3999999}01"
+                    "00{3999999}01",
+                    "00{3999999}01"
                 ],
                 "opcodes": [
-                  "9a"
+                    "9a"
                 ],
                 "success": true,
                 "final stack": [
-                  "01"
+                    "01"
                 ],
-                "varops cost": 8000000,
+                "varops cost": 16000000,
                 "description": "COMPARINGZERO: len(A) + len(B) = 4000000 + 4000000 = 8000000"
             },
             {
@@ -1752,7 +1751,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARINGZERO: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -1768,7 +1767,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARINGZERO: len(A) + len(B) = 1 + 1 = 2"
             },
             {
@@ -1784,7 +1783,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARINGZERO: len(A) + len(B) = 0 + 1 = 1"
             },
             {
@@ -1806,33 +1805,33 @@
             {
                 "name": "OP_BOOLOR success (both multi-byte zero) FIXME (why is this true?)",
                 "initial stack": [
-                  "00{4000000}",
-                  "00{4000000}"
+                    "00{4000000}",
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                  "9b"
+                    "9b"
                 ],
                 "success": true,
                 "final stack": [
-                  ""
+                    ""
                 ],
-                "varops cost": 8000000,
+                "varops cost": 16000000,
                 "description": "COMPARINGZERO: len(A) + len(B) = 4000000 + 4000000 = 8000000"
-              },
-              {
+            },
+            {
                 "name": "OP_BOOLOR success (one long non-zero)",
                 "initial stack": [
-                  "00{3999999}01",
-                  "00{4000000}"
+                    "00{3999999}01",
+                    "00{4000000}"
                 ],
                 "opcodes": [
-                  "9b"
+                    "9b"
                 ],
                 "success": true,
                 "final stack": [
-                  "01"
+                    "01"
                 ],
-                "varops cost": 8000000,
+                "varops cost": 16000000,
                 "description": "COMPARINGZERO: len(A) + len(B) = 4000000 + 4000000 = 8000000"
             },
             {
@@ -1871,7 +1870,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -1887,7 +1886,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 3,
+                "varops cost": 6,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 3) = 3"
             },
             {
@@ -1903,7 +1902,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 0) = 1"
             },
             {
@@ -1919,23 +1918,23 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
                 "name": "OP_NUMEQUAL success (equal long values with trailing zeros)",
                 "initial stack": [
-                  "ff{3999999}01",
-                  "ff{3999999}01"
+                    "ff{3999999}01",
+                    "ff{3999999}01"
                 ],
                 "opcodes": [
-                  "9c"
+                    "9c"
                 ],
                 "success": true,
                 "final stack": [
-                  "01"
+                    "01"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(4000000, 4000000) = 4000000"
             },
             {
@@ -1951,7 +1950,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 4,
+                "varops cost": 8,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 4) = 4"
             },
             {
@@ -1967,7 +1966,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2,
+                "varops cost": 4,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 2) = 2"
             },
             {
@@ -2004,7 +2003,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2018,7 +2017,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 3,
+                "varops cost": 6,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 3) = 3"
             },
             {
@@ -2032,7 +2031,7 @@
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(0, 1) = 1"
             },
             {
@@ -2049,15 +2048,15 @@
             {
                 "name": "OP_NUMEQUALVERIFY success (long equal with trailing zeros)",
                 "initial stack": [
-                  "ff{3999999}01",
-                  "ff{3999999}01"
+                    "ff{3999999}01",
+                    "ff{3999999}01"
                 ],
                 "opcodes": [
-                  "9d"
+                    "9d"
                 ],
                 "success": true,
                 "final stack": [],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(4000000, 4000000) = 4000000"
             },
             {
@@ -2107,7 +2106,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2123,7 +2122,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 3,
+                "varops cost": 6,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 3) = 3"
             },
             {
@@ -2155,23 +2154,23 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 3,
+                "varops cost": 6,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(0, 3) = 3"
             },
             {
                 "name": "OP_NUMNOTEQUAL success (long unequal values)",
                 "initial stack": [
-                  "ff{3999999}01",
-                  "ff{3999999}02"
+                    "ff{3999999}01",
+                    "ff{3999999}02"
                 ],
                 "opcodes": [
-                  "9e"
+                    "9e"
                 ],
                 "success": true,
                 "final stack": [
-                  "01"
+                    "01"
                 ],
-                "varops cost": 4000000,
+                "varops cost": 8000000,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(4000000, 4000000) = 4000000"
             },
             {
@@ -2210,7 +2209,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2226,7 +2225,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2242,7 +2241,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 4,
+                "varops cost": 8,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 4) = 4"
             },
             {
@@ -2258,7 +2257,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(0, 1) = 1"
             },
             {
@@ -2274,7 +2273,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 0) = 1"
             },
             {
@@ -2303,7 +2302,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2319,7 +2318,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1,
+                "varops cost": 2,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(1, 1) = 1"
             },
             {
@@ -2335,7 +2334,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 3,
+                "varops cost": 6,
                 "description": "COMPARING + COMPARINGZERO: max(len(A), len(B)) = max(3, 1) = 3"
             }
         ]
@@ -2356,7 +2355,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_LESSTHANOREQUAL success (2 <= 2)",
@@ -2371,7 +2370,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_LESSTHANOREQUAL success (3 <= 2 is false)",
@@ -2386,7 +2385,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1
+                "varops cost": 2
             }
         ]
     },
@@ -2406,7 +2405,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_GREATERTHANOREQUAL success (2 >= 2)",
@@ -2421,7 +2420,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_GREATERTHANOREQUAL success (1 >= 2 is false)",
@@ -2436,7 +2435,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_GREATERTHANOREQUAL fail (only one item)",
@@ -2705,7 +2704,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2
+                "varops cost": 4
             },
             {
                 "name": "OP_WITHIN success (1 in [1, 3))",
@@ -2721,7 +2720,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 2
+                "varops cost": 4
             },
             {
                 "name": "OP_WITHIN success (3 not in [1, 3))",
@@ -2737,7 +2736,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2
+                "varops cost": 4
             },
             {
                 "name": "OP_WITHIN success (0 not in [1, 3))",
@@ -2753,7 +2752,7 @@
                 "final stack": [
                     ""
                 ],
-                "varops cost": 2
+                "varops cost": 4
             },
             {
                 "name": "OP_WITHIN success (trailing zeros ignored)",
@@ -2769,7 +2768,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 6
+                "varops cost": 12
             },
             {
                 "name": "OP_WITHIN success (empty values treated as 0)",
@@ -2785,7 +2784,7 @@
                 "final stack": [
                     "01"
                 ],
-                "varops cost": 1
+                "varops cost": 2
             },
             {
                 "name": "OP_WITHIN fail (only two items)",
@@ -2834,7 +2833,7 @@
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 10 = 0 * 10 = 0"
+                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
             },
             {
                 "name": "OP_SHA256 success (short string)",
@@ -2848,23 +2847,23 @@
                 "final stack": [
                     "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
                 ],
-                "varops cost": 10,
-                "description": "HASH: len(operand) * 10 = 1 * 10 = 10"
+                "varops cost": 50,
+                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
             },
             {
                 "name": "OP_SHA256 success (long input)",
                 "initial stack": [
-                  "ff{4000000}"
+                    "ff{4000000}"
                 ],
                 "opcodes": [
-                  "a8"
+                    "a8"
                 ],
                 "success": true,
                 "final stack": [
-                  "1627b4013371d63d947eb27740be7cf32aad311c0116e854bbe6ec89e7185e09"
+                    "1627b4013371d63d947eb27740be7cf32aad311c0116e854bbe6ec89e7185e09"
                 ],
-                "varops cost": 40000000,
-                "description": "HASH: len(operand) * 10 = 4000000 * 10 = 40000000"
+                "varops cost": 200000000,
+                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
             },
             {
                 "name": "OP_SHA256 fail (empty stack)",
@@ -2892,7 +2891,7 @@
                     "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 10 = 0 * 10 = 0"
+                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
             },
             {
                 "name": "OP_HASH160 success (short string)",
@@ -2906,23 +2905,23 @@
                 "final stack": [
                     "994355199e516ff76c4fa4aab39337b9d84cf12b"
                 ],
-                "varops cost": 10,
-                "description": "HASH: len(operand) * 10 = 1 * 10 = 10"
+                "varops cost": 50,
+                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
             },
             {
                 "name": "OP_HASH160 success (long input)",
                 "initial stack": [
-                  "ff{4000000}"
+                    "ff{4000000}"
                 ],
                 "opcodes": [
-                  "a9"
+                    "a9"
                 ],
                 "success": true,
                 "final stack": [
-                  "3eb2aeb1e4836781864294138e5592505ca08d70"
+                    "3eb2aeb1e4836781864294138e5592505ca08d70"
                 ],
-                "varops cost": 40000000,
-                "description": "HASH: len(operand) * 10 = 4000000 * 10 = 40000000"
+                "varops cost": 200000000,
+                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
             },
             {
                 "name": "OP_HASH160 fail (empty stack)",
@@ -2950,7 +2949,7 @@
                     "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 10 = 0 * 10 = 0"
+                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
             },
             {
                 "name": "OP_HASH256 success (short string)",
@@ -2964,23 +2963,23 @@
                 "final stack": [
                     "bf5d3affb73efd2ec6c36ad3112dd933efed63c4e1cbffcfa88e2759c144f2d8"
                 ],
-                "varops cost": 10,
-                "description": "HASH: len(operand) * 10 = 1 * 10 = 10"
+                "varops cost": 50,
+                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
             },
             {
                 "name": "OP_HASH256 success (long input)",
                 "initial stack": [
-                  "ff{4000000}"
+                    "ff{4000000}"
                 ],
                 "opcodes": [
-                  "aa"
+                    "aa"
                 ],
                 "success": true,
                 "final stack": [
-                  "2c410c77ea4a4d13d84cdd813370d9ab4fd9dcdc5397b40b5531e792d4ad504e"
+                    "2c410c77ea4a4d13d84cdd813370d9ab4fd9dcdc5397b40b5531e792d4ad504e"
                 ],
-                "varops cost": 40000000,
-                "description": "HASH: len(operand) * 10 = 4000000 * 10 = 40000000"
+                "varops cost": 200000000,
+                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
             },
             {
                 "name": "OP_HASH256 fail (empty stack)",

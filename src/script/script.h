@@ -44,20 +44,20 @@ static constexpr int MAX_SCRIPT_SIZE = 10000;
 static constexpr int MAX_STACK_SIZE = 1000;
 
 // Maximum number of values on script interpreter stack (Tapscript v2)
-static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32000;
+static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32'000;
 
 // BIP#ops: The individual stack entry limit of 520 bytes is increased to the
 // total block weight (4000000) bytes.  An additional gross limit of twice
 // that (8000000) applies across all stack entries.
-static constexpr int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4000000;
+static constexpr int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4'000'000;
 static constexpr int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
 
 // Varops cost per byte hashed in Tapscript v2
-static constexpr int VAROPS_COST_PER_BYTE_HASHED = 10;
+static constexpr int VAROPS_COST_PER_BYTE_HASHED = 50;
 
 // BIP#ops: A per-transaction "varops budget" is determined by multiplying the
-// total transaction weight by the fixed factor 5200.
-static constexpr int VAROPS_BUDGET_PER_BYTE = 5200;
+// total transaction weight by the fixed factor 10,000.
+static constexpr int VAROPS_BUDGET_PER_BYTE = 10'000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
@@ -80,7 +80,7 @@ static constexpr int64_t VALIDATION_WEIGHT_PER_SIGOP_PASSED{50};
 // How much weight budget is added to the witness size (Tapscript only, see BIP 342).
 static constexpr int64_t VALIDATION_WEIGHT_OFFSET{50};
 
-// BIP#ops: Signature operations cost 260,000 varops units (5,200 * 50)
+// BIP#ops: Signature operations cost 500,000 varops units (10,000 * 50)
 static constexpr int VAROPS_COST_PER_SIGOP = VAROPS_BUDGET_PER_BYTE * VALIDATION_WEIGHT_PER_SIGOP_PASSED;
 
 
