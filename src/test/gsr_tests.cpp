@@ -303,7 +303,7 @@ static void RunJsonTests(const UniValue& tests, const std::string& suite_name, b
             ScriptError serror = SCRIPT_ERR_OK;
             BaseSignatureChecker checker;
 
-            constexpr uint64_t budget = 100'000'000;
+            constexpr uint64_t budget = 250'000'000;
             uint64_t varops_budget = budget;
             ValtypeStack valtype_stack{stack};
             bool success = EvalScript(valtype_stack, script, 0, checker, SigVersion::TAPSCRIPT_V2, sdata, varops_budget, &serror);

@@ -568,11 +568,11 @@ class TapscriptV2Test(BitcoinTestFramework):
 
     def test_op_mul_large(self):
         """Test 7: Large multiplication test with varops budget"""
-        test_name = "Large multiplication (27KB * 27KB with varops budget)"
+        test_name = "Large multiplication (10KB * 10KB with varops budget)"
         self.print_test_status(test_name, is_start=True)
 
         try:
-            n = 1024*27  # max size to pay for its own varops budget
+            n = 1024*10  # max size to pay for its own varops budget
             locking_script = CScript([bytes([255]*n), bytes([255]*n), OP_MUL, OP_EQUAL])
             unlocking_script = [((2**(8*n)-1) * (2**(8*n)-1)).to_bytes(2*n, 'little')]
             result = self.test_simple_tapscript_v2_transaction(locking_script, unlocking_script)
@@ -589,7 +589,7 @@ class TapscriptV2Test(BitcoinTestFramework):
 
         try:
             # Create a transaction that exceeds the varops budget
-            n = 1024*28  # 28KB operands
+            n = 1024*13  # 13KB operands
             locking_script = CScript([bytes([255]*n), bytes([255]*n), OP_MUL, OP_EQUAL])
             unlocking_script = [((2**(8*n)-1) * (2**(8*n)-1)).to_bytes(2*n, 'little')]
 
@@ -929,7 +929,7 @@ class TapscriptV2Test(BitcoinTestFramework):
                 (10, True, "10 doublings: 1 -> 1KB"),
                 (15, True, "15 doublings: 1 -> 32KB"),
                 (18, True, "18 doublings: 1 -> 256KB"),
-                (19, True, "19 doublings: 1 -> 512KB"),
+                (19, False, "19 doublings: 1 -> 512KB (exceeds varops budget)"),
                 (22, False, "22 doublings: 1 -> 4MB+ (exceeds 4MB element size limit)"),
             ]
 
