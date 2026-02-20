@@ -2180,9 +2180,7 @@ bool EvalGsrScript(ValtypeStack& stack, const CScript& script, script_verify_fla
                     bool success = true;
                     if (!EvalChecksig(sig, pubkey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, success)) return false;
 
-                    if (success) {
-                        varcost += VAROPS_COST_PER_SIGOP;
-                    }
+                    varcost += VAROPS_COST_PER_SIGOP;
 
                     valtype numvec;
                     Val64 num;
@@ -2284,16 +2282,14 @@ bool EvalGsrScript(ValtypeStack& stack, const CScript& script, script_verify_fla
 
                     // BIP#ops:
                     // |OP_RIGHT
-                    // |Length of OFFSET operand * 2 + MIN(Length of A, Value of OFFSET) * 3
+                    // |Length of OFFSET operand * 2 + Value of OFFSET * 3
                     // (LENGTHCONV@2 + COPYING@3)
                     uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
                     valtype vch = stack.pop_back_valtype();  // Move instead of copy
 
-                    if (offset >= vch.size()) {
-                        varcost += vch.size() * 3; // COPYING@3
-                    } else {
+                    varcost += offset * 3; // COPYING@3
+                    if (offset < vch.size()) {
                         vch.erase(vch.begin(), vch.end() - offset);
-                        varcost += offset * 3; // COPYING@3
                     }
                     stack.push_back(std::move(vch));
                 }
