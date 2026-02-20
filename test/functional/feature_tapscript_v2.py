@@ -6,6 +6,9 @@
 
 from test_framework.blocktools import (
     COINBASE_MATURITY,
+    create_coinbase,
+    create_block,
+    add_witness_commitment,
 )
 from test_framework.messages import (
     COutPoint,
@@ -839,26 +842,20 @@ class TapscriptV2Test(BitcoinTestFramework):
             raise
 
     def test_witness_element_size_limit(self):
-        """Test: TAPSCRIPT_V2 allows elements >520 bytes (old limit) in witness"""
-        test_name = "Witness element size: >520 bytes allowed in TAPSCRIPT_V2"
+        """Test: TAPSCRIPT_V2 allows elements >520 bytes up to 4MB in witness.
+
+        Transactions are mined directly in blocks to bypass mempool policy limits.
+        The consensus element size limit in TAPSCRIPT_V2 is 4,000,000 bytes.
+        """
+        test_name = "Witness element size: large elements via direct block mining"
         self.print_test_status(test_name, is_start=True)
 
         try:
-            # NOTE: We can't directly test the 4MB limit because Bitcoin's 100KB
-            # transaction size limit prevents creating such large witness data.
-            #
-            # Instead, this test validates that elements LARGER than the old 520-byte
-            # limit are now ACCEPTED in TAPSCRIPT_V2 witness data.
-            #
-            # If the TAPSCRIPT_V2 check were missing and it fell back to the old
-            # MAX_SCRIPT_ELEMENT_SIZE check, this test would FAIL.
-
             # Test cases: (element_size, should_pass, description)
             test_cases = [
-                (520, True, "520 bytes (old limit) - should work"),
-                (1000, True, "1000 bytes - exceeds old 520 limit, should work in v2"),
-                (5000, True, "5000 bytes - well above old limit"),
-                (10000, True, "10000 bytes - 10KB element"),
+                (521, True, "521 bytes (just above old 520 limit)"),
+                (3_990_000, True, "~4MB element (below 4MB element limit, fits in block)"),
+                (4_000_001, False, "4,000,001 bytes (exceeds 4MB element limit)"),
             ]
 
             passed = 0
@@ -873,29 +870,29 @@ class TapscriptV2Test(BitcoinTestFramework):
                     locking_script = CScript([OP_DROP, OP_1])
                     unlocking_script = [large_element]
 
-                    utxo_info = self.create_tapscript_v2_funding_tx(locking_script, amount=0.1)
+                    utxo_info = self.create_tapscript_v2_funding_tx(locking_script, amount=0.5)
                     spending_tx = self.create_tapscript_v2_spending_tx(utxo_info, extra_witness_elements=unlocking_script)
 
-                    result = self.nodes[0].testmempoolaccept([spending_tx.serialize().hex()], maxfeerate=0)[0]
+                    fee_sats = int(utxo_info["amount"] * 100000000) - spending_tx.vout[0].nValue
+
+                    # Re-sync block state after funding tx mined new blocks
+                    self.init_blockinfo()
+
+                    # Mine directly in a block, bypassing mempool policy
+                    self.block_submit(
+                        self.nodes[0], [spending_tx], description,
+                        accept=should_pass, fees=fee_sats,
+                    )
 
                     if should_pass:
-                        if result['allowed']:
-                            self.nodes[0].sendrawtransaction(spending_tx.serialize().hex())
-                            self.generate(self.nodes[0], 1)
-                            self.log.debug(f"  ✓ {description}")
-                            passed += 1
-                        else:
-                            self.log.error(f"  ✗ {description} - rejected: {result.get('reject-reason', 'Unknown')}")
-                            self.log.error("     This likely means TAPSCRIPT_V2 is using old 520-byte limit!")
-                            failed += 1
+                        self.log.debug(f"  ✓ {description} - accepted in block")
                     else:
-                        if not result['allowed']:
-                            self.log.debug(f"  ✓ {description} - correctly rejected")
-                            passed += 1
-                        else:
-                            self.log.error(f"  ✗ {description} - should be rejected!")
-                            failed += 1
+                        self.log.debug(f"  ✓ {description} - correctly rejected")
+                    passed += 1
 
+                except AssertionError:
+                    self.log.error(f"  ✗ {description}")
+                    failed += 1
                 except Exception as e:
                     self.log.error(f"  ✗ {description} - exception: {e}")
                     failed += 1
@@ -1353,6 +1350,30 @@ class TapscriptV2Test(BitcoinTestFramework):
         self.test_op_checklocktimeverify()
 
         self.test_merkle_proof_verification()
+
+    def init_blockinfo(self):
+        """Initialize variables used by block_submit()."""
+        self.lastblockhash = self.nodes[0].getbestblockhash()
+        self.tip = int(self.lastblockhash, 16)
+        block = self.nodes[0].getblock(self.lastblockhash)
+        self.lastblockheight = block['height']
+        self.lastblocktime = block['time']
+
+    def block_submit(self, node, txs, msg, accept, fees=0):
+        """Submit a block containing the given transactions directly (bypassing mempool)."""
+        coinbase_tx = create_coinbase(self.lastblockheight + 1, fees=fees)
+        block = create_block(self.tip, coinbase_tx, self.lastblocktime + 1, txlist=txs)
+        add_witness_commitment(block)
+        block.solve()
+        block_response = node.submitblock(block.serialize().hex())
+        if accept:
+            assert node.getbestblockhash() == block.hash_hex, "Failed to accept: %s (response: %s)" % (msg, block_response)
+            self.tip = block.hash_int
+            self.lastblockhash = block.hash_hex
+            self.lastblocktime += 1
+            self.lastblockheight += 1
+        else:
+            assert node.getbestblockhash() == self.lastblockhash, "Failed to reject: %s" % msg
 
     def create_tapscript_funding_tx(self, tapscript, internal_key=None, amount=1.0, leaf_version=LEAF_VERSION_TAPSCRIPT_V2):
         """Create a funding transaction with a tapscript P2TR output."""
