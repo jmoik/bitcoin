@@ -617,8 +617,8 @@ class TapscriptV2Test(BitcoinTestFramework):
             raise
 
     def test_stack_size_limit(self):
-        """Test: Stack size limit - 32000 elements (new limit) vs 1000 (old limit)"""
-        test_name = "Stack size limit boundary (32000 elements)"
+        """Test: Stack size limit - 32768 elements (new limit) vs 1000 (old limit)"""
+        test_name = "Stack size limit boundary (32768 elements)"
         self.print_test_status(test_name, is_start=True)
 
         try:
@@ -626,9 +626,9 @@ class TapscriptV2Test(BitcoinTestFramework):
             test_cases = [
                 (1000, True, "1000 elements (old limit) - should still work"),
                 (10000, True, "10000 elements - well within new limit"),
-                (31999, True, "31999 elements - just below limit"),
-                (32000, True, "32000 elements - exactly at limit"),
-                (32001, False, "32001 elements - exceeds limit by 1"),
+                (32767, True, "32767 elements - just below limit"),
+                (32768, True, "32768 elements - exactly at limit"),
+                (32769, False, "32769 elements - exceeds limit by 1"),
                 (35000, False, "35000 elements - clearly over limit"),
             ]
 
