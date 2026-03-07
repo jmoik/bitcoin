@@ -1174,7 +1174,7 @@
         "category": "Numeric Operations",
         "tests": [
             {
-                "name": "OP_1NEGATE pushes -1",
+                "name": "OP_1NEGATE is no-op in EvalScript (OP_SUCCESS in full witness execution)",
                 "initial stack": [],
                 "opcodes": [
                     "OP_1NEGATE"
@@ -1182,7 +1182,7 @@
                 "success": true,
                 "final stack": [],
                 "varops cost": 0,
-                "description": "OP_1NEGATE is OP_SUCCESS in Tapscript v2, does nothing"
+                "description": "OP_1NEGATE is OP_SUCCESS in Tapscript v2. In EvalScript (without pre-scan) it is a no-op. The OP_SUCCESS behavior is tested in the op_success_tests C++ test case."
             }
         ]
     },

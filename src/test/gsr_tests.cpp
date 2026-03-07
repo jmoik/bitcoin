@@ -342,4 +342,59 @@ BOOST_AUTO_TEST_CASE(gsr_json_tests)
     RunJsonTests(gsr_tests, "gsr_tests", true);
 }
 
+// Test that OP_1NEGATE, OP_NEGATE, and OP_ABS are OP_SUCCESS in Tapscript v2
+// but NOT in Tapscript v1, and that restored opcodes are NOT OP_SUCCESS in v2.
+BOOST_AUTO_TEST_CASE(op_success_tests)
+{
+    // OP_1NEGATE (79), OP_NEGATE (143), OP_ABS (144) must be OP_SUCCESS in v2
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(79), SigVersion::TAPSCRIPT_V2));   // OP_1NEGATE
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(143), SigVersion::TAPSCRIPT_V2));  // OP_NEGATE
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(144), SigVersion::TAPSCRIPT_V2));  // OP_ABS
+
+    // These same opcodes must NOT be OP_SUCCESS in Tapscript v1
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(79), SigVersion::TAPSCRIPT));   // OP_1NEGATE
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(143), SigVersion::TAPSCRIPT));  // OP_NEGATE
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(144), SigVersion::TAPSCRIPT));  // OP_ABS
+
+    // Existing OP_SUCCESS opcodes must still work in both v1 and v2
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(80), SigVersion::TAPSCRIPT));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(80), SigVersion::TAPSCRIPT_V2));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(98), SigVersion::TAPSCRIPT));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(98), SigVersion::TAPSCRIPT_V2));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(187), SigVersion::TAPSCRIPT));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(187), SigVersion::TAPSCRIPT_V2));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(254), SigVersion::TAPSCRIPT));
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(254), SigVersion::TAPSCRIPT_V2));
+
+    // Restored opcodes must NOT be OP_SUCCESS in v2 (they are active opcodes)
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(126), SigVersion::TAPSCRIPT_V2));  // OP_CAT
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(127), SigVersion::TAPSCRIPT_V2));  // OP_SUBSTR
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(128), SigVersion::TAPSCRIPT_V2));  // OP_LEFT
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(129), SigVersion::TAPSCRIPT_V2));  // OP_RIGHT
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(131), SigVersion::TAPSCRIPT_V2));  // OP_INVERT
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(132), SigVersion::TAPSCRIPT_V2));  // OP_AND
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(133), SigVersion::TAPSCRIPT_V2));  // OP_OR
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(134), SigVersion::TAPSCRIPT_V2));  // OP_XOR
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(141), SigVersion::TAPSCRIPT_V2));  // OP_2MUL
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(142), SigVersion::TAPSCRIPT_V2));  // OP_2DIV
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(149), SigVersion::TAPSCRIPT_V2));  // OP_MUL
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(150), SigVersion::TAPSCRIPT_V2));  // OP_DIV
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(151), SigVersion::TAPSCRIPT_V2));  // OP_MOD
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(152), SigVersion::TAPSCRIPT_V2));  // OP_LSHIFT
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(153), SigVersion::TAPSCRIPT_V2));  // OP_RSHIFT
+
+    // Restored opcodes MUST be OP_SUCCESS in v1 (they are not yet active there)
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(126), SigVersion::TAPSCRIPT));  // OP_CAT
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(149), SigVersion::TAPSCRIPT));  // OP_MUL
+    BOOST_CHECK(IsOpSuccess(static_cast<opcodetype>(153), SigVersion::TAPSCRIPT));  // OP_RSHIFT
+
+    // Opcodes adjacent to the new OP_SUCCESS additions must NOT be OP_SUCCESS in v2
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(78), SigVersion::TAPSCRIPT_V2));   // before OP_1NEGATE
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(81), SigVersion::TAPSCRIPT_V2));   // OP_1 (after OP_RESERVED)
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(139), SigVersion::TAPSCRIPT_V2));  // OP_1ADD (after 137-138 range)
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(142), SigVersion::TAPSCRIPT_V2));  // OP_2DIV (before OP_NEGATE)
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(145), SigVersion::TAPSCRIPT_V2));  // OP_NOT (after OP_ABS)
+    BOOST_CHECK(!IsOpSuccess(static_cast<opcodetype>(186), SigVersion::TAPSCRIPT_V2));  // before 187-254 range
+}
+
 BOOST_AUTO_TEST_SUITE_END()
