@@ -2833,7 +2833,7 @@
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
+                "description": "HASH: len(operand) * 50 = 0 * 50 = 0"
             },
             {
                 "name": "OP_SHA256 success (short string)",
@@ -2848,7 +2848,7 @@
                     "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
                 ],
                 "varops cost": 50,
-                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
+                "description": "HASH: len(operand) * 50 = 1 * 50 = 50"
             },
             {
                 "name": "OP_SHA256 success (long input)",
@@ -2863,7 +2863,7 @@
                     "1627b4013371d63d947eb27740be7cf32aad311c0116e854bbe6ec89e7185e09"
                 ],
                 "varops cost": 200000000,
-                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
+                "description": "HASH: len(operand) * 50 = 4000000 * 50 = 200000000"
             },
             {
                 "name": "OP_SHA256 fail (empty stack)",
@@ -2891,7 +2891,7 @@
                     "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
+                "description": "HASH: len(operand) * 50 = 0 * 50 = 0"
             },
             {
                 "name": "OP_HASH160 success (short string)",
@@ -2906,7 +2906,7 @@
                     "994355199e516ff76c4fa4aab39337b9d84cf12b"
                 ],
                 "varops cost": 50,
-                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
+                "description": "HASH: len(operand) * 50 = 1 * 50 = 50"
             },
             {
                 "name": "OP_HASH160 success (long input)",
@@ -2921,7 +2921,7 @@
                     "3eb2aeb1e4836781864294138e5592505ca08d70"
                 ],
                 "varops cost": 200000000,
-                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
+                "description": "HASH: len(operand) * 50 = 4000000 * 50 = 200000000"
             },
             {
                 "name": "OP_HASH160 fail (empty stack)",
@@ -2949,7 +2949,7 @@
                     "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456"
                 ],
                 "varops cost": 0,
-                "description": "HASH: len(operand) * 20 = 0 * 20 = 0"
+                "description": "HASH: len(operand) * 50 = 0 * 50 = 0"
             },
             {
                 "name": "OP_HASH256 success (short string)",
@@ -2964,7 +2964,7 @@
                     "bf5d3affb73efd2ec6c36ad3112dd933efed63c4e1cbffcfa88e2759c144f2d8"
                 ],
                 "varops cost": 50,
-                "description": "HASH: len(operand) * 20 = 1 * 20 = 20"
+                "description": "HASH: len(operand) * 50 = 1 * 50 = 50"
             },
             {
                 "name": "OP_HASH256 success (long input)",
@@ -2979,7 +2979,7 @@
                     "2c410c77ea4a4d13d84cdd813370d9ab4fd9dcdc5397b40b5531e792d4ad504e"
                 ],
                 "varops cost": 200000000,
-                "description": "HASH: len(operand) * 20 = 4000000 * 20 = 80000000"
+                "description": "HASH: len(operand) * 50 = 4000000 * 50 = 200000000"
             },
             {
                 "name": "OP_HASH256 fail (empty stack)",
