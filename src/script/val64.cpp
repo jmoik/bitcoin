@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <script/val64.h>
+#include <script/script.h>
 #include <bit>
 #include <cassert>
 #include <cstring>
@@ -246,8 +247,8 @@ uint64_t Val64::to_u64_ceil(uint64_t max, size_t &varcost) const
 {
     uint64_t v;
 
-    // Worst case, we have to examine all bytes (LENGTHCONV: 2/byte).
-    varcost += m_realsize * 2;
+    // Worst case, we have to examine all bytes (LENGTHCONV).
+    varcost += m_realsize * VAROPS_COST_FAST;
 
     // Little endian: get first word (zero-fills)
     v = get_or_zero(0);
@@ -264,7 +265,7 @@ uint64_t Val64::to_u64_ceil(uint64_t max, size_t &varcost) const
 
 bool Val64::is_zero(size_t &varcost) const
 {
-    varcost += m_realsize * 2; // COMPARINGZERO: 2/byte
+    varcost += m_realsize * VAROPS_COST_FAST; // COMPARINGZERO
     return span_is_allzero(m_u64span);
 }
 
@@ -299,7 +300,7 @@ int Val64::cmp_span(std::span<le64_t> v1, std::span<le64_t> v2)
 
 int Val64::cmp(const Val64 &v2, size_t &varcost) const
 {
-    varcost += std::max(m_realsize, v2.m_realsize) * 2; // COMPARING: 2/byte
+    varcost += std::max(m_realsize, v2.m_realsize) * VAROPS_COST_FAST; // COMPARING
 
     return cmp_span(m_u64span, v2.m_u64span);
 }
@@ -352,8 +353,8 @@ void Val64::op_add(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_ADD
-    // |Greater of two operand lengths * 9 (ARITH@6 + COPYING@3)
-    varcost += v1.m_realsize * 9;
+    // |Greater of two operand lengths * (ARITH + COPYING)
+    varcost += v1.m_realsize * (VAROPS_COST_ARITH + VAROPS_COST_COPYING);
 
     size_t nonzero_len;
     bool carry = add_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -437,8 +438,8 @@ bool Val64::op_sub(Val64 &v1, const Val64 &v2, size_t &varcost)
 {
     // BIP#ops:
     // |OP_SUB
-    // |Greater of two operand lengths * 6 (ARITH@6)
-    varcost += std::max(v1.m_realsize, v2.m_realsize) * 6;
+    // |Greater of two operand lengths * ARITH
+    varcost += std::max(v1.m_realsize, v2.m_realsize) * VAROPS_COST_ARITH;
     size_t nonzero_len;
 
     bool underflow = sub_span(v1.m_u64span, v2.m_u64span, nonzero_len);
@@ -493,8 +494,8 @@ void Val64::op_downshift(Val64 &v1, const Val64 &v2, size_t &varcost)
         return;
     }
 
-    // (Length of A - (Value of BITS) / 8) > 0 (COPYING@3).
-    varcost += (v1.m_realsize - bytes) * 3;
+    // (Length of A - (Value of BITS) / 8) > 0 (COPYING).
+    varcost += (v1.m_realsize - bytes) * VAROPS_COST_COPYING;
 
     // Bitwise shifts can't do 0 anyway, as << 64 undefined.
     if (bits % 8 == 0) {
@@ -531,15 +532,15 @@ bool Val64::op_upshift(Val64 &v1, const Val64 &v2, size_t max_size, size_t &varc
 
     // BIP#ops:
     // |OP_UPSHIFT
-    // |Length of BITS * 2 + (Value of BITS) / 8 * 2 + Length of A * 3 (LENGTHCONV@2 + ZEROING@2 + COPYING@3).
-    // If BITS % 8 != 0, add (Length of A) * 4 (OTHER@4).
-    varcost += prebytes * 2 + v1.m_realsize * 3;
+    // |Length of BITS * FAST + (Value of BITS) / 8 * FAST + Length of A * COPYING (LENGTHCONV + ZEROING + COPYING).
+    // If BITS % 8 != 0, add (Length of A) * OTHER.
+    varcost += prebytes * VAROPS_COST_FAST + v1.m_realsize * VAROPS_COST_COPYING;
 
     if (bits % 8 == 0) {
         // Simply insert bytes at the beginning.
         v1.prepend_zeros(prebytes);
     } else {
-        varcost += v1.m_realsize * 4;
+        varcost += v1.m_realsize * VAROPS_COST_OTHER;
         // There's no nice C++ "add this many bytes at the beginning,
         // and one at the end" so we are actually best off prepending too
         // many bytes (fast!) and shifting backwards.
@@ -574,8 +575,8 @@ void Val64::op_2mul(Val64 &v1, size_t &varcost)
 
     // BIP#ops:
     // |OP_2MUL
-    // |Operand length * 7 (COPYING@3 + OTHER@4)
-    varcost += v1.m_realsize * 7;
+    // |Operand length * (COPYING + OTHER)
+    varcost += v1.m_realsize * (VAROPS_COST_COPYING + VAROPS_COST_OTHER);
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.trim_tail();
@@ -592,8 +593,8 @@ void Val64::op_2div(Val64 &v1, size_t &varcost)
 {
     // BIP#ops:
     // |OP_2DIV
-    // |Operand length * 4 (OTHER@4)
-    varcost += v1.m_realsize * 4;
+    // |Operand length * OTHER
+    varcost += v1.m_realsize * VAROPS_COST_OTHER;
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.trim_tail();
@@ -610,12 +611,20 @@ void Val64::op_invert(Val64 &v1, size_t &varcost)
 {
     // BIP#ops:
     // |OP_INVERT
-    // |length(A) * 4 (OTHER@4)
-    varcost += v1.m_realsize * 4;
+    // |length(A) * OTHER
+    varcost += v1.m_realsize * VAROPS_COST_OTHER;
 
     // Endian doesn't matter, so access raw.
     for (auto &v: v1.m_u64span) {
         v ^= UINT64_MAX;
+    }
+
+    // Zero out padding bytes beyond m_realsize in the last u64 word,
+    // so subsequent Val64 operations don't see contaminated padding.
+    size_t padding = v1.m_u64span.size() * sizeof(uint64_t) - v1.m_realsize;
+    if (padding > 0) {
+        auto *bytes = reinterpret_cast<unsigned char *>(v1.m_u64span.data());
+        std::memset(bytes + v1.m_realsize, 0, padding);
     }
 }
 
@@ -633,8 +642,8 @@ void Val64::op_and(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_AND
-    // |Sum of two operand lengths * 2 (COMPARING@2)
-    varcost += (v1.m_realsize + v2.m_realsize) * 2;
+    // |(length(A) + length(B)) * FAST (OTHER on shorter + ZEROING on rest)
+    varcost += (v1.m_realsize + v2.m_realsize) * VAROPS_COST_FAST;
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_u64span.size(); ++i) {
@@ -651,8 +660,8 @@ void Val64::op_or(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_OR
-    // |(Lesser of the two operand lengths) * 4 (OTHER@4)
-    varcost += v2.m_realsize * 4;
+    // |(Lesser of the two operand lengths) * OTHER
+    varcost += v2.m_realsize * VAROPS_COST_OTHER;
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_u64span.size(); ++i)
@@ -665,8 +674,8 @@ void Val64::op_xor(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_XOR
-    // |(Lesser of the two operand lengths) * 4 (OTHER@4)
-    varcost += v2.m_realsize * 4;
+    // |(Lesser of the two operand lengths) * OTHER
+    varcost += v2.m_realsize * VAROPS_COST_OTHER;
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_u64span.size(); ++i)
@@ -679,8 +688,8 @@ void Val64::op_min(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_MIN
-    // |(Greater of two operand lengths) * 4 (OTHER@4)
-    varcost += v1.m_realsize * 4;
+    // |(Greater of two operand lengths) * OTHER
+    varcost += v1.m_realsize * VAROPS_COST_OTHER;
 
     if (cmp_span(v1.m_u64span, v2.m_u64span) > 0) {
         v1 = std::move(v2);
@@ -694,8 +703,8 @@ void Val64::op_max(Val64 &v1, Val64 &v2, size_t &varcost)
 
     // BIP#ops:
     // |OP_MAX
-    // |(Greater of two operand lengths) * 4 (OTHER@4)
-    varcost += v1.m_realsize * 4;
+    // |(Greater of two operand lengths) * OTHER
+    varcost += v1.m_realsize * VAROPS_COST_OTHER;
 
     if (cmp_span(v1.m_u64span, v2.m_u64span) < 0) {
         v1 = std::move(v2);
@@ -1119,17 +1128,18 @@ size_t Val64::op_mul_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_MUL
-    // |(Length of A + length of B) * 3 + (length of A + 7) / 8 * (length of B) * 27
-    //  (COPYING@3 + quadratic ARITH@27)  (BEWARE OVERFLOW)
-    return (v1.m_realsize + v2.m_realsize) * 3 + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * 27;
+    // |(Length of A + length of B) * COPYING + (length of A + 7) / 8 * (length of B) * MUL_QUAD
+    //  (COPYING + quadratic MUL_QUAD)  (BEWARE OVERFLOW)
+    return (v1.m_realsize + v2.m_realsize) * VAROPS_COST_COPYING
+        + (v1.m_realsize + 7) / 8 * uint64_t(v2.m_realsize) * VAROPS_COST_MUL_QUAD;
 }
 
 size_t Val64::op_div_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_DIV
-    // |Length of A * 18 + length of B * 4 + (length of A)^2 * 2 / 3  (BEWARE OVERFLOW)
-    return v1.m_realsize * 18 + v2.m_realsize * 4
+    // |Length of A * (3 * ARITH) + length of B * OTHER + (length of A)^2 * 2 / 3  (BEWARE OVERFLOW)
+    return v1.m_realsize * (3 * VAROPS_COST_ARITH) + v2.m_realsize * VAROPS_COST_OTHER
         + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) * 2 / 3;
 }
 
@@ -1137,7 +1147,7 @@ size_t Val64::op_mod_varcost(const Val64 &v1, const Val64 &v2)
 {
     // BIP#ops:
     // |OP_MOD
-    // |Length of A * 18 + length of B * 4 + (length of A)^2 * 2 / 3  (BEWARE OVERFLOW)
-    return v1.m_realsize * 18 + v2.m_realsize * 4
+    // |Length of A * (3 * ARITH) + length of B * OTHER + (length of A)^2 * 2 / 3  (BEWARE OVERFLOW)
+    return v1.m_realsize * (3 * VAROPS_COST_ARITH) + v2.m_realsize * VAROPS_COST_OTHER
         + uint64_t(v1.m_realsize) * uint64_t(v1.m_realsize) * 2 / 3;
 }

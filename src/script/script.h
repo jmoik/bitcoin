@@ -51,10 +51,23 @@ static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32'768;
 static constexpr int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4'000'000;
 static constexpr int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
 
-// Varops cost per byte hashed in Tapscript v2
-static constexpr int VAROPS_COST_PER_BYTE_HASHED = 50;
+// Varops cost categories per byte:
+// Fast operations: comparing bytes, comparing bytes against zero, and zeroing bytes
+static constexpr int VAROPS_COST_FAST = 2;
+// Copying bytes: slightly more expensive than fast operations due to memory allocation overhead
+static constexpr int VAROPS_COST_COPYING = 3;
+// Everything else
+static constexpr int VAROPS_COST_OTHER = 4;
+// Arithmetic operations (add/subtract inner loop)
+static constexpr int VAROPS_COST_ARITH = 6;
+// Multiplication quadratic term: inner loop cost with overhead multiplier
+static constexpr int VAROPS_COST_MUL_QUAD = 27;
+// OP_ROLL: per stack element moved (24 bytes per std::vector * VAROPS_COST_FAST)
+static constexpr int VAROPS_COST_ROLL = 48;
+// Hashing operations
+static constexpr int VAROPS_COST_HASH = 50;
 
-// BIP#ops: A per-transaction "varops budget" is determined by multiplying the
+// A per-transaction "varops budget" is determined by multiplying the
 // total transaction weight by the fixed factor 10,000.
 static constexpr int VAROPS_BUDGET_PER_BYTE = 10'000;
 

@@ -79,7 +79,7 @@ static void stackPushCosted(ValtypeStack& stack,
                               const std::vector<unsigned char> &v,
                               size_t &varcost)
 {
-    varcost += v.size() * 3;
+    varcost += v.size() * VAROPS_COST_COPYING;
     stack.push_back(v);
 }
 
@@ -1602,7 +1602,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // BIP#ops:
                     // |OP_IFDUP
                     // |(Length of top stack entry (before)) * 5 (COMPARINGZERO@2 + COPYING@3)
-                    varcost += vch.size() * 3;
+                    varcost += vch.size() * VAROPS_COST_COPYING;
                     if (result)
                         stack.push_back(vch);
                     stack.push_back(std::move(vch));
@@ -1690,7 +1690,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     if (opcode == OP_ROLL) {
                         stack.roll(n);
-                        varcost += n * 48; // ROLL@48/element
+                        varcost += n * VAROPS_COST_ROLL;
                     } else {
                         // Keep safe with references
                         stack.reserve(stack.size() + 1);
@@ -1729,7 +1729,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // BIP#ops:
                     // |OP_TUCK
                     // |Length of top stack entry (before) * 3 (COPYING@3)
-                    varcost += vch.size() * 3;
+                    varcost += vch.size() * VAROPS_COST_COPYING;
                     // (x1 x2) -> push x2 -> (x1 x2 x2) -> swap(-2,-3) -> (x2 x1 x2)
                     stack.push_back(vch);
                     stack.swap(-2, -3);
@@ -1768,7 +1768,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     //if (opcode == OP_NOTEQUAL)
                     //    fEqual = !fEqual;
                     if (vch1.size() == vch2.size()) {
-                        varcost += vch1.size() * 2; // COMPARING@2
+                        varcost += vch1.size() * VAROPS_COST_FAST; // COMPARING
                     }
                     popstack(stack);
                     popstack(stack);
@@ -1952,7 +1952,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         // |-
                         // |OP_HASH256
                         // |(Length of the operand) * 50 (HASH@50)
-                        varcost += vch.size() * VAROPS_COST_PER_BYTE_HASHED;
+                        varcost += vch.size() * VAROPS_COST_HASH;
                     }
                     if (opcode == OP_RIPEMD160)
                         CRIPEMD160().Write(vch.data(), vch.size()).Finalize(vchHash.data());
@@ -1993,9 +1993,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
 
-                    if (fSuccess) {
-                        varcost += VAROPS_COST_PER_SIGOP;
-                    }
+                    varcost += VAROPS_COST_PER_SIGOP;
 
                     popstack(stack);
                     popstack(stack);
@@ -2023,14 +2021,21 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
 
                     varcost += VAROPS_COST_PER_SIGOP;
 
+                    // BIP: "For simplicity, this is charged whether the OP_CHECKSIGADD succeeds or not."
+                    // Charge the 1ADD cost unconditionally, based on the num operand size.
+                    size_t num_size = stack.at(stack.size() - 2).size();
+                    varcost += std::max(size_t(1), num_size) * (VAROPS_COST_ARITH + VAROPS_COST_COPYING);
+
                     valtype numvec;
                     Val64 num;
                     if (!stack.pop64(num, stack.size() - 2)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
 
-                    if (success)
-                        Val64::op_1add(num, varcost);
+                    if (success) {
+                        size_t dummy_varcost = 0;
+                        Val64::op_1add(num, dummy_varcost);
+                    }
 
                     numvec = num.move_to_valtype();
                     popstack(stack);
@@ -2059,7 +2064,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // Pop in reverse order (top first, then second-to-top)
                     valtype vch2 = stack.pop_back_valtype();
                     valtype vch1 = stack.pop_back_valtype();
-                    varcost += (vch1.size() + vch2.size()) * 3;
+                    varcost += (vch1.size() + vch2.size()) * VAROPS_COST_COPYING;
 
                     vch1.insert(vch1.end(), vch2.begin(), vch2.end());
                     stack.push_back(std::move(vch1));
@@ -2085,8 +2090,8 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     uint64_t begin = begin_v64.to_u64_ceil(vch.size(), varcost);
                     uint64_t len = len_v64.to_u64_ceil(vch.size() - begin, varcost);
 
-                    // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0) (COPYING@3)
-                    varcost += len * 3;
+                    // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0) (COPYING)
+                    varcost += len * VAROPS_COST_COPYING;
 
                     valtype vch2(vch.begin() + begin, vch.begin() + begin + len);
                     stack.push_back(std::move(vch2));
@@ -2128,7 +2133,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
                     valtype vch = stack.pop_back_valtype();  // Move instead of copy
 
-                    varcost += offset * 3; // COPYING@3
+                    varcost += offset * VAROPS_COST_COPYING;
                     if (offset < vch.size()) {
                         vch.erase(vch.begin(), vch.end() - offset);
                     }
