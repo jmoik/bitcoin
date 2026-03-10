@@ -225,4 +225,58 @@ BOOST_AUTO_TEST_CASE(valtype_stack_size_tracking)
     #undef stacktop
 }
 
+BOOST_AUTO_TEST_CASE(valtype_stack_erase_boundary)
+{
+    // Test erase(n) at valid boundary indices
+    {
+        ValtypeStack stack;
+        std::vector<unsigned char> elem_a(10, 0xAA);
+        std::vector<unsigned char> elem_b(20, 0xBB);
+        std::vector<unsigned char> elem_c(30, 0xCC);
+
+        stack.push_back(elem_a);
+        stack.push_back(elem_b);
+        stack.push_back(elem_c);
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 60);
+
+        // Erase last valid index
+        stack.erase(2);
+        BOOST_CHECK_EQUAL(stack.size(), 2);
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 30);
+
+        // Erase first element
+        stack.erase(0);
+        BOOST_CHECK_EQUAL(stack.size(), 1);
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 20);
+
+        // Erase the only remaining element (index 0, which is size-1)
+        stack.erase(0);
+        BOOST_CHECK_EQUAL(stack.size(), 0);
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 0);
+    }
+
+    // Test range erase(first, last) boundary cases
+    {
+        ValtypeStack stack;
+        for (size_t i = 0; i < 5; i++) {
+            std::vector<unsigned char> elem(10 * (i + 1), static_cast<unsigned char>(i));
+            stack.push_back(elem);
+        }
+        // Stack: 10, 20, 30, 40, 50 bytes = 150 total
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 150);
+
+        // Erase range [1, 3) removes elements at index 1 and 2 (20 + 30 = 50 bytes)
+        stack.erase(1, 3);
+        BOOST_CHECK_EQUAL(stack.size(), 3);
+        BOOST_CHECK_EQUAL(stack.get_total_size(), 100);
+
+        // Invalid range: first >= last should throw
+        BOOST_CHECK_THROW(stack.erase(2, 2), std::invalid_argument);
+        BOOST_CHECK_THROW(stack.erase(2, 1), std::invalid_argument);
+
+        // Invalid range: last > size should throw
+        BOOST_CHECK_THROW(stack.erase(0, 100), std::invalid_argument);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -86,9 +86,7 @@ void ValtypeStack::clear() {
 }
 
 void ValtypeStack::erase(size_t n) {
-    if (n > stack.size()) {
-        n = stack.size();
-    }
+    assert(n < stack.size());
     update_size_tracking(stack[n], false);
     stack.erase(stack.begin() + n);
 }
