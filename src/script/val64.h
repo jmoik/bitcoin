@@ -69,6 +69,13 @@ public:
     // Convert to a valtype: CLEARS THE VAL64!
     std::vector<unsigned char> move_to_valtype();
 
+    // Byte size of the value.
+    size_t size() const { return m_realsize; }
+
+    // Costless overloads (caller charges via varops:: cost functions).
+    bool is_zero() const;
+    int cmp(const Val64 &v2) const;
+
     // &varcost here is always increased by the operation.
 
     // Convert to a 64 bit, or max if it's too large.
@@ -105,12 +112,6 @@ public:
 
     static void op_min(Val64 &v1, Val64 &v2, size_t &varcost);
     static void op_max(Val64 &v1, Val64 &v2, size_t &varcost);
-
-    // These three are potentially v. expensive, so we must
-    // check varops varcost *before* we evaluate them:
-    static size_t op_mul_varcost(const Val64 &v1, const Val64 &v2);
-    static size_t op_div_varcost(const Val64 &v1, const Val64 &v2);
-    static size_t op_mod_varcost(const Val64 &v1, const Val64 &v2);
 
     // Non-const, since might switch variables.
     static Val64 op_mul(Val64 &v1, Val64 &v2);

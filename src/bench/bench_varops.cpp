@@ -6,6 +6,7 @@
 #include <consensus/consensus.h>
 #include <script/interpreter.h>
 #include <script/val64.h>
+#include <script/varops.h>
 #include <common/args.h>
 #include <key.h>
 #include <script/valtype_stack.h>
@@ -22,8 +23,7 @@ const TranslateFn G_TRANSLATION_FUN{nullptr};
 
 std::set<opcodetype> SELECTED_OPCODES;
 constexpr uint64_t MAX_BLOCK_WEIGHT_UINT64 = MAX_BLOCK_WEIGHT;
-constexpr uint64_t VAROPS_BUDGET_PER_BYTE_UINT64 = VAROPS_BUDGET_PER_BYTE;
-constexpr uint64_t TOTAL_VAROPS_BUDGET = MAX_BLOCK_WEIGHT_UINT64 * VAROPS_BUDGET_PER_BYTE_UINT64;
+constexpr uint64_t TOTAL_VAROPS_BUDGET = MAX_BLOCK_WEIGHT_UINT64 * varops::BUDGET_PER_BYTE;
 bool SILENT_MODE = false;
 std::string OUTPUT_FILE;
 
@@ -920,13 +920,13 @@ static void SaveResultsToFile(const std::vector<BenchResult>& results, const std
     }
 
     if (slowest_100_percent_time > 0 && schnorr_median_time > 0) {
-        double suggested_budget = VAROPS_BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
+        double suggested_budget = varops::BUDGET_PER_BYTE / slowest_100_percent_time * schnorr_median_time;
         file << "# SUGGESTED MAXIMUM VAROPS BUDGET:\n";
         file << "# Based on slowest 100% varops operation (" << slowest_100_percent_time
              << " sec) vs Schnorr (" << schnorr_median_time << " sec):\n";
         file << "# Suggested budget: " << suggested_budget
-             << " varops per weight unit (current: " << VAROPS_BUDGET_PER_BYTE << ")\n";
-        file << "# Formula: " << VAROPS_BUDGET_PER_BYTE << " / " << slowest_100_percent_time
+             << " varops per weight unit (current: " << varops::BUDGET_PER_BYTE << ")\n";
+        file << "# Formula: " << varops::BUDGET_PER_BYTE << " / " << slowest_100_percent_time
              << " * " << schnorr_median_time << " = " << suggested_budget << "\n";
         file << "#\n";
     }

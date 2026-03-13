@@ -10,6 +10,7 @@
 #include <crypto/sha256.h>
 #include <pubkey.h>
 #include <script/script.h>
+#include <script/varops.h>
 #include <tinyformat.h>
 #include <script/valtype_stack.h>
 #include <script/val64.h>
@@ -79,7 +80,7 @@ static void stackPushCosted(ValtypeStack& stack,
                               const std::vector<unsigned char> &v,
                               size_t &varcost)
 {
-    varcost += v.size() * VAROPS_COST_COPYING;
+    varcost += v.size() * varops::COST_COPYING;
     stack.push_back(v);
 }
 
@@ -1602,7 +1603,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // BIP#ops:
                     // |OP_IFDUP
                     // |(Length of top stack entry (before)) * 5 (COMPARINGZERO@2 + COPYING@3)
-                    varcost += vch.size() * VAROPS_COST_COPYING;
+                    varcost += vch.size() * varops::COST_COPYING;
                     if (result)
                         stack.push_back(vch);
                     stack.push_back(std::move(vch));
@@ -1690,7 +1691,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     if (opcode == OP_ROLL) {
                         stack.roll(n);
-                        varcost += n * VAROPS_COST_ROLL;
+                        varcost += n * varops::COST_ROLL;
                     } else {
                         // Keep safe with references
                         stack.reserve(stack.size() + 1);
@@ -1729,7 +1730,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // BIP#ops:
                     // |OP_TUCK
                     // |Length of top stack entry (before) * 3 (COPYING@3)
-                    varcost += vch.size() * VAROPS_COST_COPYING;
+                    varcost += vch.size() * varops::COST_COPYING;
                     // (x1 x2) -> push x2 -> (x1 x2 x2) -> swap(-2,-3) -> (x2 x1 x2)
                     stack.push_back(vch);
                     stack.swap(-2, -3);
@@ -1768,7 +1769,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     //if (opcode == OP_NOTEQUAL)
                     //    fEqual = !fEqual;
                     if (vch1.size() == vch2.size()) {
-                        varcost += vch1.size() * VAROPS_COST_FAST; // COMPARING
+                        varcost += vch1.size() * varops::COST_FAST; // COMPARING
                     }
                     popstack(stack);
                     popstack(stack);
@@ -1852,20 +1853,12 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                             return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
                         break;
                     case OP_BOOLAND:
-                        // Careful: evaluate both is_zero calls before combining to avoid short-circuiting
-                        {
-                            bool z1 = v1.is_zero(varcost);
-                            bool z2 = v2.is_zero(varcost);
-                            v1 = Val64(!z1 && !z2);
-                        }
+                        varcost += varops::booland_cost(v1.size(), v2.size());
+                        v1 = Val64(!v1.is_zero() && !v2.is_zero());
                         break;
                     case OP_BOOLOR:
-                        // Careful: evaluate both is_zero calls before combining to avoid short-circuiting
-                        {
-                            bool z1 = v1.is_zero(varcost);
-                            bool z2 = v2.is_zero(varcost);
-                            v1 = Val64(!z1 || !z2);
-                        }
+                        varcost += varops::boolor_cost(v1.size(), v2.size());
+                        v1 = Val64(!v1.is_zero() || !v2.is_zero());
                         break;
                     case OP_NUMEQUAL:
                         v1 = Val64(v1.cmp(v2, varcost) == 0 ? 1 : 0);
@@ -1912,10 +1905,8 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         !stack.pop64(v1)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     }
-                    // Careful: evaluate both cmp calls before combining to avoid short-circuiting
-                    bool cond1 = v1.cmp(v2, varcost) >= 0;
-                    bool cond2 = v1.cmp(v3, varcost) < 0;
-                    Val64 res = Val64((cond1 && cond2) ? 1 : 0);
+                    varcost += varops::within_cost(v1.size(), v2.size(), v3.size());
+                    Val64 res = Val64((v1.cmp(v2) >= 0 && v1.cmp(v3) < 0) ? 1 : 0);
                     pushVal64(stack, res);
                     }
                 break;
@@ -1952,7 +1943,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         // |-
                         // |OP_HASH256
                         // |(Length of the operand) * 50 (HASH@50)
-                        varcost += vch.size() * VAROPS_COST_HASH;
+                        varcost += vch.size() * varops::COST_HASH;
                     }
                     if (opcode == OP_RIPEMD160)
                         CRIPEMD160().Write(vch.data(), vch.size()).Finalize(vchHash.data());
@@ -1993,7 +1984,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     bool fSuccess = true;
                     if (!EvalChecksig(vchSig, vchPubKey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, fSuccess)) return false;
 
-                    varcost += VAROPS_COST_PER_SIGOP;
+                    varcost += varops::COST_PER_SIGOP;
 
                     popstack(stack);
                     popstack(stack);
@@ -2019,12 +2010,11 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     bool success = true;
                     if (!EvalChecksig(sig, pubkey, pbegincodehash, pend, execdata, flags, checker, sigversion, serror, success)) return false;
 
-                    varcost += VAROPS_COST_PER_SIGOP;
+                    varcost += varops::COST_PER_SIGOP;
 
                     // BIP: "For simplicity, this is charged whether the OP_CHECKSIGADD succeeds or not."
                     // Charge the 1ADD cost unconditionally, based on the num operand size.
-                    size_t num_size = stack.at(stack.size() - 2).size();
-                    varcost += std::max(size_t(1), num_size) * (VAROPS_COST_ARITH + VAROPS_COST_COPYING);
+                    varcost += varops::checksigadd_incr_cost(stack.at(stack.size() - 2).size());
 
                     valtype numvec;
                     Val64 num;
@@ -2064,7 +2054,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     // Pop in reverse order (top first, then second-to-top)
                     valtype vch2 = stack.pop_back_valtype();
                     valtype vch1 = stack.pop_back_valtype();
-                    varcost += (vch1.size() + vch2.size()) * VAROPS_COST_COPYING;
+                    varcost += (vch1.size() + vch2.size()) * varops::COST_COPYING;
 
                     vch1.insert(vch1.end(), vch2.begin(), vch2.end());
                     stack.push_back(std::move(vch1));
@@ -2091,7 +2081,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     uint64_t len = len_v64.to_u64_ceil(vch.size() - begin, varcost);
 
                     // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0) (COPYING)
-                    varcost += len * VAROPS_COST_COPYING;
+                    varcost += len * varops::COST_COPYING;
 
                     valtype vch2(vch.begin() + begin, vch.begin() + begin + len);
                     stack.push_back(std::move(vch2));
@@ -2133,7 +2123,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                     uint64_t offset = offset_v64.to_u64_ceil(stack.back().size(), varcost);
                     valtype vch = stack.pop_back_valtype();  // Move instead of copy
 
-                    varcost += offset * VAROPS_COST_COPYING;
+                    varcost += offset * varops::COST_COPYING;
                     if (offset < vch.size()) {
                         vch.erase(vch.begin(), vch.end() - offset);
                     }
@@ -2199,7 +2189,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         // ...
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
-                        varcost = Val64::op_mul_varcost(v64a, v64b);
+                        varcost = varops::mul_cost(v64a.size(), v64b.size());
                         if (varcost > varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         v64a = Val64::op_mul(v64a, v64b);
@@ -2211,7 +2201,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         // ...
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
-                        varcost = Val64::op_div_varcost(v64a, v64b);
+                        varcost = varops::div_cost(v64a.size(), v64b.size());
                         if (varcost > varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::op_div(v64a, v64b))
@@ -2224,7 +2214,7 @@ bool EvalScript(ValtypeStack& stack, const CScript& script, script_verify_flags 
                         // ...
                         // # Calculate the varops cost of the operation: if it
                         // exceeds the remaining budget, fail.
-                        varcost = Val64::op_mod_varcost(v64a, v64b);
+                        varcost = varops::mod_cost(v64a.size(), v64b.size());
                         if (varcost > varops_budget)
                             return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::op_mod(v64a, v64b))
