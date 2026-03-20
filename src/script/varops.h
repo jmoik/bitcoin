@@ -39,8 +39,10 @@ static constexpr int COST_PER_SIGOP = BUDGET_PER_BYTE * 50;
 
 inline size_t mul_cost(size_t size1, size_t size2) {
     // (COPYING + quadratic MUL_QUAD)
+    // Both operands are processed at 64-bit (8-byte) word granularity.
+    // Round each size up to the nearest word boundary
     return (size1 + size2) * COST_COPYING
-        + (size1 + 7) / 8 * uint64_t(size2) * COST_MUL_QUAD;
+        + (size1 + 7) / 8 * ((size2 + 7) / 8 * 8) * COST_MUL_QUAD;
 }
 
 inline size_t div_cost(size_t size1, size_t size2) {
@@ -67,11 +69,14 @@ inline size_t within_cost(size_t size1, size_t size2, size_t size3) {
 }
 
 inline size_t or_cost(size_t size1, size_t size2) {
-    return std::min(size1, size2) * COST_OTHER;
+    // The loop processes min(size1,size2) at 64-bit word granularity.
+    // Round up to the nearest word boundary to avoid undercharging sub-word sizes.
+    return (std::min(size1, size2) + 7) / 8 * 8 * COST_OTHER;
 }
 
 inline size_t xor_cost(size_t size1, size_t size2) {
-    return std::min(size1, size2) * COST_OTHER;
+    // Same word-granularity rounding as or_cost.
+    return (std::min(size1, size2) + 7) / 8 * 8 * COST_OTHER;
 }
 
 inline size_t checksigadd_incr_cost(size_t num_size) {

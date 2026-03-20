@@ -627,8 +627,8 @@
                 "final stack": [
                     "FF"
                 ],
-                "varops cost": 4,
-                "description": "OTHER: min(len(A), len(B)) * 2 = min(1, 1) * 2 = 2"
+                "varops cost": 32,
+                "description": "OTHER: (min(len(A), len(B)) + 7) / 8 * 8 * 4 = (min(1,1)+7)/8*8*4 = 32 (word granularity)"
             },
             {
                 "name": "OP_XOR: 0xFF ^ 0x0F = 0xF0",
@@ -643,8 +643,8 @@
                 "final stack": [
                     "F0"
                 ],
-                "varops cost": 4,
-                "description": "OTHER: min(len(A), len(B)) * 2 = min(1, 1) * 2 = 2"
+                "varops cost": 32,
+                "description": "OTHER: (min(len(A), len(B)) + 7) / 8 * 8 * 4 = (min(1,1)+7)/8*8*4 = 32 (word granularity)"
             },
             {
                 "name": "OP_AND with insufficient stack (empty)",
@@ -2179,8 +2179,8 @@
                 "final stack": [
                     "0x0C"
                 ],
-                "varops cost": 33,
-                "description": "(1+1)*3 + (1+7)/8*1*27 = 6+27 = 33"
+                "varops cost": 222,
+                "description": "(1+1)*3 + (1+7)/8*((1+7)/8*8)*27 = 6+1*8*27 = 6+216 = 222 (word granularity)"
             },
             {
                 "name": "OP_MUL: multiply by 0 = empty",
@@ -2227,8 +2227,8 @@
                 "final stack": [
                     "0xABCD"
                 ],
-                "varops cost": 36,
-                "description": "(2+1)*3 + (2+7)/8*1*27 = 9+27 = 36"
+                "varops cost": 225,
+                "description": "(2+1)*3 + (2+7)/8*((1+7)/8*8)*27 = 9+1*8*27 = 9+216 = 225 (word granularity)"
             },
             {
                 "name": "OP_MUL: 0xFF * 0xFF = 0x01FE",
@@ -2243,8 +2243,8 @@
                 "final stack": [
                     "0x01FE"
                 ],
-                "varops cost": 33,
-                "description": "(1+1)*3 + (1+7)/8*1*27 = 6+27 = 33. LE 255*255=65025"
+                "varops cost": 222,
+                "description": "(1+1)*3 + (1+7)/8*((1+7)/8*8)*27 = 6+1*8*27 = 222 (word granularity). LE 255*255=65025"
             },
             {
                 "name": "OP_MUL: 2-byte * 2-byte",
@@ -2259,8 +2259,8 @@
                 "final stack": [
                     "0x000001"
                 ],
-                "varops cost": 66,
-                "description": "(2+2)*3 + (2+7)/8*2*27 = 12+54 = 66. LE 256*256=65536"
+                "varops cost": 228,
+                "description": "(2+2)*3 + (2+7)/8*((2+7)/8*8)*27 = 12+1*8*27 = 228 (word granularity). LE 256*256=65536"
             },
             {
                 "name": "OP_MUL: insufficient stack (one element)",
@@ -2362,8 +2362,8 @@
                 "final stack": [
                     "0xFF0102"
                 ],
-                "varops cost": 4,
-                "description": "MIN(3,1)*4 = 4. Only first byte ORed, rest preserved"
+                "varops cost": 32,
+                "description": "(min(3,1)+7)/8*8*4 = 1*8*4 = 32 (word granularity)"
             },
             {
                 "name": "OP_OR: 1-byte OR 3-byte (swapped internally)",
@@ -2378,8 +2378,8 @@
                 "final stack": [
                     "0xFF0102"
                 ],
-                "varops cost": 4,
-                "description": "MIN(1,3)*4 = 4"
+                "varops cost": 32,
+                "description": "(min(1,3)+7)/8*8*4 = 1*8*4 = 32 (word granularity)"
             },
             {
                 "name": "OP_OR: empty OR non-empty preserves value",
@@ -2410,8 +2410,8 @@
                 "final stack": [
                     "0x0100"
                 ],
-                "varops cost": 8,
-                "description": "MIN(2,2)*4 = 8. Trailing 0x00 preserved"
+                "varops cost": 32,
+                "description": "(min(2,2)+7)/8*8*4 = 1*8*4 = 32 (word granularity). Trailing 0x00 preserved"
             },
             {
                 "name": "OP_XOR: 3-byte XOR 1-byte preserves longer",
@@ -2426,8 +2426,8 @@
                 "final stack": [
                     "0x000102"
                 ],
-                "varops cost": 4,
-                "description": "MIN(3,1)*4 = 4. Only first byte XORed"
+                "varops cost": 32,
+                "description": "(min(3,1)+7)/8*8*4 = 1*8*4 = 32 (word granularity). Only first byte XORed"
             },
             {
                 "name": "OP_XOR: self-XOR produces zeros (not normalized)",
@@ -2442,8 +2442,8 @@
                 "final stack": [
                     "0x000000"
                 ],
-                "varops cost": 12,
-                "description": "MIN(3,3)*4 = 12. All zeros, trailing zeros NOT stripped"
+                "varops cost": 32,
+                "description": "(min(3,3)+7)/8*8*4 = 1*8*4 = 32 (word granularity). All zeros, trailing zeros NOT stripped"
             },
             {
                 "name": "OP_XOR: empty XOR non-empty preserves value",

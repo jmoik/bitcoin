@@ -212,7 +212,7 @@ std::vector<OpcodeSequence> GetOpcodes(opcodetype opcode) {
                 {{opcode, OP_DROP, OP_DUP}, 2, 2, 3'999'999},
                 {{OP_3DUP, opcode, OP_DROP, opcode, OP_DROP, opcode, OP_DROP}, 3, 6, 3'999'999},
             };
-        
+
         // (2 in -> 1 out)
         case OP_MUL:
         case OP_DIV:
@@ -324,10 +324,10 @@ static std::string SizeOnly(const std::string& template_name) {
 
 static std::string FormatBytes(uint64_t bytes) {
     if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0)
-        return std::to_string(bytes / (1024 * 1024)) + "MB";
+        return strprintf("%uMB", bytes / (1024 * 1024));
     if (bytes >= 1024 && bytes % 1024 == 0)
-        return std::to_string(bytes / 1024) + "KB";
-    return std::to_string(bytes) + "B";
+        return strprintf("%uKB", bytes / 1024);
+    return strprintf("%uB", bytes);
 }
 
 static bool HandleSpecialCases(const ScriptTemplate& script_template,
@@ -537,7 +537,7 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         CScript mul_script = CreateScript(mul_sequence);
         std::string sequence_name = GetSequenceName(mul_sequence);
 
-        for (uint64_t s2_size : {stack_config.size / 4, stack_config.size / 16, 1ULL}) {
+        for (uint64_t s2_size : {stack_config.size / 4, stack_config.size / 16, uint64_t{1}}) {
             if (s2_size == 0) continue;
             ValtypeStack stack;
             stack.push_back(std::vector<unsigned char>(stack_config.size, 0xFF));
@@ -556,7 +556,7 @@ static bool HandleSpecialCases(const ScriptTemplate& script_template,
         CScript div_script = CreateScript(div_sequence);
         std::string sequence_name = GetSequenceName(div_sequence);
 
-        for (uint64_t div_size : {stack_config.size / 4, stack_config.size / 16, 1ULL}) {
+        for (uint64_t div_size : {stack_config.size / 4, stack_config.size / 16, uint64_t{1}}) {
             if (div_size == 0) continue;
             ValtypeStack stack;
             stack.push_back(std::vector<unsigned char>(stack_config.size, 0xFF));
