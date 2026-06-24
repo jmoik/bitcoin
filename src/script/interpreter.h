@@ -393,6 +393,9 @@ const std::map<std::string, script_verify_flag_name>& ScriptFlagNamesToEnum();
 
 std::vector<std::string> GetScriptFlagNames(script_verify_flags flags);
 bool CastToBool(const std::vector<unsigned char>& vch);
+/** BIP 440 budget: transaction weight excluding inputs that do not execute Tapscript v2.
+ * Missing spent outputs (represented by null CTxOuts) do not contribute funding. */
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs);
 std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, ScriptError* serror);
 
 #endif // BITCOIN_SCRIPT_INTERPRETER_H

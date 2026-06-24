@@ -2116,7 +2116,7 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
     }
     assert(txdata.m_spent_outputs.size() == tx.vin.size());
 
-    auto varops_budget{std::make_shared<varops::Budget>(varops::TxBudget(GetTransactionWeight(tx)))};
+    auto varops_budget{std::make_shared<varops::Budget>(GetTransactionVaropsBudget(tx, txdata.m_spent_outputs))};
 
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
 
