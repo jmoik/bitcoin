@@ -370,7 +370,7 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
 
     std::optional<bool> opsuccess_check;
     if (sigversion == SigVersion::TAPSCRIPT) {
-        opsuccess_check = CheckTapscriptOpSuccess(script, flags, &serror);
+        opsuccess_check = CheckTapscriptOpSuccess(script, flags, SigVersion::TAPSCRIPT, &serror);
     }
 
     bool success = (opsuccess_check.has_value() ? *opsuccess_check : EvalScript(stack, script, flags, *Assert(checker), sigversion, execdata, &serror));
