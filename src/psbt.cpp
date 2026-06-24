@@ -5,10 +5,12 @@
 #include <psbt.h>
 
 #include <common/types.h>
+#include <consensus/validation.h>
 #include <node/types.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/signingprovider.h>
+#include <script/varops.h>
 #include <util/check.h>
 #include <util/result.h>
 #include <util/strencodings.h>
@@ -549,6 +551,17 @@ bool PSBTInputSigned(const PSBTInput& input)
     return !input.final_script_sig.empty() || !input.final_script_witness.IsNull();
 }
 
+/** The unsigned transaction with each input's finalized scriptSig and witness, as extracted. */
+static CMutableTransaction FinalizedTransaction(const PartiallySignedTransaction& psbt, CMutableTransaction tx)
+{
+    assert(tx.vin.size() == psbt.inputs.size());
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        tx.vin[i].scriptSig = psbt.inputs[i].final_script_sig;
+        tx.vin[i].scriptWitness = psbt.inputs[i].final_script_witness;
+    }
+    return tx;
+}
+
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata)
 {
     CTxOut utxo;
@@ -575,11 +588,20 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned
     if (!unsigned_tx) {
         return false;
     }
-    const CMutableTransaction& tx = *unsigned_tx;
+    // Verify against the transaction as it will be extracted. No input can use
+    // more than the varops budget of its weight.
+    const CMutableTransaction tx{FinalizedTransaction(psbt, *unsigned_tx)};
+    varops::Budget varops_budget{varops::TxBudget(GetTransactionWeight(CTransaction{tx}))};
     if (txdata) {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness,
+                            STANDARD_SCRIPT_VERIFY_FLAGS,
+                            MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL},
+                            nullptr, varops_budget);
     } else {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness,
+                            STANDARD_SCRIPT_VERIFY_FLAGS,
+                            MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, MissingDataBehavior::FAIL},
+                            nullptr, varops_budget);
     }
 }
 
@@ -827,11 +849,7 @@ bool FinalizeAndExtractPSBT(PartiallySignedTransaction& psbtx, CMutableTransacti
     if (!unsigned_tx) {
         return false;
     }
-    result = *unsigned_tx;
-    for (unsigned int i = 0; i < result.vin.size(); ++i) {
-        result.vin[i].scriptSig = psbtx.inputs[i].final_script_sig;
-        result.vin[i].scriptWitness = psbtx.inputs[i].final_script_witness;
-    }
+    result = FinalizedTransaction(psbtx, *unsigned_tx);
     return true;
 }
 

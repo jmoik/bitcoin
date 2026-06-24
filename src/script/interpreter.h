@@ -25,6 +25,9 @@
 
 class CPubKey;
 class XOnlyPubKey;
+namespace varops {
+class Budget;
+} // namespace varops
 
 /** Signature hash types/flags */
 enum
@@ -384,7 +387,16 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
+/** BIP 440: the varops budget of tx, whose inputs spend spent_outputs. It covers
+ *  the transaction's weight without the inputs that do not spend a Tapscript v2
+ *  leaf, and is zero without such an input. An unknown spent output (a null
+ *  CTxOut) counts as not spending one. */
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs);
+/** Verify with the varops budget of a transaction of maximum block weight, which
+ *  bounds the work of any script without failing one that a transaction's own
+ *  budget could fund. Validation passes that budget to the overload below. */
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror = nullptr);
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, varops::Budget& varops_budget);
 
 size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness& witness, script_verify_flags flags);
 

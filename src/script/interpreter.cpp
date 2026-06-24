@@ -5,12 +5,15 @@
 
 #include <script/interpreter.h>
 
+#include <consensus/consensus.h>
+#include <consensus/validation.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
 #include <prevector.h>
 #include <pubkey.h>
 #include <script/script.h>
+#include <script/varops.h>
 #include <serialize.h>
 #include <span.h>
 #include <tinyformat.h>
@@ -1927,7 +1930,7 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
 
-static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh)
+static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh, varops::Budget& varops_budget)
 {
     CScript exec_script; //!< Actually executed script (last stack item in P2WSH; implied P2PKH script in P2WPKH; leaf script in P2TR)
     std::span stack{witness.stack};
@@ -2012,7 +2015,40 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
+{
+    assert(spent_outputs.size() == tx.vin.size());
+    int64_t weight{GetTransactionWeight(tx)};
+    bool has_participant{false};
+    for (size_t i{0}; i < tx.vin.size(); ++i) {
+        const auto& input{tx.vin[i]};
+        std::span<const valtype> witness{input.scriptWitness.stack};
+        if (witness.size() >= 2 && !witness.back().empty() && witness.back()[0] == ANNEX_TAG) {
+            witness = witness.first(witness.size() - 1);
+        }
+        // Authentication of the control block remains the script verifier's job.
+        const bool participates{spent_outputs[i].scriptPubKey.IsPayToTaproot() && witness.size() >= 2 &&
+                                !witness.back().empty() &&
+                                (witness.back()[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2};
+        if (participates) {
+            has_participant = true;
+        } else {
+            // A participating input has a witness, so every input's witness
+            // stack, even an empty one, then counts toward the weight.
+            weight -= WITNESS_SCALE_FACTOR * static_cast<int64_t>(::GetSerializeSize(input)) +
+                      static_cast<int64_t>(::GetSerializeSize(input.scriptWitness.stack));
+        }
+    }
+    return has_participant ? varops::TxBudget(weight) : 0;
+}
+
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror)
+{
+    varops::Budget varops_budget{varops::TxBudget(MAX_BLOCK_WEIGHT)};
+    return VerifyScript(scriptSig, scriptPubKey, witness, flags, checker, serror, varops_budget);
+}
+
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, varops::Budget& varops_budget)
 {
     static const CScriptWitness emptyWitness;
     if (witness == nullptr) {
@@ -2052,7 +2088,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                 // The scriptSig must be _exactly_ CScript(), otherwise we reintroduce malleability.
                 return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED);
             }
-            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false)) {
+            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false, varops_budget)) {
                 return false;
             }
             // Bypass the cleanstack check at the end. The actual stack is obviously not clean
@@ -2097,7 +2133,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                     // reintroduce malleability.
                     return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED_P2SH);
                 }
-                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true)) {
+                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true, varops_budget)) {
                     return false;
                 }
                 // Bypass the cleanstack check at the end. The actual stack is obviously not clean
