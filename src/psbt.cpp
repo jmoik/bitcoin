@@ -5,10 +5,12 @@
 #include <psbt.h>
 
 #include <common/types.h>
+#include <consensus/validation.h>
 #include <node/types.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/signingprovider.h>
+#include <script/varops.h>
 #include <util/check.h>
 #include <util/result.h>
 #include <util/strencodings.h>
@@ -554,6 +556,17 @@ bool PSBTInputSigned(const PSBTInput& input)
     return !input.final_script_sig.empty() || !input.final_script_witness.IsNull();
 }
 
+static int64_t FinalizedTransactionWeight(CMutableTransaction tx, const PartiallySignedTransaction& psbt)
+{
+    assert(tx.vin.size() == psbt.inputs.size());
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        const PSBTInput& input{psbt.inputs.at(i)};
+        tx.vin[i].scriptSig = input.final_script_sig;
+        tx.vin[i].scriptWitness = input.final_script_witness;
+    }
+    return GetTransactionWeight(CTransaction{tx});
+}
+
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata)
 {
     CTxOut utxo;
@@ -581,10 +594,18 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned
         return false;
     }
     const CMutableTransaction& tx = *unsigned_tx;
+    // An incomplete PSBT's finalized weight is a conservative lower bound on its eventual varops budget.
+    varops::Budget varops_budget{varops::TxBudget(FinalizedTransactionWeight(tx, psbt))};
     if (txdata) {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness,
+                            STANDARD_SCRIPT_VERIFY_FLAGS,
+                            MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL},
+                            nullptr, varops_budget);
     } else {
-        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, MissingDataBehavior::FAIL});
+        return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness,
+                            STANDARD_SCRIPT_VERIFY_FLAGS,
+                            MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, MissingDataBehavior::FAIL},
+                            nullptr, varops_budget);
     }
 }
 
