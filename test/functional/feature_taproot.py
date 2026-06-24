@@ -1323,7 +1323,7 @@ def spenders_taproot_nonstandard():
     sec = generate_privkey()
     pub, _ = compute_xonly_pubkey(sec)
     scripts = [
-        ("future_leaf", CScript([pub, OP_CHECKSIG]), 0xc2),
+        ("future_leaf", CScript([pub, OP_CHECKSIG]), 0xc4),
         ("op_success", CScript([pub, OP_CHECKSIG, OP_0, OP_IF, CScriptOp(0x50), OP_ENDIF])),
     ]
     tap = taproot_construct(pub, scripts)
