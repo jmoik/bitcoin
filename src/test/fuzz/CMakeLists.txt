@@ -43,6 +43,7 @@ add_executable(fuzz
   decode_tx.cpp
   descriptor_parse.cpp
   deserialize.cpp
+  tapscript_v2_eval_invariants.cpp
   eval_script.cpp
   feefrac.cpp
   fee_rate.cpp
@@ -120,6 +121,10 @@ add_executable(fuzz
   strprintf.cpp
   system.cpp
   templatehash.cpp
+  tapscript_v2_budget_accounting.cpp
+  tapscript_v2_signature_timelock.cpp
+  tapscript_v2_stack_programs.cpp
+  tapscript_v2_stack_resource_limits.cpp
   timeoffsets.cpp
   torcontrol.cpp
   transaction.cpp
@@ -129,6 +134,7 @@ add_executable(fuzz
   tx_pool.cpp
   txorphan.cpp
   txrequest.cpp
+  val64_ops.cpp
   # Visual Studio 2022 version 17.12 introduced a bug
   # that causes an internal compiler error.
   # See: https://github.com/bitcoin/bitcoin/issues/31303
