@@ -35,6 +35,7 @@ SEQUENCE_LOCKTIME_GRANULARITY = 9 # this is a bit-shift
 SEQUENCE_LOCKTIME_MASK = 0x0000ffff
 
 LEAF_VERSION_TAPSCRIPT = 0xc0
+LEAF_VERSION_0XC2 = 0xc2
 
 def hash160(s):
     return ripemd160(sha256(s))
@@ -256,6 +257,22 @@ OP_NOP10 = CScriptOp(0xb9)
 # BIP 342 opcodes (Tapscript)
 OP_CHECKSIGADD = CScriptOp(0xba)
 
+# Extended Primitives draft opcode (BIP 449 semantics)
+OP_TWEAKADD = CScriptOp(0xbe)
+
+# OP_TX draft opcode
+OP_TX = CScriptOp(0xbf)
+
+# Extended Primitives draft opcode (BIP 348 semantics)
+OP_CHECKSIGFROMSTACK = CScriptOp(0xcc)
+
+# Extended Primitives draft opcode
+OP_BYTEREV = CScriptOp(0xcf)
+
+# Reusable macros draft opcodes
+OP_MACRO = CScriptOp(0xd0)
+OP_CALLMACRO = CScriptOp(0xd1)
+
 OP_INVALIDOPCODE = CScriptOp(0xff)
 
 OPCODE_NAMES.update({
@@ -371,6 +388,12 @@ OPCODE_NAMES.update({
     OP_NOP9: 'OP_NOP9',
     OP_NOP10: 'OP_NOP10',
     OP_CHECKSIGADD: 'OP_CHECKSIGADD',
+    OP_TWEAKADD: 'OP_TWEAKADD',
+    OP_TX: 'OP_TX',
+    OP_CHECKSIGFROMSTACK: 'OP_CHECKSIGFROMSTACK',
+    OP_BYTEREV: 'OP_BYTEREV',
+    OP_MACRO: 'OP_MACRO',
+    OP_CALLMACRO: 'OP_CALLMACRO',
     OP_INVALIDOPCODE: 'OP_INVALIDOPCODE',
 })
 
