@@ -92,6 +92,7 @@ public:
             break;
         case SigVersion::TAPROOT:
         case SigVersion::TAPSCRIPT:
+        case SigVersion::TAPLEAF_0XC2:
             assert(false);
         }
     }

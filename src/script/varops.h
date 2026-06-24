@@ -67,6 +67,12 @@ constexpr uint64_t SignatureCost() { return 500'000; }
 // msg after the tag midstate, plus the signature check.
 constexpr uint64_t SchnorrVerifyCost(size_t msg_bytes) { return HashCost(64 + msg_bytes) + SignatureCost(); }
 
+// Charges are computed in uint64_t. The largest, those of OP_MUL and OP_DIV with
+// maximal operands, have products of two word spans below 2^22 bytes each: below
+// 2^44, so no charge comes near wrapping.
+static_assert(WordSpan(MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE) < (uint64_t{1} << 22),
+              "OP_MUL and OP_DIV charges must stay far below 2^64");
+
 /** Hash work of a hash opcode; result construction is charged separately.
  *  OP_HASH160 and OP_HASH256 hash the 32-byte SHA256 digest a second time. */
 constexpr uint64_t HashCost(opcodetype opcode, size_t input_bytes)
