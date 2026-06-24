@@ -29,6 +29,26 @@
     "error_txt": "Could not decode block header",
     "description": ""
   },
+  { "exec": "./bitcoin-util",
+    "args": ["-sigversion=tapscript_v2", "-varops_budget=22", "evalscript", "7e", "61", "62"],
+    "output_cmp": "evalscript_tapscript_v2_cat.json",
+    "description": "Evaluates OP_CAT with the Tapscript v2 interpreter and exact varops budget"
+  },
+  { "exec": "./bitcoin-util",
+    "args": ["-sigversion=tapscript_v2", "-varops_budget=5", "evalscript", "7e", "61", "62"],
+    "output_cmp": "evalscript_tapscript_v2_cat_budget_fail.json",
+    "description": "Fails OP_CAT when the Tapscript v2 varops budget is exhausted"
+  },
+  { "exec": "./bitcoin-util",
+    "args": ["-sigversion=tapscript_v2", "evalscript", "4f6a"],
+    "output_cmp": "evalscript_tapscript_v2_opsuccess.json",
+    "description": "Recognizes Tapscript v2 OP_SUCCESS before script execution"
+  },
+  { "exec": "./bitcoin-util",
+    "args": ["-sigversion=tapscript_v2", "-tx=020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff0100000000000000000001010000000000", "-spent_output=000000000000000000", "evalscript", "51"],
+    "output_cmp": "evalscript_tapscript_v2_tx_budget.json",
+    "description": "Derives the Tapscript v2 varops budget from witness transaction weight"
+  },
   { "exec": "./bitcoin-tx",
     "args": ["-create", "nversion=1"],
     "output_cmp": "blanktxv1.hex",

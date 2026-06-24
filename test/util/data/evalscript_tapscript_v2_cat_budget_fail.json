@@ -1,0 +1,25 @@
+{
+  "script": {
+    "asm": "OP_CAT",
+    "hex": "7e",
+    "type": "nonstandard"
+  },
+  "sigversion": "tapscript_v2",
+  "script_flags": [
+    "CHECKLOCKTIMEVERIFY",
+    "CHECKSEQUENCEVERIFY",
+    "DERSIG",
+    "NULLDUMMY",
+    "P2SH",
+    "TAPROOT",
+    "WITNESS"
+  ],
+  "varops-budget": 5,
+  "stack-after": [
+    "6162"
+  ],
+  "varops-budget-remaining": 5,
+  "sigop-count": 0,
+  "success": false,
+  "error": "Varops budget exceeded"
+}

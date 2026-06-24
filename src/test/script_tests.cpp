@@ -7,6 +7,7 @@
 
 #include <binana.h>
 #include <common/system.h>
+#include <consensus/validation.h>
 #include <core_io.h>
 #include <deploymentinfo.h>
 #include <key.h>
@@ -47,8 +48,11 @@ static const script_verify_flags gFlags = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_STR
 
 script_verify_flags ParseScriptFlags(std::string strFlags);
 
-static uint64_t TestVaropsBudget(script_verify_flags, const CTransaction&)
+static uint64_t TestVaropsBudget(script_verify_flags flags, const CTransaction& tx)
 {
+    if (flags & SCRIPT_VERIFY_SCRIPT_RESTORATION) {
+        return varops::TxBudget(GetTransactionWeight(tx));
+    }
     return varops::UNLIMITED_BUDGET;
 }
 
@@ -108,6 +112,11 @@ static ScriptErrorDesc script_errors[]={
     {SCRIPT_ERR_OP_CODESEPARATOR, "OP_CODESEPARATOR"},
     {SCRIPT_ERR_SIG_FINDANDDELETE, "SIG_FINDANDDELETE"},
     INQ_SCRIPTERR_TEST_NAMES
+    {SCRIPT_ERR_DIVIDE_BY_ZERO, "DIVIDE_BY_ZERO"},
+    {SCRIPT_ERR_SUB_UNDERFLOW, "SUB_UNDERFLOW"},
+    {SCRIPT_ERR_VAROP_COUNT, "VAROP_COUNT"},
+    {SCRIPT_ERR_TOTAL_STACK_SIZE, "TOTAL_STACK_SIZE"},
+    {SCRIPT_ERR_STACK_ELEMENT_SIZE, "STACK_ELEMENT_SIZE"},
 };
 
 static std::string FormatScriptFlags(script_verify_flags flags)
@@ -450,6 +459,26 @@ std::string JSONPrettyPrint(const UniValue& univalue)
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(script_tests, ScriptTest)
+
+BOOST_AUTO_TEST_CASE(is_tapscript_sigversion)
+{
+    BOOST_CHECK(!IsTapscript(SigVersion::BASE));
+    BOOST_CHECK(!IsTapscript(SigVersion::WITNESS_V0));
+    BOOST_CHECK(!IsTapscript(SigVersion::TAPROOT));
+    BOOST_CHECK(IsTapscript(SigVersion::TAPSCRIPT));
+    BOOST_CHECK(IsTapscript(SigVersion::TAPSCRIPT_V2));
+}
+
+BOOST_AUTO_TEST_CASE(script_error_names)
+{
+    for (const auto& se : script_errors) {
+        BOOST_CHECK_EQUAL(FormatScriptError(se.err), se.name);
+        BOOST_CHECK_EQUAL(ParseScriptError(se.name), se.err);
+        if (se.err != SCRIPT_ERR_UNKNOWN_ERROR) {
+            BOOST_CHECK_MESSAGE(ScriptErrorString(se.err) != "unknown error", "Missing ScriptErrorString for " << se.name);
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(script_build)
 {

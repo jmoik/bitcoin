@@ -1,0 +1,23 @@
+{
+  "script": {
+    "asm": "OP_CAT",
+    "hex": "7e",
+    "type": "nonstandard"
+  },
+  "sigversion": "tapscript_v2",
+  "script_flags": [
+    "CHECKLOCKTIMEVERIFY",
+    "CHECKSEQUENCEVERIFY",
+    "DERSIG",
+    "NULLDUMMY",
+    "P2SH",
+    "TAPROOT",
+    "WITNESS"
+  ],
+  "varops-budget": 22,
+  "stack-after": [
+  ],
+  "varops-budget-remaining": 0,
+  "sigop-count": 0,
+  "success": true
+}
