@@ -407,6 +407,8 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
         return EvalChecksigPreTapscript(sig, pubkey, pbegincodehash, pend, flags, checker, sigversion, serror, success);
     case SigVersion::TAPSCRIPT:
         return EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, sigversion, serror, success);
+    case SigVersion::TAPSCRIPT_V2:
+        break;
     case SigVersion::TAPROOT:
         // Key path spending in Taproot has no script, so this is unreachable.
         break;
@@ -1853,7 +1855,7 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             }
             // New opcodes will be listed here. May use a different sigversion to modify existing opcodes.
-            if (IsOpSuccess(opcode)) {
+            if (IsOpSuccess(opcode, SigVersion::TAPSCRIPT)) {
                 if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
                     return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
                 }
