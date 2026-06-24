@@ -125,6 +125,7 @@ add_executable(fuzz
   string.cpp
   strprintf.cpp
   system.cpp
+  tapscript_v2_eval.cpp
   threadpool.cpp
   timeoffsets.cpp
   torcontrol.cpp
@@ -138,6 +139,7 @@ add_executable(fuzz
   txrequest.cpp
   utxo_snapshot.cpp
   utxo_total_supply.cpp
+  val64_ops.cpp
   validation_load_mempool.cpp
   vecdeque.cpp
   versionbits.cpp
