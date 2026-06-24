@@ -25,6 +25,9 @@
 
 class CPubKey;
 class XOnlyPubKey;
+namespace varops {
+class Budget;
+} // namespace varops
 
 /** Signature hash types/flags */
 enum
@@ -384,7 +387,21 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
+/** Whether witness spends a Tapleaf 0xC2 leaf of an output with script_pub_key.
+ *  The control block is not authenticated; that remains the script verifier's job. */
+bool SpendsTapleaf0xC2(const CScriptWitness& witness, const CScript& script_pub_key);
+/** BIP 440: the varops budget of tx, whose inputs spend spent_outputs. It covers
+ *  the transaction's weight without legacy and witness v0 inputs, Taproot key-path
+ *  spends and Tapleaf 0xC0 spends, less one SIGCHECK for the commitment check of
+ *  each other Taproot script-path input, and is zero without a Tapleaf 0xC2 input.
+ *  An unknown spent output (a null CTxOut) counts as a legacy input. */
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs);
+/** Verify with the varops budget of a transaction of maximum block weight, which
+ *  bounds the work of any script without failing one that a transaction's own
+ *  budget could fund. Validation passes each transaction's own budget to the
+ *  overload below. */
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror = nullptr);
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, varops::Budget& varops_budget);
 
 size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness& witness, script_verify_flags flags);
 
