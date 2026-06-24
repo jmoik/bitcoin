@@ -12,7 +12,9 @@
 #include <script/interpreter.h>
 #include <script/keyorigin.h>
 #include <script/script.h>
+#include <script/script_error.h>
 #include <script/signingprovider.h>
+#include <script/verify_flags.h>
 #include <uint256.h>
 
 #include <cstdint>
@@ -26,6 +28,7 @@ class COutPoint;
 class CTxIn;
 class CTxOut;
 class Coin;
+class CTransaction;
 
 struct bilingual_str;
 struct CMutableTransaction;
@@ -131,5 +134,10 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);
 
 /** Sign the CMutableTransaction */
 bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, const SignOptions& options, std::map<int, bilingual_str>& input_errors);
+
+/** Verify every input of tx under one transaction-wide varops budget, as validation does.
+ *  txdata must hold the spent outputs. Returns the index and error of the first failing
+ *  input, or std::nullopt if every input verifies. */
+std::optional<std::pair<unsigned int, ScriptError>> VerifyTransactionScripts(const CTransaction& tx, const PrecomputedTransactionData& txdata, script_verify_flags flags);
 
 #endif // BITCOIN_SCRIPT_SIGN_H

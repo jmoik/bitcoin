@@ -605,6 +605,17 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned
     }
 }
 
+bool PSBTFitsVaropsBudget(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata)
+{
+    const std::optional<CMutableTransaction> unsigned_tx{psbt.GetUnsignedTx()};
+    // Without every spent output, the transaction's budget is unknown.
+    if (!unsigned_tx || !txdata.m_spent_outputs_ready) return false;
+    const CTransaction tx{FinalizedTransaction(psbt, *unsigned_tx)};
+    // A transaction without a Tapscript v2 input has no varops budget to exceed.
+    return GetTransactionVaropsBudget(tx, txdata.m_spent_outputs) == 0 ||
+           !VerifyTransactionScripts(tx, txdata, STANDARD_SCRIPT_VERIFY_FLAGS);
+}
+
 size_t CountPSBTUnsignedInputs(const PartiallySignedTransaction& psbt) {
     size_t count = 0;
     for (const auto& input : psbt.inputs) {
@@ -834,7 +845,7 @@ bool FinalizePSBT(PartiallySignedTransaction& psbtx)
         complete &= sign_result.has_value();
     }
 
-    return complete;
+    return complete && PSBTFitsVaropsBudget(psbtx, txdata);
 }
 
 bool FinalizeAndExtractPSBT(PartiallySignedTransaction& psbtx, CMutableTransaction& result)

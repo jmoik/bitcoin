@@ -20,6 +20,7 @@
 #include <script/script_error.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <script/varops.h>
 #include <script/verify_flags.h>
 #include <serialize.h>
 #include <uint256.h>
@@ -83,7 +84,7 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
 
 std::optional<uint256> MutableTransactionSignatureCreator::ComputeSchnorrSignatureHash(const uint256* leaf_hash, SigVersion sigversion) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
 
     // BIP341/BIP342 signing needs lots of precomputed transaction data. While some
     // (non-SIGHASH_DEFAULT) sighash modes exist that can work with just some subset
@@ -93,7 +94,7 @@ std::optional<uint256> MutableTransactionSignatureCreator::ComputeSchnorrSignatu
     ScriptExecutionData execdata;
     execdata.m_annex_init = true;
     execdata.m_annex_present = false; // Only support annex-less signing for now.
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (IsTapscript(sigversion)) {
         execdata.m_codeseparator_pos_init = true;
         execdata.m_codeseparator_pos = 0xFFFFFFFF; // Only support non-OP_CODESEPARATOR BIP342 signing for now.
         if (!leaf_hash) return std::nullopt; // BIP342 signing needs leaf hash.
@@ -122,7 +123,7 @@ bool MutableTransactionSignatureCreator::CreateSchnorrSig(const SigningProvider&
 
 std::vector<uint8_t> MutableTransactionSignatureCreator::CreateMuSig2Nonce(const SigningProvider& provider, const CPubKey& aggregate_pubkey, const CPubKey& script_pubkey, const CPubKey& part_pubkey, const uint256* leaf_hash, const uint256* merkle_root, SigVersion sigversion, const SignatureData& sigdata) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
 
     // Retrieve the private key
     CKey key;
@@ -150,7 +151,7 @@ std::vector<uint8_t> MutableTransactionSignatureCreator::CreateMuSig2Nonce(const
 
 bool MutableTransactionSignatureCreator::CreateMuSig2PartialSig(const SigningProvider& provider, uint256& partial_sig, const CPubKey& aggregate_pubkey, const CPubKey& script_pubkey, const CPubKey& part_pubkey, const uint256* leaf_hash, const std::vector<std::pair<uint256, bool>>& tweaks, SigVersion sigversion, const SignatureData& sigdata) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
 
     // Retrieve private key
     CKey key;
@@ -196,7 +197,7 @@ bool MutableTransactionSignatureCreator::CreateMuSig2PartialSig(const SigningPro
 
 bool MutableTransactionSignatureCreator::CreateMuSig2AggregateSig(const std::vector<CPubKey>& participants, std::vector<uint8_t>& sig, const CPubKey& aggregate_pubkey, const CPubKey& script_pubkey, const uint256* leaf_hash, const std::vector<std::pair<uint256, bool>>& tweaks, SigVersion sigversion, const SignatureData& sigdata) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
     if (!participants.size()) return false;
 
     // Retrieve pubnonces and partial sigs
@@ -287,7 +288,7 @@ static bool CreateSig(const BaseSignatureCreator& creator, SignatureData& sigdat
 
 static bool SignMuSig2(const BaseSignatureCreator& creator, SignatureData& sigdata, const SigningProvider& provider, std::vector<unsigned char>& sig_out, const XOnlyPubKey& script_pubkey, const uint256* merkle_root, const uint256* leaf_hash, SigVersion sigversion)
 {
-    Assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    Assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
 
     // Lookup derivation paths for the script pubkey
     KeyOriginInfo agg_info;
@@ -515,12 +516,16 @@ struct WshSatisfier: Satisfier<CPubKey> {
 /** Miniscript satisfier specific to Tapscript context. */
 struct TapSatisfier: Satisfier<XOnlyPubKey> {
     const uint256& m_leaf_hash;
+    const SigVersion m_sigversion;
 
     explicit TapSatisfier(const SigningProvider& provider LIFETIMEBOUND, SignatureData& sig_data LIFETIMEBOUND,
                           const BaseSignatureCreator& creator LIFETIMEBOUND, const CScript& script LIFETIMEBOUND,
-                          const uint256& leaf_hash LIFETIMEBOUND)
+                          const uint256& leaf_hash LIFETIMEBOUND, SigVersion sigversion)
                           : Satisfier(provider, sig_data, creator, script, miniscript::MiniscriptContext::TAPSCRIPT),
-                            m_leaf_hash(leaf_hash) {}
+                            m_leaf_hash(leaf_hash), m_sigversion(sigversion)
+    {
+        assert(IsTapscript(m_sigversion));
+    }
 
     //! Conversion from a raw xonly public key.
     template <typename I>
@@ -540,7 +545,7 @@ struct TapSatisfier: Satisfier<XOnlyPubKey> {
 
     //! Satisfy a BIP340 signature check.
     miniscript::Availability Sign(const XOnlyPubKey& key, std::vector<unsigned char>& sig) const {
-        if (CreateTaprootScriptSig(m_creator, m_sig_data, m_provider, sig, key, m_leaf_hash, SigVersion::TAPSCRIPT)) {
+        if (CreateTaprootScriptSig(m_creator, m_sig_data, m_provider, sig, key, m_leaf_hash, m_sigversion)) {
             return miniscript::Availability::YES;
         }
         return miniscript::Availability::NO;
@@ -549,13 +554,18 @@ struct TapSatisfier: Satisfier<XOnlyPubKey> {
 
 static bool SignTaprootScript(const SigningProvider& provider, const BaseSignatureCreator& creator, SignatureData& sigdata, int leaf_version, std::span<const unsigned char> script_bytes, std::vector<valtype>& result)
 {
-    // Only BIP342 tapscript signing is supported for now.
-    if (leaf_version != TAPROOT_LEAF_TAPSCRIPT) return false;
+    // Only the supported tapscript leaf versions can be signed.
+    if (leaf_version != TAPROOT_LEAF_TAPSCRIPT && leaf_version != TAPROOT_LEAF_TAPSCRIPT_V2) return false;
 
     uint256 leaf_hash = ComputeTapleafHash(leaf_version, script_bytes);
     CScript script = CScript(script_bytes.begin(), script_bytes.end());
+    const SigVersion sigversion{leaf_version == TAPROOT_LEAF_TAPSCRIPT_V2 ? SigVersion::TAPSCRIPT_V2 : SigVersion::TAPSCRIPT};
 
-    TapSatisfier ms_satisfier{provider, sigdata, creator, script, leaf_hash};
+    // Miniscript's fragments evaluate the same under Tapscript v2, except thresh()
+    // with k of 128 or more: OP_EQUAL compares k's CScriptNum encoding with the
+    // unsigned sum of OP_ADD. ProduceSignature verifies the result, so such a
+    // script does not sign.
+    TapSatisfier ms_satisfier{provider, sigdata, creator, script, leaf_hash, sigversion};
     const auto ms = miniscript::FromScript(script, ms_satisfier);
     return ms && ms->Satisfy(ms_satisfier, result) == miniscript::Availability::YES;
 }
@@ -1045,7 +1055,8 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
             spent_outputs.emplace_back(coin->second.out.nValue, coin->second.out.scriptPubKey);
         }
     }
-    if (spent_outputs.size() == mtx.vin.size()) {
+    const bool have_all_spent_outputs{spent_outputs.size() == mtx.vin.size()};
+    if (have_all_spent_outputs) {
         txdata.Init(txConst, std::move(spent_outputs), true);
     }
 
@@ -1087,5 +1098,34 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
             input_errors.erase(i);
         }
     }
+
+    // Each input was verified on its own. Tapscript v2 inputs also share the
+    // transaction's varops budget, which transactions without them do not have.
+    // txdata still applies: it does not cover scriptSigs or witnesses.
+    if (input_errors.empty() && have_all_spent_outputs) {
+        const CTransaction signed_tx{mtx};
+        if (GetTransactionVaropsBudget(signed_tx, txdata.m_spent_outputs) > 0) {
+            if (const auto failure{VerifyTransactionScripts(signed_tx, txdata, STANDARD_SCRIPT_VERIFY_FLAGS)}) {
+                input_errors[failure->first] = Untranslated(ScriptErrorString(failure->second));
+            }
+        }
+    }
+
     return input_errors.empty();
+}
+
+std::optional<std::pair<unsigned int, ScriptError>> VerifyTransactionScripts(const CTransaction& tx, const PrecomputedTransactionData& txdata, script_verify_flags flags)
+{
+    assert(txdata.m_spent_outputs_ready);
+    varops::Budget varops_budget{GetTransactionVaropsBudget(tx, txdata.m_spent_outputs)};
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        const CTxOut& spent_output{txdata.m_spent_outputs[i]};
+        ScriptError serror{SCRIPT_ERR_OK};
+        if (!VerifyScript(tx.vin[i].scriptSig, spent_output.scriptPubKey, &tx.vin[i].scriptWitness, flags,
+                          TransactionSignatureChecker{&tx, i, spent_output.nValue, txdata, MissingDataBehavior::FAIL},
+                          &serror, varops_budget)) {
+            return std::pair{i, serror};
+        }
+    }
+    return std::nullopt;
 }

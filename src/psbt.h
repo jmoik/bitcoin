@@ -1636,6 +1636,11 @@ bool PSBTInputSigned(const PSBTInput& input);
 /** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata);
 
+/** Checks whether the finalized inputs of a PSBT fit the varops budget they share
+ *  (BIP 440), which PSBTInputSignedAndVerified cannot see. Requires every spent
+ *  output. A transaction without a Tapscript v2 input has no budget and passes. */
+bool PSBTFitsVaropsBudget(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata);
+
 /** Signs a PSBTInput, verifying that all provided data matches what is being signed.
  *
  * txdata should be the output of PrecomputePSBTData (which can be shared across

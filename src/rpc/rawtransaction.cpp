@@ -2145,6 +2145,7 @@ RPCMethod descriptorprocesspsbt()
     for (unsigned int i = 0; i < psbtx.inputs.size(); ++i) {
         complete = complete && PSBTInputSignedAndVerified(psbtx, i, &txdata);
     }
+    complete = complete && PSBTFitsVaropsBudget(psbtx, txdata);
 
     DataStream ssTx{};
     ssTx << psbtx;
