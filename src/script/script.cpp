@@ -370,6 +370,36 @@ bool IsOpSuccess(const opcodetype& opcode)
            (opcode >= 187 && opcode <= 254);
 }
 
+bool IsTapleaf0xC2OpSuccess(opcodetype opcode)
+{
+    switch (opcode) {
+    // Opcodes re-enabled by BIP 441
+    case OP_CAT:
+    case OP_SUBSTR:
+    case OP_LEFT:
+    case OP_RIGHT:
+    case OP_INVERT:
+    case OP_AND:
+    case OP_OR:
+    case OP_XOR:
+    case OP_2MUL:
+    case OP_2DIV:
+    case OP_MUL:
+    case OP_DIV:
+    case OP_MOD:
+    case OP_LSHIFT:
+    case OP_RSHIFT:
+        return false;
+    // Opcodes BIP 441 makes OP_SUCCESSx
+    case OP_1NEGATE:
+    case OP_NEGATE:
+    case OP_ABS:
+        return true;
+    default:
+        return IsOpSuccess(opcode);
+    }
+}
+
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode) {
     // Excludes OP_1NEGATE, OP_1-16 since they are by definition minimal
     assert(0 <= opcode && opcode <= OP_PUSHDATA4);
