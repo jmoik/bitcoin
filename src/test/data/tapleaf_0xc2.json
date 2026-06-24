@@ -1,0 +1,647 @@
+{
+  "bip": "441",
+  "active": ["440", "441"],
+  "scripts": [
+    {
+      "category": "OP_VERIFY",
+      "vectors": [
+        {"comment": "OP_VERIFY success (only last byte non-zero)", "stack": ["00{3999999}01"], "script": ["OP_VERIFY"], "final_stack": [], "varops": 44001440},
+        {"comment": "OP_VERIFY failure (empty)", "stack": [""], "script": ["OP_VERIFY"], "error": "VERIFY"},
+        {"comment": "OP_VERIFY failure (padded zero)", "stack": ["0000"], "script": ["OP_VERIFY"], "error": "VERIFY"}
+      ]
+    },
+    {
+      "category": "OP_NOT",
+      "vectors": [
+        {"comment": "OP_NOT success (single zero byte)", "stack": ["00"], "script": ["OP_NOT"], "final_stack": ["01"], "varops": 2592},
+        {"comment": "OP_NOT success (multi-byte all zero)", "stack": ["00{4000000}"], "script": ["OP_NOT"], "final_stack": ["01"], "varops": 44002504},
+        {"comment": "OP_NOT success (only last byte non-zero)", "stack": ["00{3999999}01"], "script": ["OP_NOT"], "final_stack": [""], "varops": 44002504}
+      ]
+    },
+    {
+      "category": "OP_0NOTEQUAL",
+      "vectors": [
+        {"comment": "OP_0NOTEQUAL success (single zero becomes empty)", "stack": ["00"], "script": ["OP_0NOTEQUAL"], "final_stack": [""], "varops": 2592},
+        {"comment": "OP_0NOTEQUAL success (multi-byte zero becomes empty)", "stack": ["00{4000000}"], "script": ["OP_0NOTEQUAL"], "final_stack": [""], "varops": 44002504},
+        {"comment": "OP_0NOTEQUAL success (only last byte non-zero becomes 01)", "stack": ["00{3999999}01"], "script": ["OP_0NOTEQUAL"], "final_stack": ["01"], "varops": 44002504}
+      ]
+    },
+    {
+      "category": "OP_EQUALVERIFY",
+      "vectors": [
+        {"comment": "OP_EQUALVERIFY failure (different values)", "stack": ["6162", "6163"], "script": ["OP_EQUALVERIFY"], "error": "EQUALVERIFY"}
+      ]
+    },
+    {
+      "category": "OP_2DUP",
+      "vectors": [
+        {"comment": "OP_2DUP success (stack total size exactly 8000000 including altstack)", "stack": ["aa", "ff{3999998}", "bbcc"], "script": ["OP_TOALTSTACK", "OP_2DUP", "OP_FROMALTSTACK"], "final_stack": ["aa", "ff{3999998}", "aa", "ff{3999998}", "bbcc"], "varops": 64005716},
+        {"comment": "OP_2DUP failure (stack+altstack one byte over 8000000)", "stack": ["01", "01{3999998}", "010101"], "script": ["OP_TOALTSTACK", "OP_2DUP"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_3DUP",
+      "vectors": [
+        {"comment": "OP_3DUP success (stack total size exactly 8000000 including altstack)", "stack": ["aa", "bb", "ff{3999995}", "ccdd"], "script": ["OP_TOALTSTACK", "OP_3DUP", "OP_FROMALTSTACK"], "final_stack": ["aa", "bb", "ff{3999995}", "aa", "bb", "ff{3999995}", "ccdd"], "varops": 64007444},
+        {"comment": "OP_3DUP failure (stack+altstack one byte over 8000000)", "stack": ["01", "01", "01{3999997}", "010101"], "script": ["OP_TOALTSTACK", "OP_3DUP"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_2OVER",
+      "vectors": [
+        {"comment": "OP_2OVER success (stack+altstack exactly 8000000)", "stack": ["aa", "bb", "ff{3999997}", "cc", "dd"], "script": ["OP_TOALTSTACK", "OP_2OVER", "OP_FROMALTSTACK"], "final_stack": ["aa", "bb", "ff{3999997}", "cc", "aa", "bb", "dd"], "varops": 32007508},
+        {"comment": "OP_2OVER failure (stack+altstack one byte over 8000000)", "stack": ["01", "01{3999998}", "", "", "010101"], "script": ["OP_TOALTSTACK", "OP_2OVER"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_IFDUP",
+      "vectors": [
+        {"comment": "OP_IFDUP success (all-zero multi-byte is zero)", "stack": ["00{4000000}"], "script": ["OP_IFDUP"], "final_stack": ["00{4000000}"], "varops": 76002440},
+        {"comment": "OP_IFDUP success (last byte non-zero triggers duplication)", "stack": ["00{3999999}01"], "script": ["OP_IFDUP"], "final_stack": ["00{3999999}01", "00{3999999}01"], "varops": 108003240},
+        {"comment": "OP_IFDUP success (duplication puts stack+altstack exactly at 8000000)", "stack": ["aa", "ff{3999998}"], "script": ["OP_TOALTSTACK", "OP_IFDUP", "OP_FROMALTSTACK"], "final_stack": ["aa", "aa", "ff{3999998}"], "varops": 32005430},
+        {"comment": "OP_IFDUP failure (stack+altstack one byte over 8000000)", "stack": ["01{3999999}", "010101"], "script": ["OP_TOALTSTACK", "OP_IFDUP"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_DUP",
+      "vectors": [
+        {"comment": "OP_DUP success (stack+altstack exactly 8000000 after dup)", "stack": ["aa", "ff{3999998}"], "script": ["OP_TOALTSTACK", "OP_DUP", "OP_FROMALTSTACK"], "final_stack": ["aa", "aa", "ff{3999998}"], "varops": 32004052},
+        {"comment": "OP_DUP failure (stack+altstack one byte over 8000000)", "stack": ["01{3999999}", "010101"], "script": ["OP_TOALTSTACK", "OP_DUP"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_OVER",
+      "vectors": [
+        {"comment": "OP_OVER success (stack+altstack exactly 8000000)", "stack": ["aa", "bb", "ff{3999998}"], "script": ["OP_TOALTSTACK", "OP_OVER", "OP_FROMALTSTACK"], "final_stack": ["aa", "bb", "aa", "ff{3999998}"], "varops": 32004916},
+        {"comment": "OP_OVER failure (stack+altstack one byte over 8000000)", "stack": ["01{3999999}", "01", "0101"], "script": ["OP_TOALTSTACK", "OP_OVER"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_TUCK",
+      "vectors": [
+        {"comment": "OP_TUCK success (stack+altstack exactly 8000000)", "stack": ["aa", "ff{3999999}", "bb"], "script": ["OP_TOALTSTACK", "OP_TUCK", "OP_FROMALTSTACK"], "final_stack": ["ff{3999999}", "aa", "ff{3999999}", "bb"], "varops": 64004852},
+        {"comment": "OP_TUCK failure (stack+altstack one byte over 8000000)", "stack": ["01", "01{3999999}", "0101"], "script": ["OP_TOALTSTACK", "OP_TUCK"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_PICK",
+      "vectors": [
+        {"comment": "OP_PICK success (stack+altstack exactly 8000000)", "stack": ["aa", "eeee", "01", "ff{3999999}"], "script": ["OP_TOALTSTACK", "OP_PICK", "OP_FROMALTSTACK"], "final_stack": ["aa", "eeee", "aa", "ff{3999999}"], "varops": 32006094},
+        {"comment": "OP_PICK failure (index beyond the stack)", "stack": ["6f6e6c79", "01"], "script": ["OP_PICK"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_PICK failure (stack+altstack one byte over 8000000)", "stack": ["01{3999999}", "01", "01", "0101"], "script": ["OP_TOALTSTACK", "OP_PICK"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_ROLL",
+      "vectors": [
+        {"comment": "OP_ROLL success (roll from position 2)", "stack": ["a1", "b2", "c3", "02"], "script": ["OP_ROLL"], "final_stack": ["b2", "c3", "a1"], "varops": 4394},
+        {"comment": "OP_ROLL failure (index beyond the stack)", "stack": ["6f6e6c79", "ff"], "script": ["OP_ROLL"], "error": "INVALID_STACK_OPERATION"}
+      ]
+    },
+    {
+      "category": "OP_BOOLAND",
+      "vectors": [
+        {"comment": "OP_BOOLAND success (first zero)", "stack": ["00", "01"], "script": ["OP_BOOLAND"], "final_stack": [""], "varops": 3770},
+        {"comment": "OP_BOOLAND success (both multi-byte zero)", "stack": ["00{4000000}", "00{4000000}"], "script": ["OP_BOOLAND"], "final_stack": [""], "varops": 88003594},
+        {"comment": "OP_BOOLAND success (one non-zero at the end)", "stack": ["00{3999999}01", "00{3999999}01"], "script": ["OP_BOOLAND"], "final_stack": ["01"], "varops": 88003594}
+      ]
+    },
+    {
+      "category": "OP_BOOLOR",
+      "vectors": [
+        {"comment": "OP_BOOLOR success (one zero, one non-zero)", "stack": ["00", "01"], "script": ["OP_BOOLOR"], "final_stack": ["01"], "varops": 3770},
+        {"comment": "OP_BOOLOR success (both multi-byte zero)", "stack": ["00{4000000}", "00{4000000}"], "script": ["OP_BOOLOR"], "final_stack": [""], "varops": 88003594},
+        {"comment": "OP_BOOLOR success (one long non-zero)", "stack": ["00{3999999}01", "00{4000000}"], "script": ["OP_BOOLOR"], "final_stack": ["01"], "varops": 88003594}
+      ]
+    },
+    {
+      "category": "OP_NUMEQUAL",
+      "vectors": [
+        {"comment": "OP_NUMEQUAL success (equal numbers, padded)", "stack": ["01", "010000"], "script": ["OP_NUMEQUAL"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_NUMEQUAL success (both zero)", "stack": ["00", ""], "script": ["OP_NUMEQUAL"], "final_stack": ["01"], "varops": 3592},
+        {"comment": "OP_NUMEQUAL fail (different lengths, same prefix)", "stack": ["01", "0101"], "script": ["OP_NUMEQUAL"], "final_stack": [""], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_NUMEQUALVERIFY",
+      "vectors": [
+        {"comment": "OP_NUMEQUALVERIFY failure (different numbers)", "stack": ["01", "02"], "script": ["OP_NUMEQUALVERIFY"], "error": "NUMEQUALVERIFY"}
+      ]
+    },
+    {
+      "category": "OP_NUMNOTEQUAL",
+      "vectors": [
+        {"comment": "OP_NUMNOTEQUAL success (equal with padding)", "stack": ["01", "010000"], "script": ["OP_NUMNOTEQUAL"], "final_stack": [""], "varops": 3664},
+        {"comment": "OP_NUMNOTEQUAL success (long unequal values)", "stack": ["ff{3999999}01", "ff{3999999}02"], "script": ["OP_NUMNOTEQUAL"], "final_stack": ["01"], "varops": 80003504}
+      ]
+    },
+    {
+      "category": "OP_LESSTHAN",
+      "vectors": [
+        {"comment": "OP_LESSTHAN success (1 < 2)", "stack": ["01", "02"], "script": ["OP_LESSTHAN"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_LESSTHAN success (2 < 1 is false)", "stack": ["02", "01"], "script": ["OP_LESSTHAN"], "final_stack": [""], "varops": 3664},
+        {"comment": "OP_LESSTHAN success (trailing zeros ignored)", "stack": ["01", "01000000"], "script": ["OP_LESSTHAN"], "final_stack": [""], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_GREATERTHAN",
+      "vectors": [
+        {"comment": "OP_GREATERTHAN success (2 > 1)", "stack": ["02", "01"], "script": ["OP_GREATERTHAN"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_GREATERTHAN success (1 > 2 is false)", "stack": ["01", "02"], "script": ["OP_GREATERTHAN"], "final_stack": [""], "varops": 3664},
+        {"comment": "OP_GREATERTHAN success (trailing zeros ignored)", "stack": ["010000", "01"], "script": ["OP_GREATERTHAN"], "final_stack": [""], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_LESSTHANOREQUAL",
+      "vectors": [
+        {"comment": "OP_LESSTHANOREQUAL success (1 <= 2)", "stack": ["01", "02"], "script": ["OP_LESSTHANOREQUAL"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_LESSTHANOREQUAL success (2 <= 2)", "stack": ["02", "02"], "script": ["OP_LESSTHANOREQUAL"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_LESSTHANOREQUAL success (3 <= 2 is false)", "stack": ["03", "02"], "script": ["OP_LESSTHANOREQUAL"], "final_stack": [""], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_GREATERTHANOREQUAL",
+      "vectors": [
+        {"comment": "OP_GREATERTHANOREQUAL success (3 >= 2)", "stack": ["03", "02"], "script": ["OP_GREATERTHANOREQUAL"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_GREATERTHANOREQUAL success (2 >= 2)", "stack": ["02", "02"], "script": ["OP_GREATERTHANOREQUAL"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_GREATERTHANOREQUAL success (1 >= 2 is false)", "stack": ["01", "02"], "script": ["OP_GREATERTHANOREQUAL"], "final_stack": [""], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_MIN",
+      "vectors": [
+        {"comment": "OP_MIN success (1 vs 2)", "stack": ["01", "02"], "script": ["OP_MIN"], "final_stack": ["01"], "varops": 3664},
+        {"comment": "OP_MIN success (3 vs 2)", "stack": ["03", "02"], "script": ["OP_MIN"], "final_stack": ["02"], "varops": 3664},
+        {"comment": "OP_MIN success (equal values)", "stack": ["05", "050000"], "script": ["OP_MIN"], "final_stack": ["05"], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_MAX",
+      "vectors": [
+        {"comment": "OP_MAX success (1 vs 2)", "stack": ["01", "02"], "script": ["OP_MAX"], "final_stack": ["02"], "varops": 3664},
+        {"comment": "OP_MAX success (3 vs 2)", "stack": ["03", "02"], "script": ["OP_MAX"], "final_stack": ["03"], "varops": 3664},
+        {"comment": "OP_MAX success (normalizes selected result)", "stack": ["01", "020000"], "script": ["OP_MAX"], "final_stack": ["02"], "varops": 3664}
+      ]
+    },
+    {
+      "category": "OP_WITHIN",
+      "vectors": [
+        {"comment": "OP_WITHIN success (1 in [1, 3))", "stack": ["01", "01", "03"], "script": ["OP_WITHIN"], "final_stack": ["01"], "varops": 4842},
+        {"comment": "OP_WITHIN success (3 not in [1, 3))", "stack": ["03", "01", "03"], "script": ["OP_WITHIN"], "final_stack": [""], "varops": 4842},
+        {"comment": "OP_WITHIN success (trailing zeros ignored)", "stack": ["01", "01000000", "0300"], "script": ["OP_WITHIN"], "final_stack": ["01"], "varops": 4842}
+      ]
+    },
+    {
+      "category": "OP_SHA256",
+      "vectors": [
+        {"comment": "OP_SHA256 success (long input)", "stack": ["ff{4000000}"], "script": ["OP_SHA256"], "final_stack": ["1627b4013371d63d947eb27740be7cf32aad311c0116e854bbe6ec89e7185e09"], "varops": 184004938},
+        {"comment": "OP_SHA256 success (521 bytes, above the RIPEMD160 and SHA1 limit)", "stack": ["42{521}"], "script": ["OP_SHA256"], "final_stack": ["7524ee1ecee41043082362495accab8772eaf2aa240083b1ae3d43ee949829ba"], "varops": 28618}
+      ]
+    },
+    {
+      "category": "OP_HASH160",
+      "vectors": [
+        {"comment": "OP_HASH160 success (long input)", "stack": ["ff{4000000}"], "script": ["OP_HASH160"], "final_stack": ["3eb2aeb1e4836781864294138e5592505ca08d70"], "varops": 184007494}
+      ]
+    },
+    {
+      "category": "OP_HASH256",
+      "vectors": [
+        {"comment": "OP_HASH256 success (long input)", "stack": ["ff{4000000}"], "script": ["OP_HASH256"], "final_stack": ["2c410c77ea4a4d13d84cdd813370d9ab4fd9dcdc5397b40b5531e792d4ad504e"], "varops": 184007670}
+      ]
+    },
+    {
+      "category": "OP_IF and OP_NOTIF",
+      "vectors": [
+        {"comment": "OP_IF success (true)", "stack": ["01"], "script": ["OP_IF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "final_stack": ["02"], "varops": 3128},
+        {"comment": "OP_IF success (false)", "stack": [""], "script": ["OP_IF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "final_stack": ["03"], "varops": 3064},
+        {"comment": "OP_IF failure (non-minimal true)", "stack": ["02"], "script": ["OP_IF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "error": "TAPSCRIPT_MINIMALIF"},
+        {"comment": "OP_IF failure (non-minimal false)", "stack": ["0000"], "script": ["OP_IF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "error": "TAPSCRIPT_MINIMALIF"},
+        {"comment": "OP_NOTIF success (false)", "stack": [""], "script": ["OP_NOTIF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "final_stack": ["02"], "varops": 3064},
+        {"comment": "OP_NOTIF success (true)", "stack": ["01"], "script": ["OP_NOTIF", "OP_2", "OP_ELSE", "OP_3", "OP_ENDIF"], "final_stack": ["03"], "varops": 3128}
+      ]
+    },
+    {
+      "category": "BIP 342 restrictions",
+      "vectors": [
+        {"comment": "OP_RETURN failure", "stack": [], "script": ["OP_RETURN"], "error": "OP_RETURN"},
+        {"comment": "OP_CHECKMULTISIG failure", "stack": [], "script": ["OP_CHECKMULTISIG"], "error": "TAPSCRIPT_CHECKMULTISIG"},
+        {"comment": "OP_CHECKMULTISIGVERIFY failure", "stack": [], "script": ["OP_CHECKMULTISIGVERIFY"], "error": "TAPSCRIPT_CHECKMULTISIG"}
+      ]
+    },
+    {
+      "category": "Missing operands",
+      "vectors": [
+        {"comment": "OP_VERIFY failure (missing operand)", "stack": [], "script": ["OP_VERIFY"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_2DUP failure (missing operand)", "stack": ["61"], "script": ["OP_2DUP"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_3DUP failure (missing operand)", "stack": ["61", "62"], "script": ["OP_3DUP"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_2OVER failure (missing operand)", "stack": ["61", "62", "63"], "script": ["OP_2OVER"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_IFDUP failure (missing operand)", "stack": [], "script": ["OP_IFDUP"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_DUP failure (missing operand)", "stack": [], "script": ["OP_DUP"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_OVER failure (missing operand)", "stack": ["61"], "script": ["OP_OVER"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_PICK failure (missing operand)", "stack": [""], "script": ["OP_PICK"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_ROLL failure (missing operand)", "stack": [""], "script": ["OP_ROLL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_ROT failure (missing operand)", "stack": ["61", "62"], "script": ["OP_ROT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SWAP failure (missing operand)", "stack": ["61"], "script": ["OP_SWAP"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_TUCK failure (missing operand)", "stack": ["61"], "script": ["OP_TUCK"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_CAT failure (missing operand)", "stack": ["61"], "script": ["OP_CAT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SUBSTR failure (missing operand)", "stack": ["61", ""], "script": ["OP_SUBSTR"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_LEFT failure (missing operand)", "stack": ["61"], "script": ["OP_LEFT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_RIGHT failure (missing operand)", "stack": ["61"], "script": ["OP_RIGHT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SIZE failure (missing operand)", "stack": [], "script": ["OP_SIZE"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_INVERT failure (missing operand)", "stack": [], "script": ["OP_INVERT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_AND failure (missing operand)", "stack": ["61"], "script": ["OP_AND"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_OR failure (missing operand)", "stack": ["61"], "script": ["OP_OR"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_XOR failure (missing operand)", "stack": ["61"], "script": ["OP_XOR"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_EQUAL failure (missing operand)", "stack": ["61"], "script": ["OP_EQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_EQUALVERIFY failure (missing operand)", "stack": ["61"], "script": ["OP_EQUALVERIFY"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_1ADD failure (missing operand)", "stack": [], "script": ["OP_1ADD"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_1SUB failure (missing operand)", "stack": [], "script": ["OP_1SUB"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_2MUL failure (missing operand)", "stack": [], "script": ["OP_2MUL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_2DIV failure (missing operand)", "stack": [], "script": ["OP_2DIV"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_NOT failure (missing operand)", "stack": [], "script": ["OP_NOT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_0NOTEQUAL failure (missing operand)", "stack": [], "script": ["OP_0NOTEQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_ADD failure (missing operand)", "stack": ["61"], "script": ["OP_ADD"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SUB failure (missing operand)", "stack": ["61"], "script": ["OP_SUB"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_MUL failure (missing operand)", "stack": ["61"], "script": ["OP_MUL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_DIV failure (missing operand)", "stack": ["61"], "script": ["OP_DIV"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_MOD failure (missing operand)", "stack": ["61"], "script": ["OP_MOD"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_LSHIFT failure (missing operand)", "stack": ["61"], "script": ["OP_LSHIFT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_RSHIFT failure (missing operand)", "stack": ["61"], "script": ["OP_RSHIFT"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_BOOLAND failure (missing operand)", "stack": ["61"], "script": ["OP_BOOLAND"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_BOOLOR failure (missing operand)", "stack": ["61"], "script": ["OP_BOOLOR"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_NUMEQUAL failure (missing operand)", "stack": ["61"], "script": ["OP_NUMEQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_NUMEQUALVERIFY failure (missing operand)", "stack": ["61"], "script": ["OP_NUMEQUALVERIFY"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_NUMNOTEQUAL failure (missing operand)", "stack": ["61"], "script": ["OP_NUMNOTEQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_LESSTHAN failure (missing operand)", "stack": ["61"], "script": ["OP_LESSTHAN"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_GREATERTHAN failure (missing operand)", "stack": ["61"], "script": ["OP_GREATERTHAN"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_LESSTHANOREQUAL failure (missing operand)", "stack": ["61"], "script": ["OP_LESSTHANOREQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_GREATERTHANOREQUAL failure (missing operand)", "stack": ["61"], "script": ["OP_GREATERTHANOREQUAL"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_MIN failure (missing operand)", "stack": ["61"], "script": ["OP_MIN"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_MAX failure (missing operand)", "stack": ["61"], "script": ["OP_MAX"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_WITHIN failure (missing operand)", "stack": ["61", "62"], "script": ["OP_WITHIN"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_RIPEMD160 failure (missing operand)", "stack": [], "script": ["OP_RIPEMD160"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SHA1 failure (missing operand)", "stack": [], "script": ["OP_SHA1"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_SHA256 failure (missing operand)", "stack": [], "script": ["OP_SHA256"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_HASH160 failure (missing operand)", "stack": [], "script": ["OP_HASH160"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "OP_HASH256 failure (missing operand)", "stack": [], "script": ["OP_HASH256"], "error": "INVALID_STACK_OPERATION"}
+      ]
+    },
+    {
+      "category": "OP_LEFT and OP_RIGHT",
+      "vectors": [
+        {"comment": "OP_LEFT with offset greater than string length", "stack": ["6869", "0a"], "script": ["OP_LEFT"], "final_stack": ["6869"], "varops": 3256},
+        {"comment": "OP_RIGHT with offset greater than string length", "stack": ["6869", "0a"], "script": ["OP_RIGHT"], "final_stack": ["6869"], "varops": 3256}
+      ]
+    },
+    {
+      "category": "OP_CAT",
+      "vectors": [
+        {"comment": "OP_CAT with empty first operand", "stack": ["", "68656c6c6f"], "script": ["OP_CAT"], "final_stack": ["68656c6c6f"], "varops": 2878},
+        {"comment": "OP_CAT with empty second operand", "stack": ["74657374", ""], "script": ["OP_CAT"], "final_stack": ["74657374"], "varops": 2878},
+        {"comment": "OP_CAT at the size limit should succeed", "stack": ["cc{2000000}", "dd{2000000}"], "script": ["OP_CAT"], "final_stack": ["cc{2000000}dd{2000000}"], "varops": 64002750},
+        {"comment": "OP_CAT failure (result above the element size limit)", "stack": ["01{4000000}", "01"], "script": ["OP_CAT"], "error": "STACK_ELEMENT_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_SUBSTR",
+      "vectors": [
+        {"comment": "OP_SUBSTR - extract to end", "stack": ["626974636f696e", "03", "04"], "script": ["OP_SUBSTR"], "final_stack": ["636f696e"], "varops": 4434},
+        {"comment": "OP_SUBSTR with zero length", "stack": ["68656c6c6f", "02", ""], "script": ["OP_SUBSTR"], "final_stack": [""], "varops": 4282},
+        {"comment": "OP_SUBSTR - begin at end of string", "stack": ["616263", "03", "01"], "script": ["OP_SUBSTR"], "final_stack": [""], "varops": 4370},
+        {"comment": "OP_SUBSTR - begin beyond string length", "stack": ["6869", "0a", "05"], "script": ["OP_SUBSTR"], "final_stack": [""], "varops": 4370},
+        {"comment": "OP_SUBSTR - length extends beyond string", "stack": ["74657374", "02", "0a"], "script": ["OP_SUBSTR"], "final_stack": ["7374"], "varops": 4434}
+      ]
+    },
+    {
+      "category": "OP_INVERT",
+      "vectors": [
+        {"comment": "OP_INVERT with multi-byte value", "stack": ["ff12"], "script": ["OP_INVERT"], "final_stack": ["00ed"], "varops": 2702}
+      ]
+    },
+    {
+      "category": "Binary bitwise operations",
+      "vectors": [
+        {"comment": "OP_AND: 0xFF & 0xF0 = 0xF0", "stack": ["ff", "f0"], "script": ["OP_AND"], "final_stack": ["f0"], "varops": 3774},
+        {"comment": "OP_OR: 0x0F | 0xF0 = 0xFF", "stack": ["0f", "f0"], "script": ["OP_OR"], "final_stack": ["ff"], "varops": 3774},
+        {"comment": "OP_XOR: 0xFF ^ 0x0F = 0xF0", "stack": ["ff", "0f"], "script": ["OP_XOR"], "final_stack": ["f0"], "varops": 3774}
+      ]
+    },
+    {
+      "category": "OP_DIV",
+      "vectors": [
+        {"comment": "OP_DIV: 0 / 1 = 0", "stack": ["", "01"], "script": ["OP_DIV"], "final_stack": [""], "varops": 4161},
+        {"comment": "OP_DIV: Knuth D6 add-back correction", "stack": ["710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585", "cd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"], "script": ["OP_DIV"], "final_stack": ["395e4842fab428f7"], "varops": 6037},
+        {"comment": "OP_DIV failure (empty divisor)", "stack": ["01", ""], "script": ["OP_DIV"], "error": "DIVIDE_BY_ZERO"},
+        {"comment": "OP_DIV failure (padded zero divisor)", "stack": ["01", "0000"], "script": ["OP_DIV"], "error": "DIVIDE_BY_ZERO"}
+      ]
+    },
+    {
+      "category": "OP_MOD",
+      "vectors": [
+        {"comment": "OP_MOD: 7 % 7 = 0", "stack": ["07", "07"], "script": ["OP_MOD"], "final_stack": [""], "varops": 4792},
+        {"comment": "OP_MOD: 0 % 1 = 0", "stack": ["", "01"], "script": ["OP_MOD"], "final_stack": [""], "varops": 4161},
+        {"comment": "OP_MOD: Knuth D6 add-back correction", "stack": ["710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585", "cd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"], "script": ["OP_MOD"], "final_stack": ["cc072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"], "varops": 6165},
+        {"comment": "OP_MOD failure (empty divisor)", "stack": ["01", ""], "script": ["OP_MOD"], "error": "DIVIDE_BY_ZERO"},
+        {"comment": "OP_MOD failure (padded zero divisor)", "stack": ["01", "0000"], "script": ["OP_MOD"], "error": "DIVIDE_BY_ZERO"}
+      ]
+    },
+    {
+      "category": "OP_LSHIFT (UPSHIFT)",
+      "vectors": [
+        {"comment": "OP_LSHIFT: near-maximum non-aligned shift", "stack": ["01", "f747e801"], "script": ["OP_LSHIFT"], "final_stack": ["00{3999998}8000"], "varops": 32003816},
+        {"comment": "OP_LSHIFT failure (result above the element size limit)", "stack": ["01{4000000}", "01"], "script": ["OP_LSHIFT"], "error": "STACK_ELEMENT_SIZE"},
+        {"comment": "OP_LSHIFT failure (shift beyond 64 bits)", "stack": ["01", "000000000000000001"], "script": ["OP_LSHIFT"], "error": "STACK_ELEMENT_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_RSHIFT (DOWNSHIFT)",
+      "vectors": [
+        {"comment": "OP_RSHIFT: does NOT normalize trailing zeros", "stack": ["0100", "08"], "script": ["OP_RSHIFT"], "final_stack": ["00"], "varops": 3880},
+        {"comment": "OP_RSHIFT: shift beyond 64 bits (result empty)", "stack": ["1234", "000000000000000001"], "script": ["OP_RSHIFT"], "final_stack": [""], "varops": 3904}
+      ]
+    },
+    {
+      "category": "OP_2MUL",
+      "vectors": [
+        {"comment": "OP_2MUL: 0x80 overflows to 2 bytes", "stack": ["80"], "script": ["OP_2MUL"], "final_stack": ["0001"], "varops": 2702},
+        {"comment": "OP_2MUL: 0x7F stays 1 byte", "stack": ["7f"], "script": ["OP_2MUL"], "final_stack": ["fe"], "varops": 2702},
+        {"comment": "OP_2MUL: multi-byte value 0x8001", "stack": ["8001"], "script": ["OP_2MUL"], "final_stack": ["0003"], "varops": 2702},
+        {"comment": "OP_2MUL failure (result above the element size limit)", "stack": ["ff{4000000}"], "script": ["OP_2MUL"], "error": "STACK_ELEMENT_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_2DIV",
+      "vectors": [
+        {"comment": "OP_2DIV: 1 / 2 = 0 (normalized to empty)", "stack": ["01"], "script": ["OP_2DIV"], "final_stack": [""], "varops": 2638},
+        {"comment": "OP_2DIV: 0x0001 (LE 256) / 2 = 0x80", "stack": ["0001"], "script": ["OP_2DIV"], "final_stack": ["80"], "varops": 2702},
+        {"comment": "OP_2DIV: 0x0002 (LE 512) / 2 = 0x0001", "stack": ["0002"], "script": ["OP_2DIV"], "final_stack": ["0001"], "varops": 2702}
+      ]
+    },
+    {
+      "category": "OP_ADD",
+      "vectors": [
+        {"comment": "OP_ADD: 3 + 4 = 7", "stack": ["03", "04"], "script": ["OP_ADD"], "final_stack": ["07"], "varops": 3732},
+        {"comment": "OP_ADD: 0 + 0 = empty", "stack": ["", ""], "script": ["OP_ADD"], "final_stack": [""], "varops": 3500}
+      ]
+    },
+    {
+      "category": "OP_SUB",
+      "vectors": [
+        {"comment": "OP_SUB: 5 - 5 = 0 (empty)", "stack": ["05", "05"], "script": ["OP_SUB"], "final_stack": [""], "varops": 3668},
+        {"comment": "OP_SUB: borrow propagation normalizes", "stack": ["0201", "0101"], "script": ["OP_SUB"], "final_stack": ["01"], "varops": 3732},
+        {"comment": "OP_SUB failure (negative result)", "stack": ["01", "02"], "script": ["OP_SUB"], "error": "SUB_UNDERFLOW"}
+      ]
+    },
+    {
+      "category": "OP_1ADD",
+      "vectors": [
+        {"comment": "OP_1ADD: 5 + 1 = 6", "stack": ["05"], "script": ["OP_1ADD"], "final_stack": ["06"], "varops": 2660},
+        {"comment": "OP_1ADD failure (result above the element size limit)", "stack": ["ff{4000000}"], "script": ["OP_1ADD"], "error": "STACK_ELEMENT_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_1SUB",
+      "vectors": [
+        {"comment": "OP_1SUB: 1 - 1 = 0 (empty)", "stack": ["01"], "script": ["OP_1SUB"], "final_stack": [""], "varops": 2596},
+        {"comment": "OP_1SUB: 0x0001 (LE 256) - 1 = 0xFF", "stack": ["0001"], "script": ["OP_1SUB"], "final_stack": ["ff"], "varops": 2660},
+        {"comment": "OP_1SUB failure (empty)", "stack": [""], "script": ["OP_1SUB"], "error": "SUB_UNDERFLOW"}
+      ]
+    },
+    {
+      "category": "OP_AND/OR/XOR asymmetric length",
+      "vectors": [
+        {"comment": "OP_AND: empty AND non-empty zeros all", "stack": ["", "ffff"], "script": ["OP_AND"], "final_stack": ["0000"], "varops": 3702},
+        {"comment": "OP_AND: does NOT normalize trailing zeros", "stack": ["ff00", "ff00"], "script": ["OP_AND"], "final_stack": ["ff00"], "varops": 3774},
+        {"comment": "OP_OR: empty OR non-empty preserves value", "stack": ["", "abcd"], "script": ["OP_OR"], "final_stack": ["abcd"], "varops": 3702},
+        {"comment": "OP_OR: does NOT normalize trailing zeros", "stack": ["0100", "0100"], "script": ["OP_OR"], "final_stack": ["0100"], "varops": 3774},
+        {"comment": "OP_XOR: self-XOR produces zeros (not normalized)", "stack": ["ab0100", "ab0100"], "script": ["OP_XOR"], "final_stack": ["000000"], "varops": 3774},
+        {"comment": "OP_XOR: empty XOR non-empty preserves value", "stack": ["", "abcd"], "script": ["OP_XOR"], "final_stack": ["abcd"], "varops": 3702}
+      ]
+    },
+    {
+      "category": "OP_RIPEMD160 and OP_SHA1 size limit",
+      "vectors": [
+        {"comment": "OP_RIPEMD160: 520 bytes succeeds", "stack": ["ff{520}"], "script": ["OP_RIPEMD160"], "final_stack": ["f90bcda0ef62ed3dea826da3cba407b27b3db90c"], "varops": 29402},
+        {"comment": "OP_SHA1: 520 bytes succeeds", "stack": ["ff{520}"], "script": ["OP_SHA1"], "final_stack": ["c3d314475a71b54360065881513fb599e26cf15d"], "varops": 20326},
+        {"comment": "OP_RIPEMD160: 521 bytes fails", "stack": ["ff{521}"], "script": ["OP_RIPEMD160"], "error": "HASH_OPERAND_SIZE"},
+        {"comment": "OP_SHA1: 521 bytes fails", "stack": ["ff{521}"], "script": ["OP_SHA1"], "error": "HASH_OPERAND_SIZE"}
+      ]
+    },
+    {
+      "category": "Size and budget limit",
+      "vectors": [
+        {"comment": "OP_LSHIFT: result exactly 4MB succeeds", "stack": ["ff{3999999}", "08"], "script": ["OP_LSHIFT"], "final_stack": ["00ff{3999999}"], "varops": 76003728},
+        {"comment": "OP_SIZE of a 4000000-byte element", "stack": ["01{4000000}"], "script": ["OP_SIZE"], "final_stack": ["01{4000000}", "00093d"], "varops": 32002214},
+        {"comment": "Initial element above the element size limit", "stack": ["01{4000001}"], "script": ["OP_NOP"], "error": "STACK_ELEMENT_SIZE"},
+        {"comment": "Initial stack above the total size limit", "stack": ["01{4000000}", "01{4000000}", "01"], "script": ["OP_NOP"], "error": "TOTAL_STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "OP_SUCCESS",
+      "vectors": [
+        {"comment": "OP_1NEGATE succeeds immediately", "stack": [], "script": ["0x4f"], "final_stack": [], "varops": 0},
+        {"comment": "OP_RESERVED succeeds immediately", "stack": [], "script": ["0x50"], "final_stack": [], "varops": 0},
+        {"comment": "OP_VER succeeds immediately", "stack": [], "script": ["0x62"], "final_stack": [], "varops": 0},
+        {"comment": "OP_RESERVED1 succeeds immediately", "stack": [], "script": ["0x89"], "final_stack": [], "varops": 0},
+        {"comment": "OP_RESERVED2 succeeds immediately", "stack": [], "script": ["0x8a"], "final_stack": [], "varops": 0},
+        {"comment": "OP_NEGATE succeeds immediately", "stack": [], "script": ["0x8f"], "final_stack": [], "varops": 0},
+        {"comment": "OP_ABS succeeds immediately", "stack": [], "script": ["0x90"], "final_stack": [], "varops": 0},
+        {"comment": "0xbb succeeds immediately", "stack": [], "script": ["0xbb"], "final_stack": [], "varops": 0},
+        {"comment": "0xbc succeeds immediately", "stack": [], "script": ["0xbc"], "final_stack": [], "varops": 0},
+        {"comment": "0xbd succeeds immediately", "stack": [], "script": ["0xbd"], "final_stack": [], "varops": 0},
+        {"comment": "0xc0 succeeds immediately", "stack": [], "script": ["0xc0"], "final_stack": [], "varops": 0},
+        {"comment": "0xc1 succeeds immediately", "stack": [], "script": ["0xc1"], "final_stack": [], "varops": 0},
+        {"comment": "0xc2 succeeds immediately", "stack": [], "script": ["0xc2"], "final_stack": [], "varops": 0},
+        {"comment": "0xc3 succeeds immediately", "stack": [], "script": ["0xc3"], "final_stack": [], "varops": 0},
+        {"comment": "0xc4 succeeds immediately", "stack": [], "script": ["0xc4"], "final_stack": [], "varops": 0},
+        {"comment": "0xc5 succeeds immediately", "stack": [], "script": ["0xc5"], "final_stack": [], "varops": 0},
+        {"comment": "0xc6 succeeds immediately", "stack": [], "script": ["0xc6"], "final_stack": [], "varops": 0},
+        {"comment": "0xc7 succeeds immediately", "stack": [], "script": ["0xc7"], "final_stack": [], "varops": 0},
+        {"comment": "0xc8 succeeds immediately", "stack": [], "script": ["0xc8"], "final_stack": [], "varops": 0},
+        {"comment": "0xc9 succeeds immediately", "stack": [], "script": ["0xc9"], "final_stack": [], "varops": 0},
+        {"comment": "0xca succeeds immediately", "stack": [], "script": ["0xca"], "final_stack": [], "varops": 0},
+        {"comment": "0xcb succeeds immediately", "stack": [], "script": ["0xcb"], "final_stack": [], "varops": 0},
+        {"comment": "0xcd succeeds immediately", "stack": [], "script": ["0xcd"], "final_stack": [], "varops": 0},
+        {"comment": "0xce succeeds immediately", "stack": [], "script": ["0xce"], "final_stack": [], "varops": 0},
+        {"comment": "0xd2 succeeds immediately", "stack": [], "script": ["0xd2"], "final_stack": [], "varops": 0},
+        {"comment": "0xd3 succeeds immediately", "stack": [], "script": ["0xd3"], "final_stack": [], "varops": 0},
+        {"comment": "0xd4 succeeds immediately", "stack": [], "script": ["0xd4"], "final_stack": [], "varops": 0},
+        {"comment": "0xd5 succeeds immediately", "stack": [], "script": ["0xd5"], "final_stack": [], "varops": 0},
+        {"comment": "0xd6 succeeds immediately", "stack": [], "script": ["0xd6"], "final_stack": [], "varops": 0},
+        {"comment": "0xd7 succeeds immediately", "stack": [], "script": ["0xd7"], "final_stack": [], "varops": 0},
+        {"comment": "0xd8 succeeds immediately", "stack": [], "script": ["0xd8"], "final_stack": [], "varops": 0},
+        {"comment": "0xd9 succeeds immediately", "stack": [], "script": ["0xd9"], "final_stack": [], "varops": 0},
+        {"comment": "0xda succeeds immediately", "stack": [], "script": ["0xda"], "final_stack": [], "varops": 0},
+        {"comment": "0xdb succeeds immediately", "stack": [], "script": ["0xdb"], "final_stack": [], "varops": 0},
+        {"comment": "0xdc succeeds immediately", "stack": [], "script": ["0xdc"], "final_stack": [], "varops": 0},
+        {"comment": "0xdd succeeds immediately", "stack": [], "script": ["0xdd"], "final_stack": [], "varops": 0},
+        {"comment": "0xde succeeds immediately", "stack": [], "script": ["0xde"], "final_stack": [], "varops": 0},
+        {"comment": "0xdf succeeds immediately", "stack": [], "script": ["0xdf"], "final_stack": [], "varops": 0},
+        {"comment": "0xe0 succeeds immediately", "stack": [], "script": ["0xe0"], "final_stack": [], "varops": 0},
+        {"comment": "0xe1 succeeds immediately", "stack": [], "script": ["0xe1"], "final_stack": [], "varops": 0},
+        {"comment": "0xe2 succeeds immediately", "stack": [], "script": ["0xe2"], "final_stack": [], "varops": 0},
+        {"comment": "0xe3 succeeds immediately", "stack": [], "script": ["0xe3"], "final_stack": [], "varops": 0},
+        {"comment": "0xe4 succeeds immediately", "stack": [], "script": ["0xe4"], "final_stack": [], "varops": 0},
+        {"comment": "0xe5 succeeds immediately", "stack": [], "script": ["0xe5"], "final_stack": [], "varops": 0},
+        {"comment": "0xe6 succeeds immediately", "stack": [], "script": ["0xe6"], "final_stack": [], "varops": 0},
+        {"comment": "0xe7 succeeds immediately", "stack": [], "script": ["0xe7"], "final_stack": [], "varops": 0},
+        {"comment": "0xe8 succeeds immediately", "stack": [], "script": ["0xe8"], "final_stack": [], "varops": 0},
+        {"comment": "0xe9 succeeds immediately", "stack": [], "script": ["0xe9"], "final_stack": [], "varops": 0},
+        {"comment": "0xea succeeds immediately", "stack": [], "script": ["0xea"], "final_stack": [], "varops": 0},
+        {"comment": "0xeb succeeds immediately", "stack": [], "script": ["0xeb"], "final_stack": [], "varops": 0},
+        {"comment": "0xec succeeds immediately", "stack": [], "script": ["0xec"], "final_stack": [], "varops": 0},
+        {"comment": "0xed succeeds immediately", "stack": [], "script": ["0xed"], "final_stack": [], "varops": 0},
+        {"comment": "0xee succeeds immediately", "stack": [], "script": ["0xee"], "final_stack": [], "varops": 0},
+        {"comment": "0xef succeeds immediately", "stack": [], "script": ["0xef"], "final_stack": [], "varops": 0},
+        {"comment": "0xf0 succeeds immediately", "stack": [], "script": ["0xf0"], "final_stack": [], "varops": 0},
+        {"comment": "0xf1 succeeds immediately", "stack": [], "script": ["0xf1"], "final_stack": [], "varops": 0},
+        {"comment": "0xf2 succeeds immediately", "stack": [], "script": ["0xf2"], "final_stack": [], "varops": 0},
+        {"comment": "0xf3 succeeds immediately", "stack": [], "script": ["0xf3"], "final_stack": [], "varops": 0},
+        {"comment": "0xf4 succeeds immediately", "stack": [], "script": ["0xf4"], "final_stack": [], "varops": 0},
+        {"comment": "0xf5 succeeds immediately", "stack": [], "script": ["0xf5"], "final_stack": [], "varops": 0},
+        {"comment": "0xf6 succeeds immediately", "stack": [], "script": ["0xf6"], "final_stack": [], "varops": 0},
+        {"comment": "0xf7 succeeds immediately", "stack": [], "script": ["0xf7"], "final_stack": [], "varops": 0},
+        {"comment": "0xf8 succeeds immediately", "stack": [], "script": ["0xf8"], "final_stack": [], "varops": 0},
+        {"comment": "0xf9 succeeds immediately", "stack": [], "script": ["0xf9"], "final_stack": [], "varops": 0},
+        {"comment": "0xfa succeeds immediately", "stack": [], "script": ["0xfa"], "final_stack": [], "varops": 0},
+        {"comment": "0xfb succeeds immediately", "stack": [], "script": ["0xfb"], "final_stack": [], "varops": 0},
+        {"comment": "0xfc succeeds immediately", "stack": [], "script": ["0xfc"], "final_stack": [], "varops": 0},
+        {"comment": "0xfd succeeds immediately", "stack": [], "script": ["0xfd"], "final_stack": [], "varops": 0},
+        {"comment": "0xfe succeeds immediately", "stack": [], "script": ["0xfe"], "final_stack": [], "varops": 0},
+        {"comment": "OP_SUCCESS precedes a later truncated push", "stack": [], "script": ["0x50", "0x4e"], "final_stack": [], "varops": 0},
+        {"comment": "A truncated push before OP_SUCCESS fails decoding", "stack": [], "script": ["0x4e50"], "error": "BAD_OPCODE"},
+        {"comment": "OP_SUCCESS in an inactive branch", "stack": [], "script": ["OP_0", "OP_IF", "0x50", "OP_ENDIF", "OP_RETURN"], "final_stack": [], "varops": 0},
+        {"comment": "OP_SUCCESS precedes the initial stack item limit", "stack": [{"element": "", "count": 32769}], "script": ["0x50"], "budget": 0, "final": true, "varops": 0},
+        {"comment": "OP_SUCCESS precedes the initial element size limit", "stack": ["01{4000001}"], "script": ["0x50"], "budget": 0, "final": true, "varops": 0},
+        {"comment": "OP_SUCCESS precedes the initial total size limit", "stack": ["01{4000000}", "01{4000000}", "01"], "script": ["0x50"], "budget": 0, "final": true, "varops": 0},
+        {"comment": "OP_SUCCESS skips the final result rule", "stack": ["", ""], "script": ["0x50"], "final": true, "varops": 0}
+      ]
+    },
+    {
+      "category": "Stack item limit",
+      "vectors": [
+        {"comment": "Initial stack at the item limit", "stack": [{"element": "", "count": 32768}], "script": ["OP_NOP"], "final_stack": [{"element": "", "count": 32768}], "varops": 26214750},
+        {"comment": "Initial stack above the item limit", "stack": [{"element": "", "count": 32769}], "script": ["OP_NOP"], "error": "STACK_SIZE"},
+        {"comment": "OP_1 above the item limit", "stack": [{"element": "", "count": 32768}], "script": ["OP_1"], "error": "STACK_SIZE"},
+        {"comment": "OP_DEPTH at the item limit", "stack": [{"element": "", "count": 32767}], "script": ["OP_DEPTH"], "final_stack": [{"element": "", "count": 32767}, "ff7f"], "varops": 26215014},
+        {"comment": "OP_2DUP above the item limit", "stack": [{"element": "", "count": 32767}], "script": ["OP_2DUP"], "error": "STACK_SIZE"},
+        {"comment": "OP_3DUP above the item limit", "stack": [{"element": "", "count": 32766}], "script": ["OP_3DUP"], "error": "STACK_SIZE"},
+        {"comment": "OP_IFDUP of a true value above the item limit", "stack": [{"element": "", "count": 32767}, "01"], "script": ["OP_IFDUP"], "error": "STACK_SIZE"},
+        {"comment": "OP_IFDUP of a false value at the item limit", "stack": [{"element": "", "count": 32768}], "script": ["OP_IFDUP"], "final_stack": [{"element": "", "count": 32768}], "varops": 26216040},
+        {"comment": "The altstack counts toward the item limit", "stack": [{"element": "", "count": 32768}], "script": ["OP_TOALTSTACK", "OP_1"], "error": "STACK_SIZE"}
+      ]
+    },
+    {
+      "category": "Splice operand ranges",
+      "vectors": [
+        {"comment": "OP_SUBSTR length beyond 64 bits is clamped", "stack": ["616263646566", "02", "000000000000000001"], "script": ["OP_SUBSTR"], "final_stack": ["63646566"], "varops": 4522},
+        {"comment": "OP_SUBSTR start beyond 64 bits gives an empty result", "stack": ["616263646566", "000000000000000001", "000000000000000001"], "script": ["OP_SUBSTR"], "final_stack": [""], "varops": 4546},
+        {"comment": "OP_LEFT beyond 64 bits keeps everything", "stack": ["616263646566", "000000000000000001"], "script": ["OP_LEFT"], "final_stack": ["616263646566"], "varops": 3344},
+        {"comment": "OP_LEFT with a zero-padded length", "stack": ["616263646566", "020000"], "script": ["OP_LEFT"], "final_stack": ["6162"], "varops": 3256},
+        {"comment": "OP_RIGHT beyond 64 bits keeps everything", "stack": ["616263646566", "000000000000000001"], "script": ["OP_RIGHT"], "final_stack": ["616263646566"], "varops": 3344},
+        {"comment": "OP_RIGHT with a zero-padded length", "stack": ["616263646566", "020000"], "script": ["OP_RIGHT"], "final_stack": ["6566"], "varops": 3256},
+        {"comment": "OP_SUBSTR with zero-padded zeros", "stack": ["616263646566", "000000", "000000"], "script": ["OP_SUBSTR"], "final_stack": [""], "varops": 4370},
+        {"comment": "OP_LSHIFT by a zero-padded zero", "stack": ["1234", "000000"], "script": ["OP_LSHIFT"], "final_stack": ["1234"], "varops": 3880},
+        {"comment": "OP_RSHIFT by a zero-padded zero", "stack": ["1234", "000000"], "script": ["OP_RSHIFT"], "final_stack": ["1234"], "varops": 3880}
+      ]
+    },
+    {
+      "category": "Upgradable NOPs",
+      "vectors": [
+        {"comment": "OP_NOP4 ignores its operand", "stack": [], "script": ["0x2001{32}", "OP_NOP4"], "final_stack": ["01{32}"], "varops": 1756},
+        {"comment": "OP_NOP1 does nothing", "stack": [], "script": ["OP_NOP1"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP5 does nothing", "stack": [], "script": ["OP_NOP5"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP6 does nothing", "stack": [], "script": ["OP_NOP6"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP7 does nothing", "stack": [], "script": ["OP_NOP7"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP8 does nothing", "stack": [], "script": ["OP_NOP8"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP9 does nothing", "stack": [], "script": ["OP_NOP9"], "final_stack": [], "varops": 350},
+        {"comment": "OP_NOP10 does nothing", "stack": [], "script": ["OP_NOP10"], "final_stack": [], "varops": 350}
+      ]
+    },
+    {
+      "category": "Final result rule",
+      "vectors": [
+        {"comment": "0x80 is true", "stack": [], "script": ["0x0180"], "final": true, "varops": 1528},
+        {"comment": "An empty value is false", "stack": [], "script": ["OP_0"], "final": true, "error": "EVAL_FALSE"},
+        {"comment": "Zero bytes are false", "stack": [], "script": ["0x020000"], "final": true, "error": "EVAL_FALSE"},
+        {"comment": "A nonzero high byte is true", "stack": [], "script": ["0x020001"], "final": true, "varops": 1528},
+        {"comment": "Two values fail", "stack": [], "script": ["OP_1", "OP_1"], "final": true, "error": "CLEANSTACK"},
+        {"comment": "No value fails", "stack": [], "script": [], "final": true, "error": "CLEANSTACK"}
+      ]
+    },
+    {
+      "category": "Signature checks",
+      "vectors": [
+        {"comment": "OP_CHECKSIG with a valid signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["e3a9f5179b1d17a7000e41cf11270bcd795696b314e4a614b83c9644597cbabd35b2df7ade4bb2d68ee19855282f383ead57f21839bcb7d33b02e5c47025a437"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 509096},
+        {"comment": "OP_CHECKSIG of the second input", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 1}, "stack": ["10d86505b03a758ae10a41a4193541c93a6d209dccf883c68e20397d413e7e764dfdfe15e0b669601cd7d67cf3b50f1109362c06f1a92a40211a0723db6ef013"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 509096},
+        {"comment": "OP_CHECKSIG with hash type 0x01", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["567f793e8df320891da0ddc7ceb3f6d4723ddfb52609c3ae1700a4b2a2111f32b4d0a3794f61b0c3c793fbc41497689caf49627f5b1df67ba986df745a44e37f01"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 509160},
+        {"comment": "OP_CHECKSIG with an annex", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0, "annex": "500102"}, "stack": ["41e82192d4386f5538733acf5f19b002471ac322ea85344ded3950c1ca62f2f9350e4c8a45b807cc58274a000f029ce0e5bcddbe2e142a307dab07cb0e1717da"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 509096},
+        {"comment": "OP_CHECKSIG with an invalid signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["e2a9f5179b1d17a7000e41cf11270bcd795696b314e4a614b83c9644597cbabd35b2df7ade4bb2d68ee19855282f383ead57f21839bcb7d33b02e5c47025a437"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "error": "SCHNORR_SIG"},
+        {"comment": "OP_CHECKSIG with a 63-byte signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["e3a9f5179b1d17a7000e41cf11270bcd795696b314e4a614b83c9644597cbabd35b2df7ade4bb2d68ee19855282f383ead57f21839bcb7d33b02e5c47025a4"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "error": "SCHNORR_SIG_SIZE"},
+        {"comment": "OP_CHECKSIG with an invalid hash type", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["567f793e8df320891da0ddc7ceb3f6d4723ddfb52609c3ae1700a4b2a2111f32b4d0a3794f61b0c3c793fbc41497689caf49627f5b1df67ba986df745a44e37f04"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "error": "SCHNORR_SIG_HASHTYPE"},
+        {"comment": "OP_CHECKSIG with an explicit default hash type", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["567f793e8df320891da0ddc7ceb3f6d4723ddfb52609c3ae1700a4b2a2111f32b4d0a3794f61b0c3c793fbc41497689caf49627f5b1df67ba986df745a44e37f00"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "error": "SCHNORR_SIG_HASHTYPE"},
+        {"comment": "OP_CHECKSIG with an empty public key", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["01{64}"], "script": ["OP_0", "OP_CHECKSIG"], "error": "TAPSCRIPT_EMPTY_PUBKEY"},
+        {"comment": "OP_CHECKSIG with a 1-byte unknown public key type", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["01{64}"], "script": ["0x0101", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 508904},
+        {"comment": "OP_CHECKSIGVERIFY with a valid signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["e7b0b7e8d81b6207523919430799f05928da8e4376f78a5e7a877632a65e2a3f357affa9fb8fb6730c48ae7e289296366a806e25edcbdd272a61da9b41abf1d2"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGVERIFY", "OP_1"], "final_stack": ["01"], "varops": 510310},
+        {"comment": "OP_CHECKSIGVERIFY with an empty signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": [""], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGVERIFY", "OP_1"], "error": "CHECKSIGVERIFY"},
+        {"comment": "OP_CHECKSIGADD adds one", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["970ad7a22fb03a7f1bc16de6d7fe06a00f6d350df0a36e5b1df0a8b4b5c4586a4826bf09799dfd244779fe9e29dd923cfa1bf176bb3c0f8f0e8aea123db329b7", "05"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGADD"], "final_stack": ["06"], "varops": 510542},
+        {"comment": "OP_CHECKSIGADD of a 4000000-byte zero", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["970ad7a22fb03a7f1bc16de6d7fe06a00f6d350df0a36e5b1df0a8b4b5c4586a4826bf09799dfd244779fe9e29dd923cfa1bf176bb3c0f8f0e8aea123db329b7", "00{4000000}"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGADD"], "final_stack": ["01"], "varops": 48510446},
+        {"comment": "OP_CHECKSIGADD result above the element size limit", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["970ad7a22fb03a7f1bc16de6d7fe06a00f6d350df0a36e5b1df0a8b4b5c4586a4826bf09799dfd244779fe9e29dd923cfa1bf176bb3c0f8f0e8aea123db329b7", "ff{4000000}"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGADD"], "error": "STACK_ELEMENT_SIZE"},
+        {"comment": "OP_CHECKSIGADD of a 4000000-byte zero with an empty signature", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["", "00{4000000}"], "script": ["0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIGADD"], "final_stack": [""], "varops": 36004556},
+        {"comment": "OP_CHECKSIGADD with an empty public key", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["01{64}", "ff"], "script": ["OP_0", "OP_CHECKSIGADD"], "error": "TAPSCRIPT_EMPTY_PUBKEY"},
+        {"comment": "OP_CODESEPARATOR at position 0 is signed", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["14303ba51aca84889f2b020f5bf5d6bac2339231adb4ac43de312e41c28e8bdd58b8e37b14a39627ec447d49176b8dc217731647b8721e94be05e446fab623cc"], "script": ["OP_CODESEPARATOR", "0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 509446},
+        {"comment": "A signature without the OP_CODESEPARATOR position fails", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["2b617eee24d7d54495de48f3759918965093f48fb78fd9039d91836ad8608faeacbccfe0b4ab1e61a9b6d374055b82e419a8751c23a0b084cca5a22d639e4144"], "script": ["OP_CODESEPARATOR", "0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "error": "SCHNORR_SIG"},
+        {"comment": "OP_CODESEPARATOR at position 2 is signed", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["15df7ab0eca77f8bcc30a0996b5ad52c30697c94ef0e81c9025a0223b82128cde4444d8c526d095005aec1cda2aa56986fc785da9160e6e5da7dda9f22a96ccb"], "script": ["OP_1", "OP_DROP", "OP_CODESEPARATOR", "0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 511010},
+        {"comment": "An OP_CODESEPARATOR in an inactive branch is not signed", "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000fdffffff01e803000000000000015100000000", "spent_outputs": ["881300000000000022512007{32}", "581b00000000000022512009{32}"], "input_index": 0}, "stack": ["af2e4ea4766ab17104e865ef2f01d8974602a3cf302d7d6ea1a92cc825cd37c38b29765a4454dedfd261a0e35d6d3774f4c8edfb25a92e3c355b914bafeaf576"], "script": ["OP_0", "OP_IF", "OP_CODESEPARATOR", "OP_ENDIF", "0x20922df23b03bded9d1463e7e7471d120684d16c48df90f6ec0e380f171eb168fb", "OP_CHECKSIG"], "final_stack": ["01"], "varops": 510946}
+      ]
+    },
+    {
+      "category": "Lock time and sequence",
+      "vectors": [
+        {"comment": "OP_CHECKLOCKTIMEVERIFY with a zero-padded 0xffffffff", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff01e8030000000000000151ffffffff", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["ffffffff00"], "script": ["OP_CHECKLOCKTIMEVERIFY"], "final_stack": ["ffffffff00"], "varops": 2592},
+        {"comment": "OP_CHECKLOCKTIMEVERIFY above 32 bits", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff01e8030000000000000151ffffffff", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["0000000001"], "script": ["OP_CHECKLOCKTIMEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKLOCKTIMEVERIFY with an empty operand is zero", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff01e803000000000000015101000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": [""], "script": ["OP_CHECKLOCKTIMEVERIFY"], "final_stack": [""], "varops": 2440},
+        {"comment": "OP_CHECKLOCKTIMEVERIFY with zero bytes beyond the eighth", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff01e803000000000000015101000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["01000000000000000000"], "script": ["OP_CHECKLOCKTIMEVERIFY"], "final_stack": ["01000000000000000000"], "varops": 2744},
+        {"comment": "OP_CHECKLOCKTIMEVERIFY above the lock time", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000feffffff01e803000000000000015101000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["02"], "script": ["OP_CHECKLOCKTIMEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKLOCKTIMEVERIFY with a final sequence", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e803000000000000015101000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["01"], "script": ["OP_CHECKLOCKTIMEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKSEQUENCEVERIFY with a zero-padded one", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["0100000000"], "script": ["OP_CHECKSEQUENCEVERIFY"], "final_stack": ["0100000000"], "varops": 2592},
+        {"comment": "OP_CHECKSEQUENCEVERIFY above 32 bits", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["0000000001"], "script": ["OP_CHECKSEQUENCEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKSEQUENCEVERIFY above 32 bits with the disable flag", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["0000008001"], "script": ["OP_CHECKSEQUENCEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKSEQUENCEVERIFY with the disable flag", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["00000080"], "script": ["OP_CHECKSEQUENCEVERIFY"], "final_stack": ["00000080"], "varops": 2592},
+        {"comment": "OP_CHECKSEQUENCEVERIFY with an empty operand is zero", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": [""], "script": ["OP_CHECKSEQUENCEVERIFY"], "final_stack": [""], "varops": 2440},
+        {"comment": "OP_CHECKSEQUENCEVERIFY with zero bytes beyond the eighth", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["01000000000000000000"], "script": ["OP_CHECKSEQUENCEVERIFY"], "final_stack": ["01000000000000000000"], "varops": 2744},
+        {"comment": "OP_CHECKSEQUENCEVERIFY above the sequence", "context": {"tx": "0200000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["02"], "script": ["OP_CHECKSEQUENCEVERIFY"], "error": "UNSATISFIED_LOCKTIME"},
+        {"comment": "OP_CHECKSEQUENCEVERIFY in a version 1 transaction", "context": {"tx": "0100000001d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa310500000000000100000001e803000000000000015100000000", "spent_outputs": ["881300000000000022512000{32}"], "input_index": 0}, "stack": ["01"], "script": ["OP_CHECKSEQUENCEVERIFY"], "error": "UNSATISFIED_LOCKTIME"}
+      ]
+    }
+  ],
+  "transactions": [
+    {
+      "category": "Complete spends",
+      "vectors": [
+        {"comment": "OP_MUL is OP_SUCCESS in a 0xc0 leaf", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e803000000000000015104010201030395578721c0a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c6200000000", "spent_outputs": ["10270000000000002251209e18e46c2c74cbdb55fac3752dcb04bbf2494454d87eb912af429fdd2dbabf89"], "budget": 0, "varops": 0},
+        {"comment": "OP_MUL executes in a 0xc2 leaf", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e803000000000000015104010201030395568721c2a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c6200000000", "spent_outputs": ["10270000000000002251200154bafe70a219b2f7f967633ce3d62b2334b221d1a6d3a64f45f3123d92085a"], "budget": 2890000, "varops": 7025},
+        {"comment": "The c0 leaf of a tree with both versions", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e803000000000000015102015141c1a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c624e43d99cb1f4ed1f8d966e822372c96694d803125fcef747d32eb6c8d8abc94700000000", "spent_outputs": ["1027000000000000225120ac57b3ebd218dad8454031d7bc2ae39d9dde01c534f105b0f77857363908c086"], "budget": 0, "varops": 0},
+        {"comment": "The c2 leaf of a tree with both versions", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e8030000000000000151020352755141c3a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c62a85b2107f791b26a84e7586c28cec7cb61202ed3d01944d832500f363782d67500000000", "spent_outputs": ["1027000000000000225120ac57b3ebd218dad8454031d7bc2ae39d9dde01c534f105b0f77857363908c086"], "budget": 3170000, "varops": 3092},
+        {"comment": "A signed 0xc2 leaf", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e80300000000000001510340ed7e44d1f34c95e921faeee9b2bfe24abe6b91a22d524967fc8ecf28e83d7f7f264f67c45758faf68aa42f9ba059c70841fc05949d0909e3bc3a32035a1d3e502220ebf0d7cd8c0c56983b2e8377124cc40678def4965baa1798e940b9957ca4c343ac21c3a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c6200000000", "spent_outputs": ["1027000000000000225120d09c03d492197eaeddfc837f6719403ee9c75ba6fb5bfd0266bf79c6720c2fd8"], "budget": 3810000, "varops": 509410},
+        {"comment": "A signature for the 0xc0 leaf hash fails in a 0xc2 leaf", "tx": "02000000000101d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff01e80300000000000001510340239a04b94370087621ace7841613d283b6a26ca59630f877b38b3377bfb89eaf4bd2888889a664ae855502253f60eea1b5a487b3067b0d43d8fa1933f09ab1512220ebf0d7cd8c0c56983b2e8377124cc40678def4965baa1798e940b9957ca4c343ac21c3a4729e600dd847bce2a5b753ffa149cf4e2ea48e5c5d581beef56207899e3c6200000000", "spent_outputs": ["1027000000000000225120d09c03d492197eaeddfc837f6719403ee9c75ba6fb5bfd0266bf79c6720c2fd8"], "budget": 3810000, "error": "SCHNORR_SIG"}
+      ]
+    }
+  ],
+  "signing": [
+    {
+      "category": "Signature messages",
+      "vectors": [
+        {"comment": "Leaf a of one 0xc2 leaf, hash type 0x00", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 0, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}], "spend_leaf": 0, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 0, "script_pubkey": "5120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "leaf_hash": "1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb", "control_block": "c2d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "sighash": "d21bf2a618799b6ee4ed2294ee030fee58e3578450e48ff124db021977400dc5"},
+        {"comment": "Leaf a of one 0xc2 leaf, hash type 0x01", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 0, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}], "spend_leaf": 0, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 1, "script_pubkey": "5120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "leaf_hash": "1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb", "control_block": "c2d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "sighash": "7e6ba492b59656c36a27266efc9d3b006d04476494e16a37fd7d8251d24c1b68"},
+        {"comment": "Leaf a of one 0xc2 leaf, hash type 0x83, with an annex", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 0, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}], "spend_leaf": 0, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "307500000000000022512003{32}"], "input_index": 0, "annex": "5001"}, "hash_type": 131, "script_pubkey": "5120238cd3ca3f06af4e2a20189c709e461b4c9dd07fa07e14bac5c3dcfd4a5f5ba5", "leaf_hash": "1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb", "control_block": "c2d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "sighash": "f0a3aaa9f5e31523dca60783dd06d7e7e025b872bfca64cde87d39ba64a40279"},
+        {"comment": "Leaf b of a 0xc0 and a 0xc2 leaf, hash type 0x00", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 1, "version": "c0", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}, {"depth": 1, "version": "c2", "script": ["0x20bc99c08345b3c24dda4f15b0a558606b37e1877398306e1b97c865cac3b43965", "OP_CHECKSIG"]}], "spend_leaf": 1, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120a2ffa2d4fd1f81c41e328fe1c861de500607c0595d36c22d47102bfa756e5128", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 0, "script_pubkey": "5120a2ffa2d4fd1f81c41e328fe1c861de500607c0595d36c22d47102bfa756e5128", "leaf_hash": "00e3203a9669baa20143bf132aaff56ec59b41665666ef0b835fa468987208b3", "control_block": "c3d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d7cfef09dbabba856aa5ed81ba1095e136cf3cab4942175bc5ec68ab0576387c5", "sighash": "0f448d2432f303e5453503ac8512ee54ebbc6bb810134692c336e44b5dad3a02"},
+        {"comment": "Leaf b of a 0xc0 and a 0xc2 leaf, hash type 0x02", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 1, "version": "c0", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}, {"depth": 1, "version": "c2", "script": ["0x20bc99c08345b3c24dda4f15b0a558606b37e1877398306e1b97c865cac3b43965", "OP_CHECKSIG"]}], "spend_leaf": 1, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120a2ffa2d4fd1f81c41e328fe1c861de500607c0595d36c22d47102bfa756e5128", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 2, "script_pubkey": "5120a2ffa2d4fd1f81c41e328fe1c861de500607c0595d36c22d47102bfa756e5128", "leaf_hash": "00e3203a9669baa20143bf132aaff56ec59b41665666ef0b835fa468987208b3", "control_block": "c3d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d7cfef09dbabba856aa5ed81ba1095e136cf3cab4942175bc5ec68ab0576387c5", "sighash": "17eec9b4ea2a166b7d08fe146ff044c58afd632c2970422a087fbc42944e7f17"},
+        {"comment": "Leaf c of three 0xc2 leaves, hash type 0x00, OP_CODESEPARATOR at 0", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 1, "version": "c2", "script": ["OP_1"]}, {"depth": 2, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}, {"depth": 2, "version": "c2", "script": ["OP_CODESEPARATOR", "0x20bc99c08345b3c24dda4f15b0a558606b37e1877398306e1b97c865cac3b43965", "OP_CHECKSIG"]}], "spend_leaf": 2, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 0, "codesep_pos": 0, "script_pubkey": "5120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "leaf_hash": "fa056b6e952cf3f833afc9b62140cea40d0fe27896513d35dc6b46a07cb8cd02", "control_block": "c3d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb7f2e1235044710205aaec280e6d3075ca84a1b2f239bdcb3fe1db04234142f90", "sighash": "3deaca5a39d2b30583b389a224d6ac49ef50c79e5596ef00decdf734a327bd08"},
+        {"comment": "Leaf c of three 0xc2 leaves, hash type 0x81, OP_CODESEPARATOR at 0, with an annex", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 1, "version": "c2", "script": ["OP_1"]}, {"depth": 2, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}, {"depth": 2, "version": "c2", "script": ["OP_CODESEPARATOR", "0x20bc99c08345b3c24dda4f15b0a558606b37e1877398306e1b97c865cac3b43965", "OP_CHECKSIG"]}], "spend_leaf": 2, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "307500000000000022512003{32}"], "input_index": 0, "annex": "50"}, "hash_type": 129, "codesep_pos": 0, "script_pubkey": "5120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "leaf_hash": "fa056b6e952cf3f833afc9b62140cea40d0fe27896513d35dc6b46a07cb8cd02", "control_block": "c3d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb7f2e1235044710205aaec280e6d3075ca84a1b2f239bdcb3fe1db04234142f90", "sighash": "3f0aa9ba7e3d239343a9a0a7405d468396b20195f38fad3f59a0c247b52258e3"},
+        {"comment": "Leaf b of three 0xc2 leaves, hash type 0x03", "internal_key": "d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808d", "leaves": [{"depth": 1, "version": "c2", "script": ["OP_1"]}, {"depth": 2, "version": "c2", "script": ["0x202c6fa36588bbbacd6ed195bc04f6b18894e1a64a1accc598f640d34aec657c0b", "OP_CHECKSIG"]}, {"depth": 2, "version": "c2", "script": ["OP_CODESEPARATOR", "0x20bc99c08345b3c24dda4f15b0a558606b37e1877398306e1b97c865cac3b43965", "OP_CHECKSIG"]}], "spend_leaf": 1, "context": {"tx": "0200000002d5cb843642a7d24a8699d94966b80c532816cc5e0e903eaae6e7e2d0bcaa31050000000000ffffffff41ee8a5637dd837df3068068120a3f1a67270093537b50aacfd42800b0bbbbb50100000000ffffffff01e803000000000000015100000000", "spent_outputs": ["204e000000000000225120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "307500000000000022512003{32}"], "input_index": 0}, "hash_type": 3, "script_pubkey": "5120ee54efcb52c8ba1e240a58f1bfad79ac529c60b6109586e0a565b63e1e55775c", "leaf_hash": "1ab0c04e67838e1dccbe6fe99d17731e314c0bcf7f88ae941350a2cf267b9dcb", "control_block": "c3d60ff27e26031f4c4756a8d6e5f0ea2df6b05279b018cd26ace8170e6fd4808dfa056b6e952cf3f833afc9b62140cea40d0fe27896513d35dc6b46a07cb8cd027f2e1235044710205aaec280e6d3075ca84a1b2f239bdcb3fe1db04234142f90", "sighash": "5609fa35a6a6bbb3149d01d4ee4629a08a07b3eda086cb428b48a65743acf034"}
+      ]
+    }
+  ]
+}

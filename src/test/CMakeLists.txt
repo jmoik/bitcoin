@@ -112,6 +112,8 @@ add_executable(test_bitcoin
   sync_tests.cpp
   system_ram_tests.cpp
   system_tests.cpp
+  tapleaf_0xc2_vector_tests.cpp
+  tapscript_v2_tests.cpp
   testnet4_miner_tests.cpp
   threadpool_tests.cpp
   timeoffsets_tests.cpp
@@ -157,8 +159,10 @@ target_json_data_sources(test_bitcoin
   data/script_tests.json
   data/sighash.json
   data/siphash.json
+  data/tapleaf_0xc2.json
   data/tx_invalid.json
   data/tx_valid.json
+  data/varops.json
 )
 target_raw_data_sources(test_bitcoin NAMESPACE test::data
   data/asmap.raw
