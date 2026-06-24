@@ -5,19 +5,22 @@
 
 #include <script/interpreter.h>
 
+#include <consensus/consensus.h>
+#include <consensus/validation.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
 #include <prevector.h>
 #include <pubkey.h>
 #include <script/script.h>
+#include <script/varops.h>
 #include <serialize.h>
 #include <span.h>
 #include <tinyformat.h>
 #include <uint256.h>
+#include <util/check.h>
 
 #include <algorithm>
-#include <cassert>
 #include <compare>
 #include <cstring>
 #include <limits>
@@ -1927,7 +1930,7 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
 
-static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh)
+static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, const std::vector<unsigned char>& program, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, bool is_p2sh, varops::Budget& varops_budget)
 {
     CScript exec_script; //!< Actually executed script (last stack item in P2WSH; implied P2PKH script in P2WPKH; leaf script in P2TR)
     std::span stack{witness.stack};
@@ -2012,7 +2015,97 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
+bool SpendsTapleaf0xC2(const CScriptWitness& witness_in, const CScript& script_pub_key)
+{
+    std::span<const valtype> witness{witness_in.stack};
+    // Drop the annex (BIP 341).
+    if (witness.size() >= 2 && !witness.back().empty() && witness.back()[0] == ANNEX_TAG) {
+        witness = witness.first(witness.size() - 1);
+    }
+    return script_pub_key.IsPayToTaproot() && witness.size() >= 2 && !witness.back().empty() &&
+           (witness.back()[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_0XC2;
+}
+
+//! Whether an input's weight funds the varops budget (BIP 440): every input but
+//! those whose signature checks other limits bound, namely legacy and witness v0
+//! spends, native or P2SH-wrapped, Taproot key-path spends and Tapleaf 0xC0
+//! script-path spends. The witness program is found as VerifyScript finds it.
+//! How an input funds its transaction's varops budget (BIP 440).
+enum class VaropsFunding {
+    NONE,
+    WEIGHT,
+    //! A Taproot script path, whose BIP 341 commitment check the budget pays.
+    WEIGHT_LESS_COMMITMENT,
+};
+
+static VaropsFunding GetVaropsFunding(const CTxIn& txin, const CScript& script_pub_key)
+{
+    int version;
+    std::vector<unsigned char> program;
+    bool p2sh{false};
+    if (!script_pub_key.IsWitnessProgram(version, program)) {
+        if (!script_pub_key.IsPayToScriptHash()) return VaropsFunding::NONE;
+        // The redeemScript is the scriptSig's last push.
+        p2sh = true;
+        std::vector<unsigned char> redeem_script;
+        opcodetype opcode;
+        for (CScript::const_iterator pc{txin.scriptSig.begin()}; pc < txin.scriptSig.end();) {
+            if (!txin.scriptSig.GetOp(pc, opcode, redeem_script) || opcode > OP_16) return VaropsFunding::NONE;
+        }
+        if (!CScript(redeem_script.begin(), redeem_script.end()).IsWitnessProgram(version, program)) return VaropsFunding::NONE;
+    }
+    if (version == 0) return VaropsFunding::NONE;
+    if (version != 1 || program.size() != WITNESS_V1_TAPROOT_SIZE || p2sh) return VaropsFunding::WEIGHT;
+    std::span<const valtype> witness{txin.scriptWitness.stack};
+    // Drop the annex (BIP 341).
+    if (witness.size() >= 2 && !witness.back().empty() && witness.back()[0] == ANNEX_TAG) {
+        witness = witness.first(witness.size() - 1);
+    }
+    if (witness.size() == 1) return VaropsFunding::NONE;
+    if (witness.size() < 2) return VaropsFunding::WEIGHT;
+    if (!witness.back().empty() && (witness.back()[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT) return VaropsFunding::NONE;
+    return VaropsFunding::WEIGHT_LESS_COMMITMENT;
+}
+
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
+{
+    assert(spent_outputs.size() == tx.vin.size());
+    bool has_participant{false};
+    for (size_t i{0}; i < tx.vin.size(); ++i) {
+        has_participant |= SpendsTapleaf0xC2(tx.vin[i].scriptWitness, spent_outputs[i].scriptPubKey);
+    }
+    if (!has_participant) return 0;
+
+    // With a participant the transaction has a witness, so every input's witness
+    // stack, even an empty one, counts toward its weight.
+    int64_t weight{GetTransactionWeight(tx)};
+    uint64_t commitments{0};
+    for (size_t i{0}; i < tx.vin.size(); ++i) {
+        switch (GetVaropsFunding(tx.vin[i], spent_outputs[i].scriptPubKey)) {
+        case VaropsFunding::NONE:
+            weight -= WITNESS_SCALE_FACTOR * static_cast<int64_t>(::GetSerializeSize(tx.vin[i])) +
+                      static_cast<int64_t>(::GetSerializeSize(tx.vin[i].scriptWitness.stack));
+            break;
+        case VaropsFunding::WEIGHT:
+            break;
+        case VaropsFunding::WEIGHT_LESS_COMMITMENT:
+            ++commitments;
+            break;
+        }
+    }
+    // Each commitment check costs one SIGCHECK, less than its input's own weight funds.
+    const uint64_t commitment_cost{commitments * varops::SignatureCost()};
+    Assume(varops::TxBudget(weight) >= commitment_cost);
+    return varops::TxBudget(weight) - commitment_cost;
+}
+
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror)
+{
+    varops::Budget varops_budget{varops::TxBudget(MAX_BLOCK_WEIGHT)};
+    return VerifyScript(scriptSig, scriptPubKey, witness, flags, checker, serror, varops_budget);
+}
+
+bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, varops::Budget& varops_budget)
 {
     static const CScriptWitness emptyWitness;
     if (witness == nullptr) {
@@ -2052,7 +2145,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                 // The scriptSig must be _exactly_ CScript(), otherwise we reintroduce malleability.
                 return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED);
             }
-            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false)) {
+            if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/false, varops_budget)) {
                 return false;
             }
             // Bypass the cleanstack check at the end. The actual stack is obviously not clean
@@ -2097,7 +2190,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
                     // reintroduce malleability.
                     return set_error(serror, SCRIPT_ERR_WITNESS_MALLEATED_P2SH);
                 }
-                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true)) {
+                if (!VerifyWitnessProgram(*witness, witnessversion, witnessprogram, flags, checker, serror, /*is_p2sh=*/true, varops_budget)) {
                     return false;
                 }
                 // Bypass the cleanstack check at the end. The actual stack is obviously not clean
