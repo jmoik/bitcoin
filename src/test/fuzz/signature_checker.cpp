@@ -4,6 +4,7 @@
 
 #include <pubkey.h>
 #include <script/interpreter.h>
+#include <script/varops.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
@@ -60,5 +61,6 @@ FUZZ_TARGET(signature_checker)
     if (!IsValidFlagCombination(flags)) {
         return;
     }
-    (void)VerifyScript(script_1, script_2, nullptr, flags, FuzzedSignatureChecker(fuzzed_data_provider), nullptr);
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    (void)VerifyScript(script_1, script_2, nullptr, flags, FuzzedSignatureChecker(fuzzed_data_provider), nullptr, varops_budget);
 }

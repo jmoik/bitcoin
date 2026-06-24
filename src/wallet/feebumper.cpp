@@ -8,6 +8,7 @@
 #include <node/types.h>
 #include <policy/fees.h>
 #include <policy/policy.h>
+#include <script/varops.h>
 #include <util/moneystr.h>
 #include <util/rbf.h>
 #include <util/translation.h>
@@ -229,7 +230,10 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
             SignatureWeights weights;
             TransactionSignatureChecker tx_checker(wtx.tx.get(), i, coin.out.nValue, txdata, MissingDataBehavior::FAIL);
             SignatureWeightChecker size_checker(weights, tx_checker);
-            VerifyScript(txin.scriptSig, coin.out.scriptPubKey, &txin.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, size_checker);
+            // Unlimited budget: this run only measures signature sizes and its
+            // result is ignored; budget enforcement happens at relay/consensus.
+            varops::Budget varops_budget{varops::UnlimitedBudget()};
+            VerifyScript(txin.scriptSig, coin.out.scriptPubKey, &txin.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, size_checker, nullptr, varops_budget);
             // Add the difference between max and current to input_weight so that it represents the largest the input could be
             input_weight += weights.GetWeightDiffToMax();
             new_coin_control.SetInputWeight(txin.prevout, input_weight);

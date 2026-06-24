@@ -23,6 +23,7 @@
 #include <policy/policy.h>
 #include <script/script_error.h>
 #include <script/sigcache.h>
+#include <script/varops.h>
 #include <script/verify_flags.h>
 #include <sync.h>
 #include <txdb.h>
@@ -338,10 +339,21 @@ private:
     bool cacheStore;
     PrecomputedTransactionData *txdata;
     SignatureCache* m_signature_cache;
+    std::shared_ptr<varops::Budget> m_varops_budget;
 
 public:
-    CScriptCheck(const CTxOut& outIn, const CTransaction& txToIn, SignatureCache& signature_cache, unsigned int nInIn, script_verify_flags flags, bool cacheIn, PrecomputedTransactionData* txdataIn) :
-        m_tx_out(outIn), ptxTo(&txToIn), nIn(nInIn), m_flags(flags), cacheStore(cacheIn), txdata(txdataIn), m_signature_cache(&signature_cache) { }
+    CScriptCheck(const CTxOut& outIn, const CTransaction& txToIn, SignatureCache& signature_cache, unsigned int nInIn, script_verify_flags flags, bool cacheIn, PrecomputedTransactionData* txdataIn, std::shared_ptr<varops::Budget> varops_budget) :
+        m_tx_out(outIn),
+        ptxTo(&txToIn),
+        nIn(nInIn),
+        m_flags(flags),
+        cacheStore(cacheIn),
+        txdata(txdataIn),
+        m_signature_cache(&signature_cache),
+        m_varops_budget(std::move(varops_budget))
+    {
+        Assert(m_varops_budget);
+    }
 
     CScriptCheck(const CScriptCheck&) = delete;
     CScriptCheck& operator=(const CScriptCheck&) = delete;

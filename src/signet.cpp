@@ -14,6 +14,7 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
+#include <script/varops.h>
 #include <span.h>
 #include <streams.h>
 #include <uint256.h>
@@ -144,7 +145,9 @@ bool CheckSignetBlockSolution(const CBlock& block, const Consensus::Params& cons
     txdata.Init(signet_txs->m_to_sign, {signet_txs->m_to_spend.vout[0]});
     TransactionSignatureChecker sigcheck(&signet_txs->m_to_sign, /* nInIn= */ 0, /* amountIn= */ signet_txs->m_to_spend.vout[0].nValue, txdata, MissingDataBehavior::ASSERT_FAIL);
 
-    if (!VerifyScript(scriptSig, signet_txs->m_to_spend.vout[0].scriptPubKey, &witness, BLOCK_SCRIPT_VERIFY_FLAGS, sigcheck)) {
+    // The signet challenge is a fixed, signer-controlled script: validate it without a varops budget.
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    if (!VerifyScript(scriptSig, signet_txs->m_to_spend.vout[0].scriptPubKey, &witness, BLOCK_SCRIPT_VERIFY_FLAGS, sigcheck, nullptr, varops_budget)) {
         LogDebug(BCLog::VALIDATION, "CheckSignetBlockSolution: Errors in block (block solution invalid)\n");
         return false;
     }

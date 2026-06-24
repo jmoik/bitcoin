@@ -9,6 +9,7 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/signingprovider.h>
+#include <script/varops.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
@@ -27,7 +28,8 @@ static bool VerifyTemplateCheck(const CMutableTransaction& tx, unsigned int in_i
     PrecomputedTransactionData precomp;
     precomp.Init(tx, std::move(spent_outputs));
     const auto checker{GenericTransactionSignatureChecker(&tx, in_index, dummy_am, precomp, mdb)};
-    return VerifyScript(tx.vin[in_index].scriptSig, spent_spk, &tx.vin[in_index].scriptWitness, VERIFY_FLAGS, checker);
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    return VerifyScript(tx.vin[in_index].scriptSig, spent_spk, &tx.vin[in_index].scriptWitness, VERIFY_FLAGS, checker, nullptr, varops_budget);
 }
 
 /** Target specialized on the new logic introduced for OP_TEMPLATEHASH. */

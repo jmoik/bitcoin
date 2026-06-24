@@ -8,6 +8,7 @@
 #include <script/miniscript.h>
 #include <script/script.h>
 #include <script/signingprovider.h>
+#include <script/varops.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
@@ -1131,7 +1132,8 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
         witness_nonmal.stack.insert(witness_nonmal.stack.end(), std::make_move_iterator(stack_nonmal.begin()), std::make_move_iterator(stack_nonmal.end()));
         SatisfactionToWitness(script_ctx, witness_nonmal, script, builder);
         ScriptError serror;
-        bool res = VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness_nonmal, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX, &serror);
+        varops::Budget varops_budget{varops::UnlimitedBudget()};
+        bool res = VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness_nonmal, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX, &serror, varops_budget);
         // Non-malleable satisfactions are guaranteed to be valid if ValidSatisfactions().
         if (node->ValidSatisfactions()) assert(res);
         // More detailed: non-malleable satisfactions must be valid, or could fail with ops count error (if CheckOpsLimit failed),
@@ -1146,7 +1148,8 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
         witness_mal.stack.insert(witness_mal.stack.end(), std::make_move_iterator(stack_mal.begin()), std::make_move_iterator(stack_mal.end()));
         SatisfactionToWitness(script_ctx, witness_mal, script, builder);
         ScriptError serror;
-        bool res = VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness_mal, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX, &serror);
+        varops::Budget varops_budget{varops::UnlimitedBudget()};
+        bool res = VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness_mal, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX, &serror, varops_budget);
         // Malleable satisfactions are not guaranteed to be valid under any conditions, but they can only
         // fail due to stack or ops limits.
         assert(res || serror == ScriptError::SCRIPT_ERR_OP_COUNT || serror == ScriptError::SCRIPT_ERR_STACK_SIZE);

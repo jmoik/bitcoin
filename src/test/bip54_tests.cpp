@@ -22,6 +22,7 @@
 #include <script/script.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <script/varops.h>
 #include <streams.h>
 #include <test/data/bip54_coinbases.json.h>
 #include <test/data/bip54_timestamps.json.h>
@@ -117,7 +118,8 @@ static bool VerifyTxin(const CScript& spent_script, const CMutableTransaction& t
     PrecomputedTransactionData txdata;
     txdata.Init(tx, std::move(spent_outputs), /*force=*/true);
     const MutableTransactionSignatureChecker checker{&tx, idx, amount, txdata, MissingDataBehavior::ASSERT_FAIL};
-    return VerifyScript(tx.vin[idx].scriptSig, spent_script, &tx.vin[idx].scriptWitness, MANDATORY_SCRIPT_VERIFY_FLAGS, checker);
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    return VerifyScript(tx.vin[idx].scriptSig, spent_script, &tx.vin[idx].scriptWitness, MANDATORY_SCRIPT_VERIFY_FLAGS, checker, nullptr, varops_budget);
 }
 
 /** Verify a Segwit v0 input's script. */

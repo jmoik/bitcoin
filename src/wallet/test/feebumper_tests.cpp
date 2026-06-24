@@ -6,6 +6,7 @@
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/varops.h>
 #include <util/strencodings.h>
 #include <wallet/feebumper.h>
 #include <wallet/test/util.h>
@@ -33,7 +34,8 @@ static void CheckMaxWeightComputation(const std::string& script_str, const std::
     int64_t weight = GetTransactionInputWeight(input);
     SignatureWeights weights;
     SignatureWeightChecker size_checker(weights, DUMMY_CHECKER);
-    bool script_ok = VerifyScript(input.scriptSig, prevout_script, &input.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, size_checker);
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    bool script_ok = VerifyScript(input.scriptSig, prevout_script, &input.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, size_checker, nullptr, varops_budget);
     BOOST_CHECK(script_ok);
     weight += weights.GetWeightDiffToMax();
     BOOST_CHECK_EQUAL(weight, expected_max_weight);

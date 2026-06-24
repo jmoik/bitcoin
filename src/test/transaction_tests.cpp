@@ -23,6 +23,7 @@
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <script/varops.h>
 #include <streams.h>
 #include <test/util/json.h>
 #include <test/util/random.h>
@@ -35,6 +36,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 
 #include <boost/test/unit_test.hpp>
@@ -51,6 +53,11 @@ static CFeeRate g_dust{DUST_RELAY_TX_FEE};
 static bool g_bare_multi{DEFAULT_PERMIT_BAREMULTISIG};
 
 static const std::map<std::string, script_verify_flag_name>& mapFlagNames = g_verify_flag_names;
+
+static uint64_t TestVaropsBudget(script_verify_flags, const CTransaction&)
+{
+    return varops::UNLIMITED_BUDGET;
+}
 
 script_verify_flags ParseScriptFlags(std::string strFlags)
 {
@@ -92,8 +99,9 @@ bool CheckTxScripts(const CTransaction& tx, const std::map<COutPoint, CScript>& 
         const CTxIn input = tx.vin[i];
         const CAmount amount = map_prevout_values.count(input.prevout) ? map_prevout_values.at(input.prevout) : 0;
         try {
+            varops::Budget varops_budget{TestVaropsBudget(flags, tx)};
             tx_valid = VerifyScript(input.scriptSig, map_prevout_scriptPubKeys.at(input.prevout),
-                &input.scriptWitness, flags, TransactionSignatureChecker(&tx, i, amount, txdata, MissingDataBehavior::ASSERT_FAIL), &err);
+                &input.scriptWitness, flags, TransactionSignatureChecker(&tx, i, amount, txdata, MissingDataBehavior::ASSERT_FAIL), &err, varops_budget);
         } catch (...) {
             BOOST_ERROR("Bad test: " << strTest);
             return true; // The test format is bad and an error is thrown. Return true to silence further error.
@@ -457,7 +465,8 @@ static void CheckWithFlag(const CTransactionRef& output, const CMutableTransacti
 {
     ScriptError error;
     CTransaction inputi(input);
-    bool ret = VerifyScript(inputi.vin[0].scriptSig, output->vout[0].scriptPubKey, &inputi.vin[0].scriptWitness, flags, TransactionSignatureChecker(&inputi, 0, output->vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &error);
+    varops::Budget varops_budget{TestVaropsBudget(flags, inputi)};
+    bool ret = VerifyScript(inputi.vin[0].scriptSig, output->vout[0].scriptPubKey, &inputi.vin[0].scriptWitness, flags, TransactionSignatureChecker(&inputi, 0, output->vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &error, varops_budget);
     assert(ret == success);
 }
 
@@ -547,10 +556,11 @@ BOOST_AUTO_TEST_CASE(test_big_witness_transaction)
     }
 
     SignatureCache signature_cache{DEFAULT_SIGNATURE_CACHE_BYTES};
+    std::shared_ptr<varops::Budget> varops_budget{std::make_shared<varops::Budget>(varops::TxBudget(GetTransactionWeight(tx)))};
 
     for(uint32_t i = 0; i < mtx.vin.size(); i++) {
         std::vector<CScriptCheck> vChecks;
-        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, signature_cache, i, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata);
+        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, signature_cache, i, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata, varops_budget);
         control.Add(std::move(vChecks));
     }
 

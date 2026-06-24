@@ -11,6 +11,7 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/solver.h>
+#include <script/varops.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
 
@@ -73,7 +74,8 @@ static ScriptError VerifyWithFlag(const CTransaction& output, const CMutableTran
 {
     ScriptError error;
     CTransaction inputi(input);
-    bool ret = VerifyScript(inputi.vin[0].scriptSig, output.vout[0].scriptPubKey, &inputi.vin[0].scriptWitness, flags, TransactionSignatureChecker(&inputi, 0, output.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &error);
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
+    bool ret = VerifyScript(inputi.vin[0].scriptSig, output.vout[0].scriptPubKey, &inputi.vin[0].scriptWitness, flags, TransactionSignatureChecker(&inputi, 0, output.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL), &error, varops_budget);
     BOOST_CHECK((ret == true) == (error == SCRIPT_ERR_OK));
 
     return error;

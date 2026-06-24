@@ -7,6 +7,7 @@
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
+#include <script/varops.h>
 #include <serialize.h>
 #include <streams.h>
 #include <univalue.h>
@@ -167,7 +168,8 @@ void Test(const std::string& str)
             // "final": true tests are valid for all flags. Others are only valid with flags that are
             // a subset of test_flags.
             if (final || ((flags & test_flags) == flags)) {
-                (void)VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr);
+                varops::Budget varops_budget{varops::UnlimitedBudget()};
+                (void)VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr, varops_budget);
             }
         }
     }
@@ -181,7 +183,8 @@ void Test(const std::string& str)
         for (const auto flags : ALL_FLAGS) {
             // If a test is supposed to fail with test_flags, it should also fail with any superset thereof.
             if ((flags & test_flags) == test_flags) {
-                (void)VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr);
+                varops::Budget varops_budget{varops::UnlimitedBudget()};
+                (void)VerifyScript(tx.vin[idx].scriptSig, prevouts[idx].scriptPubKey, &tx.vin[idx].scriptWitness, flags, txcheck, nullptr, varops_budget);
             }
         }
     }

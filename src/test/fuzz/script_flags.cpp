@@ -5,6 +5,7 @@
 #include <consensus/amount.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
+#include <script/varops.h>
 #include <serialize.h>
 #include <streams.h>
 #include <test/fuzz/fuzz.h>
@@ -56,7 +57,8 @@ FUZZ_TARGET(script_flags)
             const TransactionSignatureChecker checker{&tx, i, prevout.nValue, txdata, MissingDataBehavior::ASSERT_FAIL};
 
             ScriptError serror;
-            const bool ret = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror);
+            varops::Budget varops_budget{varops::UnlimitedBudget()};
+            const bool ret = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror, varops_budget);
             assert(ret == (serror == SCRIPT_ERR_OK));
 
             // Verify that removing flags from a passing test or adding flags to a failing test does not change the result
@@ -68,7 +70,8 @@ FUZZ_TARGET(script_flags)
             if (!IsValidFlagCombination(verify_flags)) return;
 
             ScriptError serror_fuzzed;
-            const bool ret_fuzzed = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror_fuzzed);
+            varops::Budget fuzzed_varops_budget{varops::UnlimitedBudget()};
+            const bool ret_fuzzed = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror_fuzzed, fuzzed_varops_budget);
             assert(ret_fuzzed == (serror_fuzzed == SCRIPT_ERR_OK));
 
             assert(ret_fuzzed == ret);

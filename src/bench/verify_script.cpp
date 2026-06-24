@@ -9,6 +9,7 @@
 #include <pubkey.h>
 #include <script/interpreter.h>
 #include <script/script.h>
+#include <script/varops.h>
 #include <span.h>
 #include <test/util/transaction_utils.h>
 #include <uint256.h>
@@ -52,6 +53,7 @@ static void VerifyScriptBench(benchmark::Bench& bench)
     witness.stack.push_back(ToByteVector(pubkey));
 
     // Benchmark.
+    varops::Budget varops_budget{varops::UnlimitedBudget()};
     bench.run([&] {
         ScriptError err;
         bool success = VerifyScript(
@@ -60,7 +62,8 @@ static void VerifyScriptBench(benchmark::Bench& bench)
             &txSpend.vin[0].scriptWitness,
             flags,
             MutableTransactionSignatureChecker(&txSpend, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL),
-            &err);
+            &err,
+            varops_budget);
         assert(err == SCRIPT_ERR_OK);
         assert(success);
     });
