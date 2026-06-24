@@ -179,6 +179,7 @@ static std::string sigver2str(SigVersion sigver)
     case SigVersion::WITNESS_V0: return "witness_v0";
     case SigVersion::TAPROOT: return "taproot";
     case SigVersion::TAPSCRIPT: return "tapscript";
+    case SigVersion::TAPSCRIPT_V2: return "tapscript_v2";
     }
     return "unknown";
 }

@@ -222,14 +222,6 @@ template<typename TxType>
 uint256 GetDefaultCheckTemplateVerifyHash(const TxType& tx, const uint256& outputs_hash, const uint256& sequences_hash,
                                 const uint32_t input_index);
 
-enum class SigVersion
-{
-    BASE = 0,        //!< Bare scripts and BIP16 P2SH-wrapped redeemscripts
-    WITNESS_V0 = 1,  //!< Witness v0 (P2WPKH and P2WSH); see BIP 141
-    TAPROOT = 2,     //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, key path spending; see BIP 341
-    TAPSCRIPT = 3,   //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, script path spending, leaf version 0xc0; see BIP 342
-};
-
 enum class KeyVersion
 {
     TAPROOT = 0,     //!< 32 byte public key
@@ -274,6 +266,7 @@ static constexpr size_t WITNESS_V1_TAPROOT_SIZE = 32;
 
 static constexpr uint8_t TAPROOT_LEAF_MASK = 0xfe;
 static constexpr uint8_t TAPROOT_LEAF_TAPSCRIPT = 0xc0;
+static constexpr uint8_t TAPROOT_LEAF_TAPSCRIPT_V2 = 0xc2;
 static constexpr size_t TAPROOT_CONTROL_BASE_SIZE = 33;
 static constexpr size_t TAPROOT_CONTROL_NODE_SIZE = 32;
 static constexpr size_t TAPROOT_CONTROL_MAX_NODE_COUNT = 128;

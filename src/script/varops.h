@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace varops {
@@ -105,6 +106,27 @@ constexpr uint64_t MinWordSize(size_t size1, size_t size2)
 {
     return std::min(WordSize(size1), WordSize(size2));
 }
+
+// BIP 441 costs are maximal when every operand has the maximum permitted size.
+constexpr uint64_t MAX_COST_SIZE{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE};
+constexpr uint64_t MAX_U64{std::numeric_limits<uint64_t>::max()};
+constexpr uint64_t MAX_COST_WORD_SIZE{WordSize(MAX_COST_SIZE)};
+constexpr uint64_t MAX_MUL_COPY_COST{2 * MAX_COST_SIZE * COST_COPYING};
+constexpr uint64_t MAX_DIV_SQUARE{MAX_COST_WORD_SIZE * MAX_COST_WORD_SIZE};
+constexpr uint64_t MAX_DIV_QUADRATIC{MAX_DIV_SQUARE * 2 / 3};
+
+// These bounds prove that every intermediate in the maximum-size BIP 441 cost
+// expressions fits in uint64_t, not merely each final result.
+static_assert(MAX_COST_SIZE <= MAX_U64 - 7);
+static_assert(MAX_COST_SIZE <= MAX_U64 / (2 * COST_COPYING));
+static_assert(MAX_COST_WORD_SIZE / 8 <=
+                  (MAX_U64 - MAX_MUL_COPY_COST) / COST_MUL_QUAD / MAX_COST_WORD_SIZE,
+              "maximum OP_MUL cost must fit in uint64_t");
+static_assert(MAX_COST_WORD_SIZE <= MAX_U64 / MAX_COST_WORD_SIZE);
+static_assert(MAX_DIV_SQUARE <= MAX_U64 / 2);
+static_assert(MAX_COST_WORD_SIZE <=
+                  (MAX_U64 - MAX_DIV_QUADRATIC) / (3 * COST_ARITH + COST_OTHER),
+              "maximum OP_DIV and OP_MOD cost must fit in uint64_t");
 
 } // namespace detail
 
