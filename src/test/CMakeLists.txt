@@ -101,6 +101,8 @@ add_executable(test_bitcoin
   streams_tests.cpp
   sync_tests.cpp
   system_tests.cpp
+  tapscript_v2_json_tests.cpp
+  tapscript_v2_tests.cpp
   timeoffsets_tests.cpp
   torcontrol_tests.cpp
   transaction_tests.cpp
@@ -141,6 +143,8 @@ target_json_data_sources(test_bitcoin
   data/key_io_valid.json
   data/script_tests.json
   data/sighash.json
+  data/tapscript_v2_restored_ops.json
+  data/tapscript_v2_varops.json
   data/tx_invalid.json
   data/tx_valid.json
   data/val64_conversion.json
