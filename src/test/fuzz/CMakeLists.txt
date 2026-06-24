@@ -13,6 +13,7 @@ add_executable(fuzz
   banman.cpp
   base_encode_decode.cpp
   bech32.cpp
+  biguint_ops.cpp
   bip324.cpp
   bitdeque.cpp
   bitset.cpp
@@ -125,6 +126,7 @@ add_executable(fuzz
   string.cpp
   strprintf.cpp
   system.cpp
+  tapleaf_0xc2_eval.cpp
   threadpool.cpp
   timeoffsets.cpp
   torcontrol.cpp
