@@ -13,7 +13,7 @@
 #include <stdexcept>
 #include <utility>
 
-ValtypeStack::ValtypeStack(Span<const valtype> plain_stack) : m_stack(plain_stack.begin(), plain_stack.end())
+ValtypeStack::ValtypeStack(std::span<const valtype> plain_stack) : m_stack(plain_stack.begin(), plain_stack.end())
 {
     RecalculateSizeTracking();
 }
