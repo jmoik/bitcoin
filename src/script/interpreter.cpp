@@ -5,6 +5,7 @@
 
 #include <script/interpreter.h>
 
+#include <consensus/validation.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
@@ -2218,6 +2219,32 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
         return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
 
     return set_success(serror);
+}
+
+uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
+{
+    assert(spent_outputs.size() == tx.vin.size());
+    int64_t weight{GetTransactionWeight(tx)};
+    const bool has_witness{tx.HasWitness()};
+    bool has_participant{false};
+    for (size_t i{0}; i < tx.vin.size(); ++i) {
+        const auto& input{tx.vin[i]};
+        std::span<const valtype> witness{input.scriptWitness.stack};
+        if (witness.size() >= 2 && !witness.back().empty() && witness.back()[0] == ANNEX_TAG) {
+            witness = witness.first(witness.size() - 1);
+        }
+        // Authentication of the control block remains the script verifier's job.
+        const bool participates{spent_outputs[i].scriptPubKey.IsPayToTaproot() && witness.size() >= 2 &&
+                                !witness.back().empty() &&
+                                (witness.back()[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2};
+        if (participates) {
+            has_participant = true;
+        } else {
+            weight -= WITNESS_SCALE_FACTOR * static_cast<int64_t>(::GetSerializeSize(input));
+            if (has_witness) weight -= ::GetSerializeSize(input.scriptWitness.stack);
+        }
+    }
+    return has_participant ? varops::TxBudget(weight) : 0;
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
