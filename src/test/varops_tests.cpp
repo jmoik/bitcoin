@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <consensus/validation.h>
+#include <script/interpreter.h>
 #include <script/varops.h>
 
 #include <boost/test/unit_test.hpp>
@@ -16,6 +18,48 @@
 #include <vector>
 
 BOOST_AUTO_TEST_SUITE(varops_tests)
+
+BOOST_AUTO_TEST_CASE(participating_input_funding)
+{
+    using valtype = std::vector<unsigned char>;
+    CMutableTransaction tx;
+    tx.vin.resize(2);
+    tx.vout.emplace_back(1, CScript{} << OP_TRUE);
+    const CScript taproot{CScript{} << OP_1 << std::vector<unsigned char>(32, 1)};
+    std::vector<CTxOut> spent_outputs(2, CTxOut{1, taproot});
+    const valtype control(33, TAPROOT_LEAF_TAPSCRIPT_V2);
+    for (auto& input : tx.vin) input.scriptWitness.stack = {{OP_TRUE}, control};
+    auto budget = [&] { return GetTransactionVaropsBudget(CTransaction{tx}, spent_outputs); };
+    auto whole_budget = [&] { return varops::TxBudget(GetTransactionWeight(CTransaction{tx})); };
+    auto excluded_weight = [&] {
+        return WITNESS_SCALE_FACTOR * ::GetSerializeSize(tx.vin[1]) +
+               ::GetSerializeSize(tx.vin[1].scriptWitness.stack);
+    };
+    BOOST_CHECK_EQUAL(budget(), whole_budget());
+    // Annex and output-key parity do not change the leaf version.
+    tx.vin[0].scriptWitness.stack.back()[0] |= 1;
+    tx.vin[0].scriptWitness.stack.push_back({ANNEX_TAG, 1, 2});
+    BOOST_CHECK_EQUAL(budget(), whole_budget());
+    for (const unsigned char version : {0xc0, 0xc4}) {
+        tx.vin[1].scriptWitness.stack.back()[0] = version;
+        BOOST_CHECK_EQUAL(budget(), whole_budget() - varops::TxBudget(excluded_weight()));
+    }
+    // A key-path signature, even one starting with c2, is not a v2 script.
+    tx.vin[1].scriptWitness.stack = {valtype(64, 0xc2), {ANNEX_TAG}};
+    BOOST_CHECK_EQUAL(budget(), whole_budget() - varops::TxBudget(excluded_weight()));
+    // Legacy, v0 and missing UTXOs cannot claim funding by imitating a v2 witness.
+    tx.vin[1].scriptWitness.stack = {{OP_TRUE}, control};
+    for (const CScript& script : {CScript{} << OP_TRUE, CScript{} << OP_0 << valtype(32, 1), CScript{}}) {
+        spent_outputs[1].scriptPubKey = script;
+        BOOST_CHECK_EQUAL(budget(), whole_budget() - varops::TxBudget(excluded_weight()));
+    }
+    // CompactSize boundaries count exactly, including scriptSig and witness prefixes.
+    tx.vin[1].scriptSig.assign(253, 0);
+    tx.vin[1].scriptWitness.stack = {valtype(253, 0)};
+    BOOST_CHECK_EQUAL(budget(), whole_budget() - varops::TxBudget(excluded_weight()));
+    spent_outputs[0].SetNull();
+    BOOST_CHECK_EQUAL(budget(), 0);
+}
 
 BOOST_AUTO_TEST_CASE(bip440_cost_constants)
 {
