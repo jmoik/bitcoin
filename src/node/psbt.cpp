@@ -103,6 +103,11 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx)
     }
     assert(result.next > PSBTRole::CREATOR);
 
+    if (result.next == PSBTRole::EXTRACTOR && !PSBTInputsSignedAndVerified(psbtx, txdata)) {
+        result.SetInvalid("PSBT is not valid. Finalized transaction exceeds the varops budget");
+        return result;
+    }
+
     if (calc_fee) {
         // Get the output amount
         CAmount out_amt = std::accumulate(psbtx.outputs.begin(), psbtx.outputs.end(), CAmount(0),
