@@ -1444,6 +1444,7 @@ inline constexpr script_verify_flags CONSENSUS_SCRIPT_VERIFY_FLAGS{
     | SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY
     | SCRIPT_VERIFY_CHECKSEQUENCEVERIFY
     | SCRIPT_VERIFY_NULLDUMMY
+    | SCRIPT_VERIFY_TAPLEAF_0XC2
 };
 
 // Returns the script flags which should be checked for a given block

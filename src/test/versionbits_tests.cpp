@@ -448,12 +448,15 @@ BOOST_FIXTURE_TEST_CASE(blockscriptflags, RegTestingSetup)
     // CONSENSUS_SCRIPT_VERIFY_FLAGS, so that it's never a consensus
     // flag for any chain, or ensure the deployment is enabled by
     // default for RegTest.
+    // Exception: SCRIPT_VERIFY_TAPLEAF_0XC2 is not enabled by default on any
+    // chain until BIP 440 and BIP 441 specify a deployment.
+    constexpr script_verify_flags regtest_flags{CONSENSUS_SCRIPT_VERIFY_FLAGS & ~SCRIPT_VERIFY_TAPLEAF_0XC2};
     auto regtest{CreateChainParams(*m_node.args, ChainType::REGTEST)};
-    BOOST_CHECK_EQUAL(ChainstateManager::GetAllConsensusScriptFlags(regtest->GetConsensus()).as_int(), CONSENSUS_SCRIPT_VERIFY_FLAGS.as_int());
+    BOOST_CHECK_EQUAL(ChainstateManager::GetAllConsensusScriptFlags(regtest->GetConsensus()).as_int(), regtest_flags.as_int());
 
     // Check stored value is consistent
     ChainstateManager& chainman = *m_node.chainman;
-    BOOST_CHECK_EQUAL(chainman.m_all_consensus_script_flags.as_int(), CONSENSUS_SCRIPT_VERIFY_FLAGS.as_int());
+    BOOST_CHECK_EQUAL(chainman.m_all_consensus_script_flags.as_int(), regtest_flags.as_int());
 
     // Every other chain should have a subset (though this should already have been checked at compile-time)
     for (const auto& chain_type : {ChainType::MAIN, ChainType::TESTNET, ChainType::TESTNET4, ChainType::SIGNET}) {
