@@ -12,10 +12,13 @@
 #include <common/args.h>
 #include <common/system.h>
 #include <compat/compat.h>
+#include <consensus/validation.h>
 #include <core_io.h>
 #include <deploymentinfo.h>
 #include <policy/policy.h>
 #include <script/interpreter.h>
+#include <script/valtype_stack.h>
+#include <script/varops.h>
 #include <streams.h>
 #include <univalue.h>
 #include <util/check.h>
@@ -27,7 +30,9 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <thread>
+#include <utility>
 
 static const int CONTINUE_EXECUTION=-1;
 
@@ -40,15 +45,16 @@ static void SetupBitcoinUtilArgs(ArgsManager &argsman)
     argsman.AddArg("-version", "Print version and exit", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 
     // evalscript options
-    argsman.AddArg("-sigversion", "Specify a script sigversion (base, witness_v0, tapscript).", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
+    argsman.AddArg("-sigversion", "Specify a script sigversion (base, witness_v0, tapscript, tapscript_v2).", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
     argsman.AddArg("-script_flags", "Specify SCRIPT_VERIFY flags.", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
+    argsman.AddArg("-varops_budget", "Specify the Tapscript v2 varops budget (default: transaction weight times 10,000 with -tx, maximum block weight times 10,000 otherwise).", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
     argsman.AddArg("-tx", "The tx (hex encoded)", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
     argsman.AddArg("-input", "The index of the input being spent", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
     argsman.AddArg("-spent_output", "The spent prevouts (hex encode TxOut, may be specified multiple times).", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
     argsman.AddArg("-ipk", "The internal public key for a tapscript spend", ArgsManager::ALLOW_ANY, OptionsCategory::COMMAND_OPTIONS);
 
     argsman.AddCommand("grind", "Perform proof of work on hex header string");
-    argsman.AddCommand("evalscript", "Interpret a bitcoin script", {"-sigversion", "-script_flags", "-tx", "-input", "-spent_output", "-ipk"});
+    argsman.AddCommand("evalscript", "Interpret a bitcoin script", {"-sigversion", "-script_flags", "-varops_budget", "-tx", "-input", "-spent_output", "-ipk"});
 
     SetupChainParamsBaseOptions(argsman);
 }
@@ -229,6 +235,8 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
     std::unique_ptr<BaseSignatureChecker> checker;
 
     SigVersion sigversion = SigVersion::WITNESS_V0;
+    uint64_t varops_budget_amount{uint64_t{MAX_BLOCK_WEIGHT} * varops::BUDGET_PER_WEIGHT_UNIT};
+    bool varops_budget_explicit{false};
 
     if (const auto verstr = argsman.GetArg("-sigversion"); verstr.has_value()) {
         if (*verstr == "base") {
@@ -237,10 +245,20 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
             sigversion = SigVersion::WITNESS_V0;
         } else if (*verstr == "tapscript") {
             sigversion = SigVersion::TAPSCRIPT;
+        } else if (*verstr == "tapscript_v2") {
+            sigversion = SigVersion::TAPSCRIPT_V2;
         } else {
             strPrint = strprintf("Unknown -sigversion=%s", *verstr);
             return EXIT_FAILURE;
         }
+    }
+
+    if (const std::optional<std::string> budgetstr = argsman.GetArg("-varops_budget"); budgetstr.has_value()) {
+        if (!ParseUInt64(*budgetstr, &varops_budget_amount)) {
+            strPrint = strprintf("Could not parse -varops_budget=%s", *budgetstr);
+            return EXIT_FAILURE;
+        }
+        varops_budget_explicit = true;
     }
 
     const auto verifystr = argsman.GetArg("-script_flags");
@@ -268,7 +286,7 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
         }
     }
 
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (IsTapscript(sigversion)) {
         execdata.m_internal_key.emplace(NUMS_H);
     }
 
@@ -282,6 +300,9 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
             return EXIT_FAILURE;
         }
         txTo = std::make_unique<CTransaction>(mut_tx);
+        if (sigversion == SigVersion::TAPSCRIPT_V2 && !varops_budget_explicit) {
+            varops_budget_amount = varops::TxBudget(GetTransactionWeight(*txTo));
+        }
 
         if (spent_outputs_hex.size() != txTo->vin.size()) {
             strPrint = "When -tx is specified, must specify exactly one -spent_output for each input";
@@ -316,7 +337,7 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
         txdata.Init(*txTo, std::move(spent_outputs), /*force=*/true);
         checker = std::make_unique<TransactionSignatureChecker>(txTo.get(), input, amount, txdata, MissingDataBehavior::ASSERT_FAIL);
 
-        if (sigversion == SigVersion::TAPSCRIPT && input >= 0 && input_in_range) {
+        if (IsTapscript(sigversion) && input >= 0 && input_in_range) {
             if (const auto ipkhex = argsman.GetArg("-ipk"); ipkhex.has_value()) {
                 if (!IsHex(*ipkhex) || ipkhex->size() != 64) {
                     strPrint = strprintf("Not a valid x-only pubkey: -ipk=%s", *ipkhex);
@@ -338,22 +359,27 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
                 }
             }
             execdata.m_annex_init = true;
-            execdata.m_tapleaf_hash = ComputeTapleafHash(TAPROOT_LEAF_TAPSCRIPT & TAPROOT_LEAF_MASK, script);
+            const uint8_t leaf_version{sigversion == SigVersion::TAPSCRIPT ? TAPROOT_LEAF_TAPSCRIPT : TAPROOT_LEAF_TAPSCRIPT_V2};
+            execdata.m_tapleaf_hash = ComputeTapleafHash(leaf_version & TAPROOT_LEAF_MASK, script);
             execdata.m_tapleaf_hash_init = true;
-            execdata.m_validation_weight_left = ::GetSerializeSize(stack) + ::GetSerializeSize(script) + VALIDATION_WEIGHT_OFFSET;
-            execdata.m_validation_weight_left_init = true;
+            if (sigversion == SigVersion::TAPSCRIPT) {
+                execdata.m_validation_weight_left = ::GetSerializeSize(stack) + ::GetSerializeSize(script) + VALIDATION_WEIGHT_OFFSET;
+                execdata.m_validation_weight_left_init = true;
+            }
         }
     } else {
         checker = std::make_unique<DummySignatureChecker>();
     }
 
-    if (sigversion == SigVersion::TAPSCRIPT && !execdata.m_annex_init) {
+    if (IsTapscript(sigversion) && !execdata.m_annex_init) {
         execdata.m_annex_present = false;
         execdata.m_annex_init = true;
         execdata.m_tapleaf_hash = uint256::ZERO;
         execdata.m_tapleaf_hash_init = true;
-        execdata.m_validation_weight_left = ::GetSerializeSize(stack) + ::GetSerializeSize(script) + VALIDATION_WEIGHT_OFFSET;
-        execdata.m_validation_weight_left_init = true;
+        if (sigversion == SigVersion::TAPSCRIPT) {
+            execdata.m_validation_weight_left = ::GetSerializeSize(stack) + ::GetSerializeSize(script) + VALIDATION_WEIGHT_OFFSET;
+            execdata.m_validation_weight_left_init = true;
+        }
     }
 
     ScriptError serror{};
@@ -367,21 +393,52 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
     result.pushKV("script", uv_script);
     result.pushKV("sigversion", sigver2str(sigversion));
     result.pushKV("script_flags", uv_flags);
-
-    std::optional<bool> opsuccess_check;
-    if (sigversion == SigVersion::TAPSCRIPT) {
-        opsuccess_check = CheckTapscriptOpSuccess(script, flags, SigVersion::TAPSCRIPT, &serror);
+    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        result.pushKV("varops-budget", varops_budget_amount);
     }
 
-    bool success = (opsuccess_check.has_value() ? *opsuccess_check : EvalScript(stack, script, flags, *Assert(checker), sigversion, execdata, &serror));
+    varops::Budget varops_budget{varops_budget_amount};
+    std::optional<bool> opsuccess_check;
+    if (IsTapscript(sigversion)) {
+        opsuccess_check = CheckTapscriptOpSuccess(script, flags, sigversion, &serror);
+    }
+
+    bool success;
+    if (opsuccess_check.has_value()) {
+        success = *opsuccess_check;
+    } else if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        ValtypeStack valtype_stack{stack};
+        if (valtype_stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
+            success = false;
+            serror = SCRIPT_ERR_STACK_SIZE;
+        } else if (valtype_stack.get_total_size() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+            success = false;
+            serror = SCRIPT_ERR_TOTAL_STACK_SIZE;
+        } else if (valtype_stack.get_max_element_size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+            success = false;
+            serror = SCRIPT_ERR_STACK_ELEMENT_SIZE;
+        } else {
+            success = EvalTapscriptV2(valtype_stack, script, flags, *Assert(checker), execdata, varops_budget, &serror);
+            if (success) {
+                success = CheckTapscriptV2ScriptResult(valtype_stack, varops_budget, &serror);
+            }
+        }
+        stack = valtype_stack.get_stack();
+    } else {
+        success = EvalScript(stack, script, flags, *Assert(checker), sigversion, execdata, &serror);
+    }
     if (opsuccess_check.has_value()) {
          result.pushKV("opsuccess_found", true);
-    } else if (success) {
-        if (stack.empty() || !CastToBool(stack.back())) {
+    } else if (success && sigversion != SigVersion::TAPSCRIPT_V2) {
+        bool truthy{false};
+        if (!stack.empty()) {
+            truthy = CastToBool(stack.back());
+        }
+        if (!truthy) {
             success = false;
             serror = SCRIPT_ERR_EVAL_FALSE;
         } else if (stack.size() > 1) {
-            if (sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::TAPSCRIPT) {
+            if (sigversion == SigVersion::WITNESS_V0 || IsTapscript(sigversion)) {
                 success = false;
                 serror = SCRIPT_ERR_CLEANSTACK;
             } else if ((flags & SCRIPT_VERIFY_CLEANSTACK) != 0) {
@@ -392,8 +449,11 @@ static int EvalScript(const ArgsManager& argsman, const std::vector<std::string>
     }
 
     result.pushKV("stack-after", stack2uv(stack));
+    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        result.pushKV("varops-budget-remaining", varops_budget.Remaining());
+    }
 
-    result.pushKV("sigop-count", (sigversion == SigVersion::TAPSCRIPT ? 0 : script.GetSigOpCount(true)));
+    result.pushKV("sigop-count", (IsTapscript(sigversion) ? 0 : script.GetSigOpCount(true)));
 
     result.pushKV("success", success);
     if (!success) {

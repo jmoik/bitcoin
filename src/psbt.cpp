@@ -339,6 +339,24 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
     }
 }
 
+bool PSBTInputsSignedAndVerified(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata)
+{
+    const CTransaction tx{*psbt.tx};
+    varops::Budget varops_budget{varops::Budget{varops::TxBudget(FinalizedTransactionWeight(psbt))}};
+
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        CTxOut utxo;
+        if (!psbt.GetInputUTXO(utxo, i)) return false;
+
+        const PSBTInput& input{psbt.inputs.at(i)};
+        if (!VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, TransactionSignatureChecker{&tx, i, utxo.nValue, txdata, MissingDataBehavior::FAIL}, nullptr, varops_budget)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 size_t CountPSBTUnsignedInputs(const PartiallySignedTransaction& psbt) {
     size_t count = 0;
     for (const auto& input : psbt.inputs) {
@@ -504,7 +522,7 @@ bool FinalizePSBT(PartiallySignedTransaction& psbtx)
         complete &= SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, SIGHASH_ALL, nullptr, true);
     }
 
-    return complete;
+    return complete && PSBTInputsSignedAndVerified(psbtx, txdata);
 }
 
 bool FinalizeAndExtractPSBT(PartiallySignedTransaction& psbtx, CMutableTransaction& result)
