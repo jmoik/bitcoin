@@ -43,6 +43,15 @@ static const int MAX_SCRIPT_SIZE = 10000;
 // Maximum number of values on script interpreter stack
 static const int MAX_STACK_SIZE = 1000;
 
+// Maximum number of values on script interpreter stack (Tapscript v2)
+static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32'768;
+
+// BIP 441: The individual stack entry limit of 520 bytes is increased to the
+// total block weight (4000000) bytes.  An additional gross limit of twice
+// that (8000000) applies across all stack entries.
+static constexpr int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4'000'000;
+static constexpr int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
+
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
 static const unsigned int LOCKTIME_THRESHOLD = 500000000; // Tue Nov  5 00:53:20 1985 UTC
@@ -219,6 +228,30 @@ enum opcodetype
 static const unsigned int MAX_OPCODE = OP_NOP10;
 
 std::string GetOpName(opcodetype opcode);
+
+enum class SigVersion
+{
+    BASE = 0,        //!< Bare scripts and BIP16 P2SH-wrapped redeemscripts
+    WITNESS_V0 = 1,  //!< Witness v0 (P2WPKH and P2WSH); see BIP 141
+    TAPROOT = 2,     //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, key path spending; see BIP 341
+    TAPSCRIPT = 3,   //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, script path spending, leaf version 0xc0; see BIP 342
+    TAPSCRIPT_V2 = 4,   //!< Witness v1 with 32-byte program, not BIP16 P2SH-wrapped, script path spending, leaf version 0xc2;
+};
+
+/** Whether the signature version executes a Taproot script path. */
+constexpr bool IsTapscript(SigVersion sigversion)
+{
+    switch (sigversion) {
+    case SigVersion::BASE:
+    case SigVersion::WITNESS_V0:
+    case SigVersion::TAPROOT:
+        return false;
+    case SigVersion::TAPSCRIPT:
+    case SigVersion::TAPSCRIPT_V2:
+        return true;
+    }
+    assert(false);
+}
 
 class scriptnum_error : public std::runtime_error
 {
@@ -611,7 +644,7 @@ public:
 };
 
 /** Test for OP_SUCCESSx opcodes as defined by BIP342. */
-bool IsOpSuccess(const opcodetype& opcode);
+bool IsOpSuccess(const opcodetype& opcode, SigVersion sigversion);
 
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode);
 
