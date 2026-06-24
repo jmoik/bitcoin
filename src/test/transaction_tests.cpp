@@ -25,6 +25,7 @@
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <script/varops.h>
 #include <streams.h>
 #include <test/util/common.h>
 #include <test/util/json.h>
@@ -37,6 +38,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 
 #include <boost/test/unit_test.hpp>
@@ -547,10 +549,12 @@ BOOST_AUTO_TEST_CASE(test_big_witness_transaction)
     }
 
     SignatureCache signature_cache{DEFAULT_SIGNATURE_CACHE_BYTES};
+    auto varops_budget{std::make_shared<varops::Budget>(varops::TxBudget(GetTransactionWeight(tx)))};
 
     for(uint32_t i = 0; i < mtx.vin.size(); i++) {
         std::vector<CScriptCheck> vChecks;
-        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, signature_cache, i, SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata);
+        vChecks.emplace_back(coins[tx.vin[i].prevout.n].out, tx, signature_cache, i,
+                             SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, false, &txdata, varops_budget);
         control.Add(std::move(vChecks));
     }
 
