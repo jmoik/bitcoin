@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -73,6 +74,22 @@ constexpr uint64_t SchnorrVerifyCost(size_t msg_bytes) { return Sha256Cost(64 + 
 // boolean written directly as bytes (OP_1..16, EQUAL, CHECKSIG, ...) pays WRITE(8)
 // alone.
 constexpr uint64_t ScalarOutputCost() { return OutputCost(8); }
+
+// Charges are computed in uint64_t. Each opcode sums a bounded number of the
+// terms below, so bounding the superlinear ones shows no charge can wrap.
+// Both numeric operands are at most 4 MB, so DivSteps is at most MAX_V2_LIMBS + 2.
+inline constexpr uint64_t MAX_V2_LIMBS{WordCount(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)};
+static_assert(MAX_V2_LIMBS + 2 <=
+              (std::numeric_limits<uint64_t>::max() - DivCost(0, 0)) /
+                  (DivCost(1, MAX_V2_LIMBS) - DivCost(0, 0)),
+              "maximum OP_DIV and OP_MOD charge must fit in uint64_t");
+// OP_MUL: MUL plus production of the full product span, both operands maximal.
+// The shorter operand has at most as many limbs as the longer one, so each longer
+// limb adds at most MulCost(1, MAX_V2_LIMBS) - MulCost(0, 0).
+inline constexpr uint64_t MAX_MUL_STORAGE_CHARGE{WriteCost(2 * MAX_V2_LIMBS * 8)};
+static_assert(MAX_V2_LIMBS <= (std::numeric_limits<uint64_t>::max() - MulCost(0, 0) - MAX_MUL_STORAGE_CHARGE) /
+                                  (MulCost(1, MAX_V2_LIMBS) - MulCost(0, 0)),
+              "maximum OP_MUL charge must fit in uint64_t");
 
 /** Hash work only; result construction is charged separately. */
 constexpr uint64_t HashCost(opcodetype opcode, size_t input_bytes)

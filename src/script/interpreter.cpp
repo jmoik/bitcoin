@@ -410,6 +410,9 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     case SigVersion::TAPROOT:
         // Key path spending in Taproot has no script, so this is unreachable.
         break;
+    case SigVersion::TAPSCRIPT_V2:
+        // EvalScript does not run Tapscript v2, so this is unreachable.
+        break;
     }
     assert(false);
 }

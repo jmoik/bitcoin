@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <arith_uint256.h>
 #include <script/varops.h>
 
 #include <boost/test/unit_test.hpp>
@@ -61,6 +62,34 @@ BOOST_AUTO_TEST_CASE(div_steps)
     BOOST_CHECK_EQUAL(varops::DivSteps(9, 1), 10);
     BOOST_CHECK_EQUAL(varops::DivSteps(9, 8), 3);
     BOOST_CHECK_EQUAL(varops::DivSteps(9, 9), 2);
+}
+
+BOOST_AUTO_TEST_CASE(maximum_superlinear_charges_fit_in_64_bits)
+{
+    // Recompute the largest OP_MUL and OP_DIV/OP_MOD charges in 256 bits from
+    // their coefficients: the uint64_t charges must equal them, so no
+    // intermediate wrapped.
+    using Wide = arith_uint256;
+    const Wide mul_fixed{varops::MulCost(0, 0)};
+    const Wide mul_longer{varops::MulCost(1, 0) - varops::MulCost(0, 0)};
+    const Wide mul_shorter{varops::MulCost(0, 1) - varops::MulCost(0, 0)};
+    const Wide mul_cell{Wide{varops::MulCost(1, 1)} - mul_fixed - mul_longer - mul_shorter};
+    const Wide limbs{varops::MAX_V2_LIMBS};
+    const Wide mul{mul_fixed + mul_longer * limbs + mul_shorter * limbs + mul_cell * limbs * limbs +
+                   Wide{varops::MAX_MUL_STORAGE_CHARGE}};
+    BOOST_CHECK(mul == Wide{varops::MulCost(varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS) + varops::MAX_MUL_STORAGE_CHARGE});
+    BOOST_CHECK(mul > Wide{std::numeric_limits<uint32_t>::max()});
+
+    const Wide fixed{varops::DivCost(0, 0)};
+    const Wide step{varops::DivCost(1, 0) - varops::DivCost(0, 0)};
+    const Wide cell{varops::DivCost(1, 1) - varops::DivCost(1, 0)};
+    for (const auto& [dividend, divisor] : {std::pair{varops::MAX_V2_LIMBS, uint64_t{1}},
+                                            std::pair{varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS / 2},
+                                            std::pair{varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS}}) {
+        const Wide steps{varops::DivSteps(dividend, divisor)};
+        BOOST_CHECK(fixed + step * steps + cell * steps * Wide{divisor} ==
+                    Wide{varops::DivCost(varops::DivSteps(dividend, divisor), divisor)});
+    }
 }
 
 BOOST_AUTO_TEST_CASE(budget_does_not_overspend)

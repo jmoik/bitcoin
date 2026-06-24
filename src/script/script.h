@@ -43,6 +43,14 @@ inline constexpr int MAX_SCRIPT_SIZE{10'000};
 // Maximum number of values on script interpreter stack
 inline constexpr int MAX_STACK_SIZE = 1000;
 
+// Maximum number of values on script interpreter stack (Tapscript v2)
+inline constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32'768;
+
+// BIP 441 increases the individual stack element limit to 4,000,000 bytes
+// and limits all stack and altstack elements to 8,000,000 bytes in total.
+inline constexpr unsigned int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4'000'000;
+inline constexpr unsigned int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
+
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
 inline constexpr unsigned int LOCKTIME_THRESHOLD{500'000'000}; // Tue Nov  5 00:53:20 1985 UTC
@@ -603,6 +611,9 @@ public:
 
 /** Test for OP_SUCCESSx opcodes as defined by BIP342. */
 bool IsOpSuccess(const opcodetype& opcode);
+
+/** Test for OP_SUCCESSx opcodes in Tapscript v2 (leaf version 0xc2), as defined by BIP 441. */
+bool IsTapscriptV2OpSuccess(opcodetype opcode);
 
 bool CheckMinimalPush(const std::vector<unsigned char>& data, opcodetype opcode);
 
