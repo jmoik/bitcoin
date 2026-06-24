@@ -4,8 +4,8 @@
 #ifndef BITCOIN_SCRIPT_VALTYPE_STACK_H
 #define BITCOIN_SCRIPT_VALTYPE_STACK_H
 
-#include <span.h>
 #include <cstddef>
+#include <span>
 #include <vector>
 
 class Val64;
@@ -20,7 +20,7 @@ class ValtypeStack
 {
 public:
     ValtypeStack() = default;
-    explicit ValtypeStack(Span<const valtype> plain_stack);
+    explicit ValtypeStack(std::span<const valtype> plain_stack);
 
     ValtypeStack(const ValtypeStack&) = delete;
     ValtypeStack& operator=(const ValtypeStack&) = delete;

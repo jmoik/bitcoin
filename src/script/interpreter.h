@@ -25,6 +25,7 @@
 
 class CPubKey;
 class XOnlyPubKey;
+class ValtypeStack;
 namespace varops {
 class Budget;
 } // namespace varops
@@ -377,7 +378,9 @@ uint256 ComputeTapbranchHash(std::span<const unsigned char> a, std::span<const u
 uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const uint256& tapleaf_hash);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
-bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror = nullptr);
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr);
+/** Check Tapscript v2 cleanstack and truthiness after execution. Consumes the final stack element. */
+bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_budget, ScriptError* error = nullptr);
 /** Use only when transaction-wide varops budget context is unavailable. */
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror = nullptr);
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptError* serror, varops::Budget& varops_budget);
@@ -389,5 +392,7 @@ int FindAndDelete(CScript& script, const CScript& b);
 const std::map<std::string, script_verify_flag_name>& ScriptFlagNamesToEnum();
 
 std::vector<std::string> GetScriptFlagNames(script_verify_flags flags);
+bool CastToBool(const std::vector<unsigned char>& vch);
+std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, ScriptError* serror);
 
 #endif // BITCOIN_SCRIPT_INTERPRETER_H
