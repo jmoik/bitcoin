@@ -25,6 +25,7 @@
 
 class CPubKey;
 class XOnlyPubKey;
+class ValtypeStack;
 namespace varops {
 class Budget;
 } // namespace varops
@@ -148,6 +149,9 @@ enum class script_verify_flag_name : uint8_t {
 
     // Making unknown public key versions (in BIP 342 scripts) non-standard
     SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE,
+
+    // Tapleaf 0xC2 validation (BIPs 440 & 441)
+    SCRIPT_VERIFY_TAPLEAF_0XC2,
 
     // Constants to point to the highest flag in use. Add new flags above this line.
     //
@@ -387,6 +391,11 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
+/** Evaluate a Tapleaf 0xC2 script (BIP 441) on stack. immediate_success reports success through
+ *  an upgrade path such as OP_SUCCESSx, to which CheckTapleaf0xC2ScriptResult does not apply. */
+bool EvalTapleaf0xC2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr, bool* immediate_success = nullptr);
+/** Check Tapleaf 0xC2 cleanstack and truthiness after execution. Consumes the final stack element. */
+bool CheckTapleaf0xC2ScriptResult(ValtypeStack& stack, ScriptError* error = nullptr);
 /** Whether witness spends a Tapleaf 0xC2 leaf of an output with script_pub_key.
  *  The control block is not authenticated; that remains the script verifier's job. */
 bool SpendsTapleaf0xC2(const CScriptWitness& witness, const CScript& script_pub_key);
