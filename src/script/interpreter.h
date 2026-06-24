@@ -25,6 +25,7 @@
 
 class CPubKey;
 class XOnlyPubKey;
+class ValtypeStack;
 namespace varops {
 class Budget;
 } // namespace varops
@@ -393,6 +394,13 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
+/** Evaluate a Tapscript v2 script (BIP 441) on stack, from the OP_SUCCESSx scan
+ *  and the initial stack checks through execution. immediate_success reports
+ *  whether an upgrade path, such as OP_SUCCESSx, ended validation successfully,
+ *  in which case the final check, CheckTapscriptV2ScriptResult, does not apply. */
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr, bool* immediate_success = nullptr);
+/** Check Tapscript v2 cleanstack and truthiness after execution. Consumes the final stack element. */
+bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_budget, ScriptError* error = nullptr);
 /** BIP 440: the varops budget of tx, whose inputs spend spent_outputs. It covers
  *  the transaction's weight without the inputs that do not spend a Tapscript v2
  *  leaf, and is zero without such an input. An unknown spent output (a null

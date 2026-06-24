@@ -5,6 +5,7 @@
 
 #include <script/interpreter.h>
 
+#include <attributes.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <crypto/ripemd160.h>
@@ -13,6 +14,8 @@
 #include <prevector.h>
 #include <pubkey.h>
 #include <script/script.h>
+#include <script/val64.h>
+#include <script/valtype_stack.h>
 #include <script/varops.h>
 #include <serialize.h>
 #include <span.h>
@@ -359,7 +362,7 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
 
 static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, ScriptExecutionData& execdata, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& success)
 {
-    assert(sigversion == SigVersion::TAPSCRIPT);
+    assert(IsTapscript(sigversion));
 
     /*
      *  The following validation sequence is consensus critical. Please note how --
@@ -368,7 +371,7 @@ static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, Scr
      *    the script execution fails when using non-empty invalid signature.
      */
     success = !sig.empty();
-    if (success) {
+    if (success && sigversion == SigVersion::TAPSCRIPT) {
         // Implement the sigops/witnesssize ratio test.
         // Passing with an upgradable public key version is also counted.
         assert(execdata.m_validation_weight_left_init);
@@ -1254,6 +1257,813 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     return set_success(serror);
 }
 
+// Stack operations of the Tapscript v2 evaluator that add their charges to the
+// meter of the running opcode. They are forced inline: evaluation calls them for
+// most opcodes.
+
+// Pop the top value as a number, paying PREPARE for it.
+static ALWAYS_INLINE Val64 PopNumber(ValtypeStack& stack, varops::Meter& meter)
+{
+    meter.Add(varops::PrepareCost(stack.Top().size()));
+    return stack.PopVal64();
+}
+
+// Push a numeric result, paying WRITE(W(n)) + NORMALIZE for its n bytes.
+static ALWAYS_INLINE void PushNumber(ValtypeStack& stack, varops::Meter& meter, Val64& value)
+{
+    meter.Add(varops::OutputCost(value.size()));
+    stack.push_back(value.MoveToValtype());
+}
+
+// Push a count or numeric comparison result, paying WRITE(8) + NORMALIZE
+// whatever its length.
+static ALWAYS_INLINE void PushScalar(ValtypeStack& stack, varops::Meter& meter, uint64_t value)
+{
+    meter.Add(varops::ScalarOutputCost());
+    stack.push_back(ScalarValue(value));
+}
+
+// Push a constant or boolean written directly as its bytes, paying WRITE(8)
+// whatever its length.
+static ALWAYS_INLINE void PushDirectScalar(ValtypeStack& stack, varops::Meter& meter, uint64_t value)
+{
+    meter.Add(varops::WriteCost(8));
+    stack.push_back(ScalarValue(value));
+}
+
+// Push bytes as they are, a new value or a copy, paying WRITE(n) for its n bytes.
+template <typename T>
+static ALWAYS_INLINE void PushBytes(ValtypeStack& stack, varops::Meter& meter, T&& value)
+{
+    meter.Add(varops::WriteCost(value.size()));
+    stack.push_back(std::forward<T>(value));
+}
+
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
+{
+    set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+    const bool require_minimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
+    execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
+    execdata.m_codeseparator_pos_init = true;
+
+    // Charges, BASE included, accumulate in meter. Each opcode deducts them
+    // from the budget once: when it completes, or before its work if that
+    // must be paid for in advance (BIP 440).
+    varops::Meter meter;
+    // Witness values have no producing opcode, so their storage is paid first.
+    for (const valtype& value : stack.GetStack()) meter.Add(varops::WriteCost(value.size()));
+    if (!meter.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+
+    ValtypeStack altstack;
+    ConditionStack conditions;
+    CScript::const_iterator pc{script.begin()};
+    const CScript::const_iterator pend{script.end()};
+    uint32_t opcode_pos{0};
+
+    try {
+        for (; pc < pend; ++opcode_pos) {
+            const bool executing{conditions.all_true()};
+            const CScript::const_iterator op_begin{pc};
+            opcodetype opcode;
+            // Pushes are decoded without their payload, which an executed push
+            // copies straight into a word-padded stack value.
+            if (!GetScriptOp(pc, pend, opcode, nullptr)) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+            const bool is_push{opcode <= OP_PUSHDATA4};
+            const size_t push_header{!is_push ? 0U : opcode < OP_PUSHDATA1 ? 1U : opcode == OP_PUSHDATA1 ? 2U : opcode == OP_PUSHDATA2 ? 3U : 5U};
+            const size_t push_size{static_cast<size_t>(pc - op_begin) - push_header};
+            if (is_push && push_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+                return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
+            }
+            // Instructions skipped in an inactive branch are funded by their weight.
+            if (!executing && !(OP_IF <= opcode && opcode <= OP_ENDIF)) continue;
+            meter.Add(varops::BaseCost());
+
+            if (is_push) {
+                valtype value{WordPaddedValue({op_begin + push_header, pc})};
+                if (require_minimal && !CheckMinimalPush(value, opcode)) {
+                    return set_error(serror, SCRIPT_ERR_MINIMALDATA);
+                }
+                PushBytes(stack, meter, std::move(value));
+            } else {
+                switch (opcode) {
+                //
+                // Push value
+                //
+                // OP_1NEGATE is an OP_SUCCESSx in Tapscript v2.
+                case OP_1:
+                case OP_2:
+                case OP_3:
+                case OP_4:
+                case OP_5:
+                case OP_6:
+                case OP_7:
+                case OP_8:
+                case OP_9:
+                case OP_10:
+                case OP_11:
+                case OP_12:
+                case OP_13:
+                case OP_14:
+                case OP_15:
+                case OP_16: {
+                    // ( -- value)
+                    PushDirectScalar(stack, meter, opcode - (OP_1 - 1));
+                    break;
+                }
+
+                //
+                // Control
+                //
+                case OP_NOP:
+                    break;
+
+                case OP_CHECKLOCKTIMEVERIFY: {
+                    if (!(flags & SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY)) {
+                        // not enabled; treat as a NOP2
+                        break;
+                    }
+                    // (lock_time -- lock_time)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    Val64 value{PopNumber(stack, meter)};
+                    // Lock times beyond 32 bits can never be satisfied. There is
+                    // no more specific error code for them.
+                    const uint64_t lock_time{value.ToU64Clamped(uint64_t{1} << 32)};
+                    if (lock_time > std::numeric_limits<uint32_t>::max()) {
+                        return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
+                    }
+                    PushNumber(stack, meter, value);
+                    if (!checker.CheckLockTime(CScriptNum{static_cast<int64_t>(lock_time)})) {
+                        return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
+                    }
+                    break;
+                }
+
+                case OP_CHECKSEQUENCEVERIFY: {
+                    if (!(flags & SCRIPT_VERIFY_CHECKSEQUENCEVERIFY)) {
+                        // not enabled; treat as a NOP3
+                        break;
+                    }
+                    // (sequence -- sequence)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    Val64 value{PopNumber(stack, meter)};
+                    // nSequence is a 32-bit field too. Check the operand's range
+                    // before the disable flag and the BIP 68 mask discard bits.
+                    const uint64_t sequence{value.ToU64Clamped(uint64_t{1} << 32)};
+                    if (sequence > std::numeric_limits<uint32_t>::max()) {
+                        return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
+                    }
+                    PushNumber(stack, meter, value);
+                    // To provide for future soft-fork extensibility, if the
+                    // operand has the disabled lock-time flag set,
+                    // CHECKSEQUENCEVERIFY behaves as a NOP.
+                    if (sequence & CTxIn::SEQUENCE_LOCKTIME_DISABLE_FLAG) break;
+                    if (!checker.CheckSequence(CScriptNum{static_cast<int64_t>(sequence)})) {
+                        return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
+                    }
+                    break;
+                }
+
+                case OP_NOP1: case OP_NOP4: case OP_NOP5:
+                case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10: {
+                    if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS) {
+                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
+                    }
+                    break;
+                }
+
+                case OP_IF:
+                case OP_NOTIF: {
+                    // <expression> if [statements] [else [statements]] endif
+                    bool value{false};
+                    if (executing) {
+                        if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        // Tapscript requires the condition to be exactly empty or exactly 0x01.
+                        const valtype& condition{stack.Top()};
+                        if (condition.size() > 1 || (condition.size() == 1 && condition[0] != 1)) {
+                            return set_error(serror, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
+                        }
+                        value = CastToBool(condition);
+                        if (opcode == OP_NOTIF) value = !value;
+                        stack.pop_back();
+                    }
+                    conditions.push_back(value);
+                    break;
+                }
+
+                case OP_ELSE: {
+                    if (conditions.empty()) return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
+                    conditions.toggle_top();
+                    break;
+                }
+
+                case OP_ENDIF: {
+                    if (conditions.empty()) return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
+                    conditions.pop_back();
+                    break;
+                }
+
+                case OP_VERIFY: {
+                    // (true -- )
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    if (PopNumber(stack, meter).IsZero()) return set_error(serror, SCRIPT_ERR_VERIFY);
+                    break;
+                }
+
+                case OP_RETURN:
+                    return set_error(serror, SCRIPT_ERR_OP_RETURN);
+
+                //
+                // Stack ops
+                //
+                case OP_TOALTSTACK: {
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::MoveCost(1));
+                    altstack.push_back(stack.PopValue());
+                    break;
+                }
+
+                case OP_FROMALTSTACK: {
+                    if (altstack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_ALTSTACK_OPERATION);
+                    meter.Add(varops::MoveCost(1));
+                    stack.push_back(altstack.PopValue());
+                    break;
+                }
+
+                case OP_2DROP: {
+                    // (x1 x2 -- )
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    stack.pop_back();
+                    stack.pop_back();
+                    break;
+                }
+
+                case OP_2DUP: {
+                    // (x1 x2 -- x1 x2 x1 x2)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top(1));
+                    PushBytes(stack, meter, stack.Top(1));
+                    break;
+                }
+
+                case OP_3DUP: {
+                    // (x1 x2 x3 -- x1 x2 x3 x1 x2 x3)
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top(2));
+                    PushBytes(stack, meter, stack.Top(2));
+                    PushBytes(stack, meter, stack.Top(2));
+                    break;
+                }
+
+                case OP_2OVER: {
+                    // (x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2)
+                    if (stack.size() < 4) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top(3));
+                    PushBytes(stack, meter, stack.Top(3));
+                    break;
+                }
+
+                case OP_2ROT: {
+                    // (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
+                    if (stack.size() < 6) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::MoveCost(6));
+                    stack.Roll(5, 2);
+                    break;
+                }
+
+                case OP_2SWAP: {
+                    // (x1 x2 x3 x4 -- x3 x4 x1 x2)
+                    if (stack.size() < 4) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::MoveCost(4));
+                    stack.Swap(3, 1);
+                    stack.Swap(2, 0);
+                    break;
+                }
+
+                case OP_IFDUP: {
+                    // (x -- 0 | x x)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    Val64 value{PopNumber(stack, meter)};
+                    const bool nonzero{!value.IsZero()};
+                    PushNumber(stack, meter, value);
+                    if (nonzero) PushBytes(stack, meter, stack.Top());
+                    break;
+                }
+
+                case OP_DEPTH: {
+                    // -- stacksize
+                    PushScalar(stack, meter, stack.size());
+                    break;
+                }
+
+                case OP_DROP: {
+                    // (x -- )
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    stack.pop_back();
+                    break;
+                }
+
+                case OP_DUP: {
+                    // (x -- x x)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top());
+                    break;
+                }
+
+                case OP_NIP: {
+                    // (x1 x2 -- x2)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    stack.Erase(1);
+                    break;
+                }
+
+                case OP_OVER: {
+                    // (x1 x2 -- x1 x2 x1)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top(1));
+                    break;
+                }
+
+                case OP_PICK:
+                case OP_ROLL: {
+                    // (xn ... x2 x1 x0 n - xn ... x2 x1 x0 xn)
+                    // (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    const Val64 n{PopNumber(stack, meter)};
+                    const size_t depth{static_cast<size_t>(n.ToU64Clamped(stack.size()))};
+                    if (depth >= stack.size()) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    if (opcode == OP_ROLL) {
+                        meter.Add(varops::MoveCost(depth));
+                        stack.Roll(depth);
+                    } else {
+                        PushBytes(stack, meter, stack.Top(depth));
+                    }
+                    break;
+                }
+
+                case OP_ROT: {
+                    // (x1 x2 x3 -- x2 x3 x1)
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::MoveCost(3));
+                    stack.Roll(2);
+                    break;
+                }
+
+                case OP_SWAP: {
+                    // (x1 x2 -- x2 x1)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::MoveCost(2));
+                    stack.Swap(1, 0);
+                    break;
+                }
+
+                case OP_TUCK: {
+                    // (x1 x2 -- x2 x1 x2)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushBytes(stack, meter, stack.Top());
+                    stack.Swap(2, 1);
+                    break;
+                }
+
+                //
+                // Splice ops
+                //
+                case OP_CAT: {
+                    // (x1 x2 -- x1 || x2)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype x2{stack.PopValue()};
+                    valtype x1{stack.PopValue()};
+                    x1.reserve(WordPaddedCapacity(x1.size() + x2.size()));
+                    x1.insert(x1.end(), x2.begin(), x2.end());
+                    PushBytes(stack, meter, std::move(x1));
+                    break;
+                }
+
+                case OP_SUBSTR: {
+                    // (in begin size -- in[begin:begin+size])
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top(0).size()) + varops::ReadCost(stack.Top(1).size()));
+                    const Val64 size_value{PopNumber(stack, meter)};
+                    const Val64 begin_value{PopNumber(stack, meter)};
+                    const valtype in{stack.PopValue()};
+                    const uint64_t begin{begin_value.ToU64Clamped(in.size())};
+                    const uint64_t size{size_value.ToU64Clamped(in.size() - begin)};
+                    PushBytes(stack, meter, WordPaddedValue(std::span{in}.subspan(begin, size)));
+                    break;
+                }
+
+                case OP_LEFT: {
+                    // (in size -- in[:size])
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    const Val64 size_value{PopNumber(stack, meter)};
+                    valtype in{stack.PopValue()};
+                    in.resize(size_value.ToU64Clamped(in.size()));
+                    PushBytes(stack, meter, std::move(in));
+                    break;
+                }
+
+                case OP_RIGHT: {
+                    // (in size -- in[-size:])
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    const Val64 size_value{PopNumber(stack, meter)};
+                    valtype in{stack.PopValue()};
+                    in.erase(in.begin(), in.end() - size_value.ToU64Clamped(in.size()));
+                    PushBytes(stack, meter, std::move(in));
+                    break;
+                }
+
+                case OP_SIZE: {
+                    // (in -- in size)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    PushScalar(stack, meter, stack.Top().size());
+                    break;
+                }
+
+                //
+                // Bitwise logic
+                //
+                case OP_INVERT:
+                case OP_2MUL:
+                case OP_2DIV: {
+                    // (x -- out)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    Val64 x{PopNumber(stack, meter)};
+                    meter.Add(varops::BitCost(x.size()));
+                    if (opcode == OP_INVERT) {
+                        Val64::OpInvert(x);
+                    } else if (opcode == OP_2MUL) {
+                        Val64::Op2Mul(x);
+                    } else {
+                        Val64::Op2Div(x);
+                    }
+                    PushNumber(stack, meter, x);
+                    break;
+                }
+
+                case OP_AND:
+                case OP_OR:
+                case OP_XOR: {
+                    // (x1 x2 -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    Val64 x2{PopNumber(stack, meter)};
+                    Val64 x1{PopNumber(stack, meter)};
+                    meter.Add(varops::BitCost(std::max(x1.size(), x2.size())));
+                    if (opcode == OP_AND) {
+                        Val64::OpAnd(x1, x2);
+                    } else if (opcode == OP_OR) {
+                        Val64::OpOr(x1, x2);
+                    } else {
+                        Val64::OpXor(x1, x2);
+                    }
+                    PushNumber(stack, meter, x1);
+                    break;
+                }
+
+                case OP_EQUAL:
+                case OP_EQUALVERIFY: {
+                    // (x1 x2 - bool)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& x1{stack.Top(1)};
+                    const valtype& x2{stack.Top()};
+                    // Values of different lengths differ without being read.
+                    if (x1.size() == x2.size()) meter.Add(varops::ReadCost(x1.size()));
+                    const bool equal{x1 == x2};
+                    stack.pop_back();
+                    stack.pop_back();
+                    PushDirectScalar(stack, meter, equal);
+                    if (opcode == OP_EQUALVERIFY) {
+                        if (!equal) return set_error(serror, SCRIPT_ERR_EQUALVERIFY);
+                        stack.pop_back();
+                    }
+                    break;
+                }
+
+                //
+                // Numeric
+                //
+                case OP_1ADD:
+                case OP_1SUB: {
+                    // (x -- out)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    Val64 x{PopNumber(stack, meter)};
+                    meter.Add(varops::ArithCost(x.size()));
+                    if (opcode == OP_1ADD) {
+                        Val64::Op1Add(x);
+                    } else if (!Val64::Op1Sub(x)) {
+                        return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
+                    }
+                    PushNumber(stack, meter, x);
+                    break;
+                }
+
+                case OP_NOT:
+                case OP_0NOTEQUAL: {
+                    // (x -- bool)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    const bool zero{PopNumber(stack, meter).IsZero()};
+                    PushScalar(stack, meter, opcode == OP_NOT ? zero : !zero);
+                    break;
+                }
+
+                case OP_ADD:
+                case OP_SUB: {
+                    // (x1 x2 -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    Val64 x2{PopNumber(stack, meter)};
+                    Val64 x1{PopNumber(stack, meter)};
+                    meter.Add(varops::ArithCost(std::max(x1.size(), x2.size())));
+                    if (opcode == OP_ADD) {
+                        Val64::OpAdd(x1, x2);
+                    } else if (!Val64::OpSub(x1, x2)) {
+                        return set_error(serror, SCRIPT_ERR_SUB_UNDERFLOW);
+                    }
+                    PushNumber(stack, meter, x1);
+                    break;
+                }
+
+                case OP_BOOLAND:
+                case OP_BOOLOR: {
+                    // (x1 x2 -- bool)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top(0).size()) + varops::ReadCost(stack.Top(1).size()));
+                    const bool x2{!PopNumber(stack, meter).IsZero()};
+                    const bool x1{!PopNumber(stack, meter).IsZero()};
+                    PushScalar(stack, meter, opcode == OP_BOOLAND ? x1 && x2 : x1 || x2);
+                    break;
+                }
+
+                case OP_NUMEQUAL:
+                case OP_NUMEQUALVERIFY:
+                case OP_NUMNOTEQUAL:
+                case OP_LESSTHAN:
+                case OP_GREATERTHAN:
+                case OP_LESSTHANOREQUAL:
+                case OP_GREATERTHANOREQUAL: {
+                    // (x1 x2 -- bool)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const Val64 x2{PopNumber(stack, meter)};
+                    const Val64 x1{PopNumber(stack, meter)};
+                    meter.Add(varops::ReadCost(std::max(x1.size(), x2.size())));
+                    const int cmp{x1.Compare(x2)};
+                    bool result{false};
+                    switch (opcode) {
+                    case OP_NUMEQUAL:
+                    case OP_NUMEQUALVERIFY: result = cmp == 0; break;
+                    case OP_NUMNOTEQUAL: result = cmp != 0; break;
+                    case OP_LESSTHAN: result = cmp < 0; break;
+                    case OP_GREATERTHAN: result = cmp > 0; break;
+                    case OP_LESSTHANOREQUAL: result = cmp <= 0; break;
+                    case OP_GREATERTHANOREQUAL: result = cmp >= 0; break;
+                    default: assert(!"invalid opcode"); break;
+                    }
+                    PushScalar(stack, meter, result);
+                    if (opcode == OP_NUMEQUALVERIFY) {
+                        if (!result) return set_error(serror, SCRIPT_ERR_NUMEQUALVERIFY);
+                        stack.pop_back();
+                    }
+                    break;
+                }
+
+                case OP_MIN:
+                case OP_MAX: {
+                    // (x1 x2 -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    Val64 x2{PopNumber(stack, meter)};
+                    Val64 x1{PopNumber(stack, meter)};
+                    meter.Add(varops::ReadCost(std::max(x1.size(), x2.size())));
+                    if (opcode == OP_MIN) {
+                        Val64::OpMin(x1, x2);
+                    } else {
+                        Val64::OpMax(x1, x2);
+                    }
+                    PushNumber(stack, meter, x1);
+                    break;
+                }
+
+                case OP_WITHIN: {
+                    // (x min max -- out)
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const Val64 upper{PopNumber(stack, meter)};
+                    const Val64 lower{PopNumber(stack, meter)};
+                    const Val64 x{PopNumber(stack, meter)};
+                    meter.Add(varops::ReadCost(std::max(x.size(), lower.size())) +
+                              varops::ReadCost(std::max(x.size(), upper.size())));
+                    PushScalar(stack, meter, x.Compare(lower) >= 0 && x.Compare(upper) < 0);
+                    break;
+                }
+
+                case OP_MUL: {
+                    // (x1 x2 -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const Val64 x2{PopNumber(stack, meter)};
+                    const Val64 x1{PopNumber(stack, meter)};
+                    const uint64_t limbs1{varops::WordCount(x1.size())};
+                    const uint64_t limbs2{varops::WordCount(x2.size())};
+                    // BIP 441 charges the multiplication and the WRITE of its full
+                    // product span before multiplying; NORMALIZE follows.
+                    meter.Add(varops::MulCost(std::max(limbs1, limbs2), std::min(limbs1, limbs2)) +
+                              varops::WriteCost(8 * (limbs1 + limbs2)));
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    Val64 product{Val64::OpMul(x1, x2)};
+                    meter.Add(varops::NormalizeCost());
+                    stack.push_back(product.MoveToValtype());
+                    break;
+                }
+
+                case OP_DIV:
+                case OP_MOD: {
+                    // (x1 x2 -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top(0).size()) + varops::ReadCost(stack.Top(1).size()));
+                    Val64 x2{PopNumber(stack, meter)};
+                    Val64 x1{PopNumber(stack, meter)};
+                    // DIV counts the operands' limbs without trailing zero bytes,
+                    // which padding the divisor would otherwise reduce. BIP 441
+                    // charges it before dividing.
+                    x1.TrimTrailingZeros();
+                    x2.TrimTrailingZeros();
+                    const uint64_t limbs1{varops::WordCount(x1.size())};
+                    const uint64_t limbs2{varops::WordCount(x2.size())};
+                    meter.Add(varops::DivCost(varops::DivSteps(limbs1, limbs2), limbs2));
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    if (!(opcode == OP_DIV ? Val64::OpDiv(x1, x2) : Val64::OpMod(x1, x2))) {
+                        return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
+                    }
+                    PushNumber(stack, meter, x1);
+                    break;
+                }
+
+                case OP_LSHIFT:
+                case OP_RSHIFT: {
+                    // (x bits -- out)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    meter.Add(varops::ReadCost(stack.Top().size()));
+                    const Val64 bits{PopNumber(stack, meter)};
+                    Val64 x{PopNumber(stack, meter)};
+                    meter.Add(varops::BitCost(x.size()));
+                    if (opcode == OP_RSHIFT) {
+                        Val64::OpDownShift(x, bits);
+                    } else if (!Val64::OpUpShift(x, bits, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)) {
+                        return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+                    }
+                    PushNumber(stack, meter, x);
+                    break;
+                }
+
+                //
+                // Crypto
+                //
+                case OP_RIPEMD160:
+                case OP_SHA1:
+                case OP_SHA256:
+                case OP_HASH160:
+                case OP_HASH256: {
+                    // (in -- hash)
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& in{stack.Top()};
+                    // BIP 441 keeps the 520-byte operand limit of the weaker hashes.
+                    if ((opcode == OP_RIPEMD160 || opcode == OP_SHA1) && in.size() > MAX_SCRIPT_ELEMENT_SIZE) {
+                        return set_error(serror, SCRIPT_ERR_HASH_OPERAND_SIZE);
+                    }
+                    meter.Add(varops::HashCost(opcode, in.size()));
+                    const size_t hash_size{(opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20U : 32U};
+                    valtype hash;
+                    hash.reserve(WordPaddedCapacity(hash_size));
+                    hash.resize(hash_size);
+                    if (opcode == OP_RIPEMD160) {
+                        CRIPEMD160().Write(in.data(), in.size()).Finalize(hash.data());
+                    } else if (opcode == OP_SHA1) {
+                        CSHA1().Write(in.data(), in.size()).Finalize(hash.data());
+                    } else if (opcode == OP_SHA256) {
+                        CSHA256().Write(in.data(), in.size()).Finalize(hash.data());
+                    } else if (opcode == OP_HASH160) {
+                        CHash160().Write(in).Finalize(hash);
+                    } else {
+                        CHash256().Write(in).Finalize(hash);
+                    }
+                    stack.pop_back();
+                    PushBytes(stack, meter, std::move(hash));
+                    break;
+                }
+
+                case OP_CODESEPARATOR: {
+                    // Tapscript signatures commit to the executed OP_CODESEPARATOR position.
+                    execdata.m_codeseparator_pos = opcode_pos;
+                    break;
+                }
+
+                case OP_CHECKSIG:
+                case OP_CHECKSIGVERIFY: {
+                    // (sig pubkey -- bool)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& sig{stack.Top(1)};
+                    const valtype& pubkey{stack.Top()};
+                    // The complete charge, including the result, is paid before the check runs.
+                    if (!sig.empty()) meter.Add(varops::SchnorrVerifyCost(32));
+                    meter.Add(varops::WriteCost(8));
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    bool success{true};
+                    if (!EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, SigVersion::TAPSCRIPT_V2, serror, success)) {
+                        return false;
+                    }
+                    stack.pop_back();
+                    stack.pop_back();
+                    stack.push_back(ScalarValue(success));
+                    if (opcode == OP_CHECKSIGVERIFY) {
+                        if (!success) return set_error(serror, SCRIPT_ERR_CHECKSIGVERIFY);
+                        stack.pop_back();
+                    }
+                    break;
+                }
+
+                case OP_CHECKSIGADD: {
+                    // (sig num pubkey -- num)
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& sig{stack.Top(2)};
+                    const size_t num_size{stack.Top(1).size()};
+                    const valtype& pubkey{stack.Top()};
+                    // Everything but the result is paid before the check runs: preparing
+                    // the number and, for a nonempty signature, the check and the increment.
+                    // A nonempty signature either succeeds or fails the script.
+                    meter.Add(varops::PrepareCost(num_size));
+                    if (!sig.empty()) {
+                        meter.Add(varops::SchnorrVerifyCost(32) + varops::ArithCost(num_size));
+                    }
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    bool success{true};
+                    if (!EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, SigVersion::TAPSCRIPT_V2, serror, success)) {
+                        return false;
+                    }
+                    stack.pop_back();
+                    Val64 num{stack.PopVal64()};
+                    stack.pop_back();
+                    if (success) Val64::Op1Add(num);
+                    num.TrimTrailingZeros();
+                    PushNumber(stack, meter, num);
+                    break;
+                }
+
+                case OP_CHECKMULTISIG:
+                case OP_CHECKMULTISIGVERIFY:
+                    return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
+
+                default:
+                    return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                }
+            }
+
+            // Size limits
+            if (stack.size() + altstack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
+                return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+            }
+            if (stack.GetTotalSize() + altstack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+                return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+            }
+            // The largest element sizes are high-water marks. Checking them
+            // after every opcode still fails exactly the opcode that first
+            // produced an oversized element.
+            if (std::max(stack.GetMaxElementSize(), altstack.GetMaxElementSize()) > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+                return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+            }
+            if (!meter.EndOpcode(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        }
+    } catch (...) {
+        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+    }
+    // Charges the last opcode added after prepaying.
+    if (!meter.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+
+    if (!conditions.empty()) return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
+    return set_success(serror);
+}
+
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
+{
+    if (immediate_success) *immediate_success = false;
+    // OP_SUCCESSx processing overrides everything, including stack limits.
+    for (CScript::const_iterator pc{script.begin()}; pc < script.end();) {
+        opcodetype opcode;
+        if (!script.GetOp(pc, opcode)) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+        if (IsTapscriptV2OpSuccess(opcode)) {
+            if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+            if (immediate_success) *immediate_success = true;
+            return set_success(serror);
+        }
+    }
+    // Initial stack limits (the altstack is empty here)
+    if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+    if (stack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+    if (stack.GetMaxElementSize() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, serror);
+}
+
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
 {
     ScriptExecutionData execdata;
@@ -1505,6 +2315,7 @@ bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, cons
         // key_version is not used and left uninitialized.
         break;
     case SigVersion::TAPSCRIPT:
+    case SigVersion::TAPSCRIPT_V2:
         ext_flag = 1;
         // key_version must be 0 for now, representing the current version of
         // 32-byte public keys in the tapscript signature opcode execution.
@@ -1573,7 +2384,7 @@ bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, cons
     }
 
     // Additional data for BIP 342 signatures
-    if (sigversion == SigVersion::TAPSCRIPT) {
+    if (IsTapscript(sigversion)) {
         assert(execdata.m_tapleaf_hash_init);
         ss << execdata.m_tapleaf_hash;
         ss << key_version;
@@ -1732,7 +2543,7 @@ bool GenericTransactionSignatureChecker<T>::CheckECDSASignature(const std::vecto
 template <class T>
 bool GenericTransactionSignatureChecker<T>::CheckSchnorrSignature(std::span<const unsigned char> sig, std::span<const unsigned char> pubkey_in, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror) const
 {
-    assert(sigversion == SigVersion::TAPROOT || sigversion == SigVersion::TAPSCRIPT);
+    assert(sigversion == SigVersion::TAPROOT || IsTapscript(sigversion));
     // Schnorr signatures have 32-byte public keys. The caller is responsible for enforcing this.
     assert(pubkey_in.size() == 32);
     // Note that in Tapscript evaluation, empty signatures are treated specially (invalid signature that does not
@@ -1844,6 +2655,18 @@ bool GenericTransactionSignatureChecker<T>::CheckSequence(const CScriptNum& nSeq
 // explicit instantiation
 template class GenericTransactionSignatureChecker<CTransaction>;
 template class GenericTransactionSignatureChecker<CMutableTransaction>;
+
+bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_budget, ScriptError* serror)
+{
+    if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
+
+    const size_t size{stack.Top().size()};
+    if (!varops_budget.Spend(varops::PrepareCost(size) + varops::ReadCost(size))) {
+        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+    }
+    if (stack.PopVal64().IsZero()) return set_error(serror, SCRIPT_ERR_EVAL_FALSE);
+    return set_success(serror);
+}
 
 static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror)
 {
@@ -1997,6 +2820,23 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 execdata.m_validation_weight_left = ::GetSerializeSize(witness.stack) + VALIDATION_WEIGHT_OFFSET;
                 execdata.m_validation_weight_left_init = true;
                 return ExecuteWitnessScript(stack, exec_script, flags, SigVersion::TAPSCRIPT, checker, execdata, serror);
+            }
+            if ((control[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT_V2) {
+                // Tapscript v2 (leaf version 0xc2)
+                if (flags & SCRIPT_VERIFY_DISCOURAGE_SCRIPT_RESTORATION) {
+                    return set_error(serror, SCRIPT_ERR_DISCOURAGE_SCRIPT_RESTORATION);
+                }
+                if (!(flags & SCRIPT_VERIFY_SCRIPT_RESTORATION)) {
+                    if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION) {
+                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION);
+                    }
+                    return set_success(serror);
+                }
+                exec_script = CScript(script.begin(), script.end());
+                ValtypeStack exec_stack{stack};
+                bool immediate_success{false};
+                if (!EvalTapscriptV2(exec_stack, exec_script, flags, checker, execdata, varops_budget, serror, &immediate_success)) return false;
+                return immediate_success || CheckTapscriptV2ScriptResult(exec_stack, varops_budget, serror);
             }
             if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION) {
                 return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_TAPROOT_VERSION);
