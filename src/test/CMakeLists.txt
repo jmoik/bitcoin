@@ -125,6 +125,7 @@ add_executable(test_bitcoin
   validation_flush_tests.cpp
   validation_tests.cpp
   validationinterface_tests.cpp
+  valtype_stack_tests.cpp
   varops_tests.cpp
 )
 
