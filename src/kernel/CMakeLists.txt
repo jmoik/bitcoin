@@ -47,6 +47,7 @@ add_library(bitcoinkernel
   ../pubkey.cpp
   ../random.cpp
   ../randomenv.cpp
+  ../script/biguint.cpp
   ../script/interpreter.cpp
   ../script/script.cpp
   ../script/script_error.cpp
