@@ -27,6 +27,25 @@ constexpr size_t WordPaddedCapacity(size_t size) { return static_cast<size_t>(va
 /** Size of the minimal encoding of value: its little-endian bytes without trailing zeros. */
 constexpr size_t MinimalEncodingSize(uint64_t value) { return static_cast<size_t>(std::bit_width(value) + 7) / 8; }
 
+/** A copy of bytes with capacity for its word padding. */
+inline std::vector<unsigned char> WordPaddedValue(std::span<const unsigned char> bytes)
+{
+    std::vector<unsigned char> value;
+    value.reserve(WordPaddedCapacity(bytes.size()));
+    value.assign(bytes.begin(), bytes.end());
+    return value;
+}
+
+/** A value holding the minimal little-endian bytes of number, the encoding of a
+ *  numeric result, with capacity for its word padding. Zero is the empty value. */
+inline std::vector<unsigned char> ScalarValue(uint64_t number)
+{
+    std::vector<unsigned char> value;
+    if (number != 0) value.reserve(WordPaddedCapacity(sizeof(number)));
+    for (; number != 0; number >>= 8) value.push_back(static_cast<unsigned char>(number));
+    return value;
+}
+
 /**
  * View of 64-bit limbs stored in bytes, least significant limb first, each
  * limb little-endian. Limbs are copied in and out on access, so the bytes need
