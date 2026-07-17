@@ -32,8 +32,9 @@ inline constexpr uint64_t COST_PER_SIGOP{500'000};
 
 inline uint64_t W(size_t size)
 {
-    Assert(size <= std::numeric_limits<uint64_t>::max() - 7);
-    return (static_cast<uint64_t>(size) + 7) / 8 * 8;
+    const uint64_t size_u64{size};
+    Assert(size_u64 <= std::numeric_limits<uint64_t>::max() - 7);
+    return (size_u64 + 7) / 8 * 8;
 }
 
 inline uint64_t CopyCost(size_t size) { return static_cast<uint64_t>(size) * COST_COPYING; }

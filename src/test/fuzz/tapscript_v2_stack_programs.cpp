@@ -186,7 +186,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
         case 21:
         case 22:
             if (!stack.empty()) {
-                const uint64_t depth{provider.ConsumeIntegralInRange<uint64_t>(0, std::min<size_t>(stack.size() - 1, 16))};
+                const size_t depth{provider.ConsumeIntegralInRange<size_t>(0, std::min<size_t>(stack.size() - 1, 16))};
                 Bytes encoded{ToLittleEndian(depth)};
                 if (provider.ConsumeBool()) encoded.resize(provider.ConsumeIntegralInRange<size_t>(encoded.size(), encoded.size() + 8));
                 const opcodetype opcode{choice == 21 ? OP_PICK : OP_ROLL};
