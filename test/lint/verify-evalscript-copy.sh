@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Copyright (c) 2026 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -32,7 +32,7 @@ echo "=== Verifying EvalScript copy in commit $COMMIT ==="
 echo
 
 echo "Locating original EvalScript in parent commit..."
-ORIG_START=$(git show ${PARENT}:${FILE} | grep -n "^bool EvalScript.*ScriptExecutionData& execdata, ScriptError" | head -1 | cut -d: -f1)
+ORIG_START=$(git show "${PARENT}:${FILE}" | grep -n "^bool EvalScript.*ScriptExecutionData& execdata, ScriptError" | head -1 | cut -d: -f1)
 if [ -z "$ORIG_START" ]; then
     echo "ERROR: Could not find original EvalScript in parent commit"
     exit 1
@@ -40,7 +40,7 @@ fi
 echo "  Found at line $ORIG_START"
 
 echo "Extracting original EvalScript body..."
-git show ${PARENT}:${FILE} | tail -n +${ORIG_START} | awk '
+git show "${PARENT}:${FILE}" | tail -n +"${ORIG_START}" | awk '
     BEGIN { brace_count = 0; started = 0 }
     /^bool EvalScript/ { started = 1; next }
     started {
@@ -52,7 +52,7 @@ git show ${PARENT}:${FILE} | tail -n +${ORIG_START} | awk '
 ' > "$ORIGINAL_BODY"
 
 echo "Locating copied EvalScript in commit..."
-COPY_START=$(git show ${COMMIT}:${FILE} | grep -n "^bool EvalScript.*varops_budget" | head -1 | cut -d: -f1)
+COPY_START=$(git show "${COMMIT}:${FILE}" | grep -n "^bool EvalScript.*varops_budget" | head -1 | cut -d: -f1)
 if [ -z "$COPY_START" ]; then
     echo "ERROR: Could not find copied EvalScript with varops_budget in commit"
     exit 1
@@ -60,7 +60,7 @@ fi
 echo "  Found at line $COPY_START"
 
 echo "Extracting copied EvalScript body..."
-git show ${COMMIT}:${FILE} | tail -n +${COPY_START} | awk '
+git show "${COMMIT}:${FILE}" | tail -n +"${COPY_START}" | awk '
     BEGIN { brace_count = 0; started = 0 }
     /^bool EvalScript/ { started = 1; next }
     started {

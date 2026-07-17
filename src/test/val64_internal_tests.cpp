@@ -929,20 +929,20 @@ BOOST_AUTO_TEST_CASE(val64_trim_tail_word_padding)
         for (size_t size : {size_t{8}, size_t{9}, size_t{16}, size_t{17}, size_t{4096}}) {
             std::vector<unsigned char> zeroes(size, 0);
             Val64 zero_value(std::move(zeroes));
-            zero_value.normalize();
+            zero_value.trim_trailing_zeros();
             BOOST_CHECK(zero_value.move_to_valtype().empty());
 
             std::vector<unsigned char> padded_one(size, 0);
             padded_one.front() = 1;
             Val64 one_value(std::move(padded_one));
-            one_value.normalize();
+            one_value.trim_trailing_zeros();
             BOOST_CHECK(one_value.move_to_valtype() == std::vector<unsigned char>{1});
         }
 
         std::vector<unsigned char> later_limb(4096, 0);
         later_limb[8] = 1;
         Val64 later_limb_value(std::move(later_limb));
-        later_limb_value.normalize();
+        later_limb_value.trim_trailing_zeros();
         std::vector<unsigned char> expected(9, 0);
         expected.back() = 1;
         BOOST_CHECK(later_limb_value.move_to_valtype() == expected);

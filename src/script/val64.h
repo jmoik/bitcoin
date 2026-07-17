@@ -75,7 +75,7 @@ public:
     std::vector<unsigned char> move_to_valtype();
 
     // Trim trailing zero bytes so serialization is minimal.
-    void normalize();
+    void trim_trailing_zeros();
 
     // Byte size of the value.
     size_t size() const { return m_realsize; }

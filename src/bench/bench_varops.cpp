@@ -13,6 +13,7 @@
 #include <script/val64.h>
 #include <script/valtype_stack.h>
 #include <script/varops.h>
+#include <util/fs.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/translation.h>
@@ -21,7 +22,6 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -48,7 +48,7 @@ const TranslateFn G_TRANSLATION_FUN{nullptr};
 
 namespace {
 
-constexpr uint64_t SCRIPT_BYTES{MAX_BLOCK_WEIGHT};
+constexpr size_t SCRIPT_BYTES{MAX_BLOCK_WEIGHT};
 constexpr uint64_t TOTAL_VAROPS_BUDGET{uint64_t{MAX_BLOCK_WEIGHT} * varops::BUDGET_PER_WEIGHT_UNIT};
 constexpr uint64_t MAX_FIXTURE_POOL_BYTES{512U * 1024U * 1024U};
 constexpr size_t MAX_THREE_WAY_ELEMENT_SIZE{(MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - 1) / 6};
@@ -1095,7 +1095,7 @@ static void AddSpliceCases(std::vector<CaseSpec>& specs, opcodetype opcode, Prof
     }
 }
 
-static uint64_t LargestAffordable(const std::function<uint64_t(size_t)>& cost, size_t maximum)
+static size_t LargestAffordable(const std::function<uint64_t(size_t)>& cost, size_t maximum)
 {
     size_t low{1};
     size_t high{maximum};
@@ -2000,8 +2000,8 @@ static bool SaveResultsToFile(std::vector<BenchResult> results, const std::strin
     std::sort(results.begin(), results.end(), [](const BenchResult& left, const BenchResult& right) {
         return left.median_sec > right.median_sec;
     });
-    const std::filesystem::path target{filepath};
-    std::filesystem::path temporary{target};
+    const fs::path target{fs::PathFromString(filepath)};
+    fs::path temporary{target};
     temporary += strprintf(".tmp.%u", std::chrono::steady_clock::now().time_since_epoch().count());
     std::ofstream file(temporary, std::ios::out | std::ios::trunc);
     if (!file.is_open()) {
@@ -2053,23 +2053,23 @@ static bool SaveResultsToFile(std::vector<BenchResult> results, const std::strin
         std::cerr << "Error: failed while writing " << temporary << "\n";
         file.close();
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        fs::remove(temporary, ignored);
         return false;
     }
     file.close();
     if (file.fail()) {
         std::cerr << "Error: failed while closing " << temporary << "\n";
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        fs::remove(temporary, ignored);
         return false;
     }
 
     std::error_code rename_error;
-    std::filesystem::rename(temporary, target, rename_error);
+    fs::rename(temporary, target, rename_error);
     if (rename_error) {
         std::cerr << "Error: could not atomically replace " << target << ": " << rename_error.message() << "\n";
         std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
+        fs::remove(temporary, ignored);
         return false;
     }
     return true;
@@ -2111,13 +2111,9 @@ static Options ParseArguments(int argc, char* argv[])
             if (i + 1 == first) throw std::runtime_error("--opcodes requires at least one opcode");
         } else if (arg == "--epochs") {
             if (++i >= argc) throw std::runtime_error("--epochs requires a positive integer");
-            try {
-                size_t consumed{0};
-                options.epochs = std::stoi(argv[i], &consumed);
-                if (consumed != std::string{argv[i]}.size() || options.epochs <= 0) throw std::runtime_error("invalid");
-            } catch (...) {
-                throw std::runtime_error("invalid --epochs value '" + std::string{argv[i]} + "'");
-            }
+            const std::optional<int> epochs{ToIntegral<int>(argv[i])};
+            if (!epochs || *epochs <= 0) throw std::runtime_error("invalid --epochs value '" + std::string{argv[i]} + "'");
+            options.epochs = *epochs;
         } else if (arg == "--profile") {
             if (++i >= argc) throw std::runtime_error("--profile requires full or smoke");
             const std::string profile{argv[i]};

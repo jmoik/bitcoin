@@ -262,7 +262,7 @@ static void MicroRWCopyManual(benchmark::Bench& bench)
     });
 
     /* Use it so it can't be optimized out */
-    assert(v1.empty() || memchr(v1.data(), 2, v1.size()) == nullptr);
-    assert(v2.empty() || memchr(v2.data(), 2, v2.size()) == nullptr);
+    assert(v641.num_u64() == 0 || memchr(p1, 2, v641.num_u64() * sizeof(*p1)) == nullptr);
+    assert(v642.num_u64() == 0 || memchr(p2, 2, v642.num_u64() * sizeof(*p2)) == nullptr);
 }
 BENCHMARK(MicroRWCopyManual, benchmark::PriorityLevel::HIGH);

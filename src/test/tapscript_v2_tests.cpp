@@ -112,6 +112,11 @@ struct FinalizedTapscriptV2Spend {
     CMutableTransaction tx;
 };
 
+struct FinalizedCtvPSBT {
+    PartiallySignedTransaction psbt;
+    CMutableTransaction tx;
+};
+
 static FinalizedTapscriptV2Spend BuildFinalizedTapscriptV2Spend(const CScript& leaf_script, const Stack& initial_stack)
 {
     CScript script_pub_key;
@@ -124,6 +129,53 @@ static FinalizedTapscriptV2Spend BuildFinalizedTapscriptV2Spend(const CScript& l
     tx.vout.emplace_back(500, CScript{} << OP_TRUE);
 
     return {CTxOut{1000, script_pub_key}, std::move(tx)};
+}
+
+static FinalizedCtvPSBT BuildFinalizedCtvPSBT(bool commit_final_script_sigs)
+{
+    const CScript final_script_sig{CScript{} << OP_0};
+
+    CMutableTransaction finalized_tx;
+    finalized_tx.version = 2;
+    finalized_tx.vin.resize(2);
+    for (CTxIn& txin : finalized_tx.vin) txin.scriptSig = final_script_sig;
+    finalized_tx.vout.emplace_back(150'000, CScript{} << OP_TRUE);
+
+    CMutableTransaction template_tx{finalized_tx};
+    if (!commit_final_script_sigs) {
+        for (CTxIn& txin : template_tx.vin) txin.scriptSig.clear();
+    }
+    const PrecomputedTransactionData template_txdata{template_tx};
+    const uint256 template_hash{GetDefaultCheckTemplateVerifyHash(template_tx, template_txdata.m_outputs_single_hash, template_txdata.m_sequences_single_hash, 0)};
+    BOOST_TEST_MESSAGE("finalized CTV fixture template hash: " << template_hash.GetHex());
+    CMutableTransaction sequence_zero_tx{template_tx};
+    for (CTxIn& txin : sequence_zero_tx.vin) txin.nSequence = 0;
+    const PrecomputedTransactionData sequence_zero_txdata{sequence_zero_tx};
+    BOOST_TEST_MESSAGE("sequence-zero CTV fixture template hash: " << GetDefaultCheckTemplateVerifyHash(sequence_zero_tx, sequence_zero_txdata.m_outputs_single_hash, sequence_zero_txdata.m_sequences_single_hash, 0).GetHex());
+    const CScript ctv_script{CScript{} << OP_DROP << ToByteVector(template_hash) << OP_CHECKTEMPLATEVERIFY << OP_DROP << OP_TRUE};
+    const CScript anyone_can_spend_script{CScript{} << OP_DROP << OP_TRUE};
+
+    const auto make_prev_tx = [](const CScript& script_pub_key, uint32_t marker) {
+        CMutableTransaction prev_tx;
+        prev_tx.version = 2;
+        prev_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), marker}, CScript{} << OP_TRUE);
+        prev_tx.vout.emplace_back(100'000, script_pub_key);
+        return MakeTransactionRef(std::move(prev_tx));
+    };
+    const CTransactionRef ctv_prev_tx{make_prev_tx(ctv_script, 0)};
+    const CTransactionRef anyone_can_spend_prev_tx{make_prev_tx(anyone_can_spend_script, 1)};
+    finalized_tx.vin[0].prevout = COutPoint{ctv_prev_tx->GetHash(), 0};
+    finalized_tx.vin[1].prevout = COutPoint{anyone_can_spend_prev_tx->GetHash(), 0};
+
+    CMutableTransaction unsigned_tx{finalized_tx};
+    for (CTxIn& txin : unsigned_tx.vin) txin.scriptSig.clear();
+
+    PartiallySignedTransaction psbt{unsigned_tx};
+    psbt.inputs[0].non_witness_utxo = ctv_prev_tx;
+    psbt.inputs[1].non_witness_utxo = anyone_can_spend_prev_tx;
+    for (PSBTInput& input : psbt.inputs) input.final_script_sig = final_script_sig;
+
+    return {std::move(psbt), std::move(finalized_tx)};
 }
 
 static EvalOutcome VerifyTaprootLeafWithFlags(const CScript& leaf_script, const Stack& initial_stack, uint8_t leaf_version, script_verify_flags flags, uint64_t budget)
@@ -1186,8 +1238,35 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_finalized_witness_is_signed_and_verified)
 
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &txdata));
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, nullptr));
-    BOOST_CHECK(PSBTInputsSignedAndVerified(psbt, txdata));
+    BOOST_CHECK(PSBTInputsSignedAndVerified(psbt));
     BOOST_CHECK(FinalizePSBT(psbt));
+}
+
+BOOST_AUTO_TEST_CASE(finalized_psbt_precomputation_commits_final_scriptsigs_for_ctv)
+{
+    FinalizedCtvPSBT valid{BuildFinalizedCtvPSBT(/*commit_final_script_sigs=*/true)};
+    ScriptError script_error{SCRIPT_ERR_UNKNOWN_ERROR};
+    BOOST_CHECK(PSBTInputsSignedAndVerified(valid.psbt, &script_error));
+    BOOST_CHECK_EQUAL(script_error, SCRIPT_ERR_OK);
+
+    PartiallySignedTransaction finalized_psbt{valid.psbt};
+    BOOST_CHECK(FinalizePSBT(finalized_psbt));
+
+    PartiallySignedTransaction extracted_psbt{valid.psbt};
+    CMutableTransaction extracted_tx;
+    BOOST_CHECK(FinalizeAndExtractPSBT(extracted_psbt, extracted_tx));
+    BOOST_CHECK(CTransaction{extracted_tx} == CTransaction{valid.tx});
+
+    FinalizedCtvPSBT invalid{BuildFinalizedCtvPSBT(/*commit_final_script_sigs=*/false)};
+    script_error = SCRIPT_ERR_UNKNOWN_ERROR;
+    BOOST_CHECK(!PSBTInputsSignedAndVerified(invalid.psbt, &script_error));
+    BOOST_CHECK_EQUAL(script_error, SCRIPT_ERR_TEMPLATE_MISMATCH);
+
+    finalized_psbt = invalid.psbt;
+    BOOST_CHECK(!FinalizePSBT(finalized_psbt));
+
+    extracted_psbt = invalid.psbt;
+    BOOST_CHECK(!FinalizeAndExtractPSBT(extracted_psbt, extracted_tx));
 }
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_and_signtransaction_use_transaction_wide_varops_budget)
@@ -1230,7 +1309,7 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_and_signtransaction_use_transaction_wide_
 
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &txdata));
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 1, &txdata));
-    BOOST_CHECK(!PSBTInputsSignedAndVerified(psbt, txdata));
+    BOOST_CHECK(!PSBTInputsSignedAndVerified(psbt));
     BOOST_CHECK(!FinalizePSBT(psbt));
 
     std::map<COutPoint, Coin> coins;
@@ -1276,7 +1355,7 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_single_input_over_finalized_budget_is_rej
 
     BOOST_CHECK(!PSBTInputSignedAndVerified(psbt, 0, &txdata));
     BOOST_CHECK(!PSBTInputSignedAndVerified(psbt, 0, nullptr));
-    BOOST_CHECK(!PSBTInputsSignedAndVerified(psbt, txdata));
+    BOOST_CHECK(!PSBTInputsSignedAndVerified(psbt));
     BOOST_CHECK(!FinalizePSBT(psbt));
 }
 

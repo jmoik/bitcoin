@@ -1228,11 +1228,16 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
 /** Checks whether a PSBTInput is already signed by checking for non-null finalized fields. */
 bool PSBTInputSigned(const PSBTInput& input);
 
-/** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
+/** Checks whether a PSBTInput is already signed by doing provisional, input-local
+ * script verification using final fields. Final transaction validity must be
+ * checked with PSBTInputsSignedAndVerified().
+ */
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned int input_index, const PrecomputedTransactionData* txdata);
 
-/** Checks whether all PSBT inputs are signed under one transaction-wide varops budget. */
-bool PSBTInputsSignedAndVerified(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata);
+/** Checks whether all PSBT inputs are signed against finalized transaction
+ * precomputation and under one transaction-wide varops budget.
+ */
+bool PSBTInputsSignedAndVerified(const PartiallySignedTransaction& psbt, ScriptError* serror = nullptr);
 
 /** Signs a PSBTInput, verifying that all provided data matches what is being signed.
  *

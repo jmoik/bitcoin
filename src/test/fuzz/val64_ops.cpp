@@ -169,6 +169,7 @@ OptionalBytes ReferenceArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& 
     }
     }
     Assert(false);
+    return std::nullopt;
 }
 
 std::optional<uint64_t> ReferenceArithmeticCost(ArithmeticOp op, size_t a_size, size_t b_size)
@@ -197,6 +198,7 @@ std::optional<uint64_t> ReferenceArithmeticCost(ArithmeticOp op, size_t a_size, 
         return std::nullopt;
     }
     Assert(false);
+    return std::nullopt;
 }
 
 ActualResult ExecuteArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& b, bool portable_math)
@@ -243,6 +245,7 @@ ActualResult ExecuteArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& b, 
         return {va.move_to_valtype(), std::nullopt};
     }
     Assert(false);
+    return {};
 }
 
 bool UsesPortableMath(ArithmeticOp op)
@@ -325,6 +328,7 @@ OptionalBytes ReferenceBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Byt
     }
     }
     Assert(false);
+    return std::nullopt;
 }
 
 uint64_t ReferenceBitwiseShiftCost(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
@@ -358,6 +362,7 @@ uint64_t ReferenceBitwiseShiftCost(BitwiseShiftOp op, const Bytes& a, const Byte
     }
     }
     Assert(false);
+    return 0;
 }
 
 ActualResult ExecuteBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Bytes& b)

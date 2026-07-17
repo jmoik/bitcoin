@@ -2174,7 +2174,7 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
                         uint64_t dummy_varcost = 0;
                         Val64::op_1add(num, dummy_varcost);
                     }
-                    num.normalize();
+                    num.trim_trailing_zeros();
 
                     stack.push_back(num.move_to_valtype());
                 }

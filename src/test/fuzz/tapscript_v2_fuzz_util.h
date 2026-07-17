@@ -59,7 +59,11 @@ inline Bytes Increment(Bytes bytes)
 {
     bytes = Normalize(std::move(bytes));
     for (unsigned char& byte : bytes) {
-        if (++byte != 0) return bytes;
+        if (byte != 0xff) {
+            ++byte;
+            return bytes;
+        }
+        byte = 0;
     }
     bytes.push_back(1);
     return bytes;
@@ -95,14 +99,16 @@ inline Bytes ConsumeElement(FuzzedDataProvider& provider, size_t maximum = 256)
     if (!provider.ConsumeBool()) return ConsumeRandomLengthByteVector(provider, maximum);
 
     Bytes bytes(sizes.at(provider.ConsumeIntegralInRange<size_t>(0, sizes.size() - 1)));
-    switch (provider.ConsumeIntegralInRange<uint8_t>(0, 3)) {
+    const uint8_t mode{provider.ConsumeIntegralInRange<uint8_t>(0, 3)};
+    if (bytes.empty()) return bytes;
+    switch (mode) {
     case 0:
         break;
     case 1:
         std::ranges::fill(bytes, 0xff);
         break;
     case 2:
-        if (!bytes.empty()) bytes.back() = 1;
+        bytes.back() = 1;
         break;
     case 3: {
         const Bytes input{provider.ConsumeBytes<unsigned char>(std::min(bytes.size(), provider.remaining_bytes()))};

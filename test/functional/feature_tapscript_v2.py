@@ -83,7 +83,6 @@ from test_framework.script import (
     OP_DEPTH,
     OP_DIV,
     OP_DROP,
-    OP_DUP,
     OP_ENDIF,
     OP_EQUAL,
     OP_EQUALVERIFY,
@@ -1625,7 +1624,10 @@ class TapScriptV2Test(TaprootTest):
 
         analysis = node.analyzepsbt(finalized_psbt)
         assert_equal(analysis["next"], "creator")
-        assert_equal(analysis["error"], "PSBT is not valid. Finalized transaction exceeds the varops budget")
+        assert_equal(
+            analysis["error"],
+            "PSBT is not valid. Finalized transaction failed script verification: Varops budget exceeded",
+        )
 
         processed = node.descriptorprocesspsbt(finalized_psbt, [])
         assert_equal(processed["complete"], False)

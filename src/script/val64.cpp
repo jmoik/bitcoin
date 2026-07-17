@@ -383,7 +383,7 @@ std::vector<unsigned char> Val64::move_to_valtype()
     return ret;
 }
 
-void Val64::normalize()
+void Val64::trim_trailing_zeros()
 {
     trim_tail();
 }
@@ -1086,7 +1086,8 @@ bool Val64::div_mod(Val64 &v1, Val64 &v2, divmod_op op)
         // are fine: this runs once per division and OP_DIV/OP_MOD pre-charge
         // their full cost.
         // k is at most 63, and max_size reserves one extra limb for normalization.
-        Assert(op_upshift(v1, Val64(k), v1.m_realsize + sizeof(uint64_t), varcost));
+        const bool shifted{op_upshift(v1, Val64(k), v1.m_realsize + sizeof(uint64_t), varcost)};
+        assert(shifted);
         bool overflow = v2.bitshift_up_small(k);
         assert(!overflow);
     }
