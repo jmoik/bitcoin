@@ -126,7 +126,8 @@ BOOST_AUTO_TEST_CASE(valtype_stack_copy_and_move_preserve_accounting)
     }};
     CheckAccounting(original, 225, 125);
 
-    ValtypeStack copied{original};
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) -- exercises copy construction.
+    const ValtypeStack copied{original};
     CheckAccounting(copied, 225, 125);
 
     ValtypeStack copy_assigned;
@@ -136,21 +137,25 @@ BOOST_AUTO_TEST_CASE(valtype_stack_copy_and_move_preserve_accounting)
     ValtypeStack move_source{original};
     ValtypeStack moved{std::move(move_source)};
     CheckAccounting(moved, 225, 125);
+    // NOLINTBEGIN(bugprone-use-after-move) -- moved-from stacks are specified to be empty and reusable.
     BOOST_CHECK(move_source.empty());
     BOOST_CHECK_EQUAL(move_source.size(), 0);
     CheckAccounting(move_source, 0, 0);
     move_source.push_back(valtype(10, 0x44));
     CheckAccounting(move_source, 10, 10);
+    // NOLINTEND(bugprone-use-after-move)
 
     ValtypeStack move_assign_source{original};
     ValtypeStack move_assigned{std::vector<valtype>{valtype(200, 0x44)}};
     move_assigned = std::move(move_assign_source);
     CheckAccounting(move_assigned, 225, 125);
+    // NOLINTBEGIN(bugprone-use-after-move) -- moved-from stacks are specified to be empty and reusable.
     BOOST_CHECK(move_assign_source.empty());
     BOOST_CHECK_EQUAL(move_assign_source.size(), 0);
     CheckAccounting(move_assign_source, 0, 0);
     move_assign_source.push_back(valtype(10, 0x55));
     CheckAccounting(move_assign_source, 10, 10);
+    // NOLINTEND(bugprone-use-after-move)
 }
 
 BOOST_AUTO_TEST_CASE(valtype_stack_reordering_preserves_accounting)

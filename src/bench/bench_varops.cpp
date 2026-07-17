@@ -450,8 +450,8 @@ static EvalOutcome Evaluate(const MaterializedCase& test_case, const BenchSignat
 
 static CScript BuildScript(const CScript& motif, uint64_t repetitions, size_t cleanup_items)
 {
-    const uint64_t suffix_size{uint64_t{cleanup_items} + 1};
-    if (suffix_size > SCRIPT_BYTES) throw std::runtime_error("cleanup suffix exceeds script envelope");
+    if (cleanup_items >= SCRIPT_BYTES) throw std::runtime_error("cleanup suffix exceeds script envelope");
+    const size_t suffix_size{cleanup_items + 1};
     if (!motif.empty() && repetitions > (SCRIPT_BYTES - suffix_size) / motif.size()) {
         throw std::runtime_error("motif repetitions exceed script envelope");
     }

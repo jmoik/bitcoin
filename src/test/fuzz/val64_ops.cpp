@@ -100,14 +100,6 @@ Bytes ToMinimalLittleEndian(cpp_int value)
     return bytes;
 }
 
-Bytes ToFixedLittleEndian(cpp_int value, size_t size)
-{
-    Bytes bytes{ToMinimalLittleEndian(std::move(value))};
-    Assert(bytes.size() <= size);
-    bytes.resize(size);
-    return bytes;
-}
-
 uint64_t ToU64Ceil(const Bytes& bytes, uint64_t max)
 {
     const cpp_int value{FromLittleEndian(bytes)};
@@ -296,6 +288,37 @@ Bytes ReferenceBitwise(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
     return result;
 }
 
+Bytes ShiftLeftFixed(const Bytes& value, uint64_t bits, size_t result_size)
+{
+    Bytes result(result_size, 0);
+    const size_t byte_shift{static_cast<size_t>(bits / 8)};
+    const unsigned int bit_shift{static_cast<unsigned int>(bits % 8)};
+    for (size_t i{0}; i < value.size() && i + byte_shift < result.size(); ++i) {
+        const uint16_t shifted{static_cast<uint16_t>(static_cast<uint16_t>(value[i]) << bit_shift)};
+        result[i + byte_shift] |= static_cast<unsigned char>(shifted);
+        if (bit_shift != 0 && i + byte_shift + 1 < result.size()) {
+            result[i + byte_shift + 1] |= static_cast<unsigned char>(shifted >> 8);
+        }
+    }
+    return result;
+}
+
+Bytes ShiftRightFixed(const Bytes& value, uint64_t bits, size_t result_size)
+{
+    Bytes result(result_size, 0);
+    const size_t byte_shift{static_cast<size_t>(bits / 8)};
+    const unsigned int bit_shift{static_cast<unsigned int>(bits % 8)};
+    for (size_t i{0}; i < result.size(); ++i) {
+        const size_t source{i + byte_shift};
+        uint16_t shifted{static_cast<uint16_t>(static_cast<uint16_t>(value[source]) >> bit_shift)};
+        if (bit_shift != 0 && source + 1 < value.size()) {
+            shifted |= static_cast<uint16_t>(value[source + 1]) << (8 - bit_shift);
+        }
+        result[i] = static_cast<unsigned char>(shifted);
+    }
+    return result;
+}
+
 OptionalBytes ReferenceBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
 {
     switch (op) {
@@ -317,14 +340,14 @@ OptionalBytes ReferenceBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Byt
 
         const size_t prebytes{static_cast<size_t>(bits / 8)};
         const size_t result_size{a.size() + prebytes + (bits % 8 == 0 ? 0 : 1)};
-        return ToFixedLittleEndian(FromLittleEndian(a) << bits, result_size);
+        return ShiftLeftFixed(a, bits, result_size);
     }
     case BitwiseShiftOp::DOWNSHIFT: {
         const uint64_t a_bits{static_cast<uint64_t>(a.size()) * 8};
         const uint64_t bits{ToU64Ceil(b, a_bits)};
         const size_t bytes{static_cast<size_t>(bits / 8)};
         if (bytes >= a.size()) return Bytes{};
-        return ToFixedLittleEndian(FromLittleEndian(a) >> bits, a.size() - bytes);
+        return ShiftRightFixed(a, bits, a.size() - bytes);
     }
     }
     Assert(false);

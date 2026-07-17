@@ -19,8 +19,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <sstream>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,16 +43,6 @@ static std::vector<unsigned char> vec_setbit(size_t bit,
     std::vector<unsigned char> v = vec_sized_for_bit(bit, in);
     v[bit / 8] |= (1 << (bit % 8));
     return v;
-}
-
-// Convert a vector to a readable representation for test diagnostics.
-template <typename T>
-std::string vector_to_string(const std::vector<T>& vec) {
-    std::ostringstream oss;
-    for (const T& item : vec) {
-        oss << static_cast<int>(item) << " ";
-    }
-    return oss.str();
 }
 
 // A de-privatizing child.  Not efficient, as constructor copies, but convenient for testing.
@@ -99,8 +87,9 @@ static Val64Test val64_singleton(uint64_t val)
 static cpp_int vector_to_cpp_int(const std::vector<unsigned char>& vec)
 {
     cpp_int num{0};
-    for (size_t i = 0; i < vec.size(); ++i) {
-        num += cpp_int{vec[i]} << (8 * i);
+    for (auto it = vec.rbegin(); it != vec.rend(); ++it) {
+        num *= 256;
+        num += *it;
     }
     return num;
 }
@@ -111,8 +100,8 @@ static std::vector<unsigned char> cpp_int_to_vector(cpp_int num)
 
     std::vector<unsigned char> vec;
     while (num != 0) {
-        vec.push_back(static_cast<unsigned char>((num & 0xff).convert_to<unsigned int>()));
-        num >>= 8;
+        vec.push_back(static_cast<unsigned char>((num % 256).convert_to<unsigned int>()));
+        num /= 256;
     }
     return vec;
 }
@@ -123,6 +112,43 @@ static std::vector<unsigned char> cpp_int_to_fixed_vector(cpp_int num, size_t le
     BOOST_REQUIRE_LE(vec.size(), len);
     vec.resize(len);
     return vec;
+}
+
+static std::vector<unsigned char> shift_left_fixed(const std::vector<unsigned char>& value, size_t bits, size_t result_size)
+{
+    std::vector<unsigned char> result(result_size, 0);
+    const size_t byte_shift{bits / 8};
+    const unsigned int bit_shift{static_cast<unsigned int>(bits % 8)};
+    for (size_t i{0}; i < value.size() && i + byte_shift < result.size(); ++i) {
+        const uint16_t shifted{static_cast<uint16_t>(static_cast<uint16_t>(value[i]) << bit_shift)};
+        result[i + byte_shift] |= static_cast<unsigned char>(shifted);
+        if (bit_shift != 0 && i + byte_shift + 1 < result.size()) {
+            result[i + byte_shift + 1] |= static_cast<unsigned char>(shifted >> 8);
+        }
+    }
+    return result;
+}
+
+static std::vector<unsigned char> shift_right_fixed(const std::vector<unsigned char>& value, size_t bits, size_t result_size)
+{
+    std::vector<unsigned char> result(result_size, 0);
+    const size_t byte_shift{bits / 8};
+    const unsigned int bit_shift{static_cast<unsigned int>(bits % 8)};
+    for (size_t i{0}; i < result.size(); ++i) {
+        const size_t source{i + byte_shift};
+        uint16_t shifted{static_cast<uint16_t>(static_cast<uint16_t>(value[source]) >> bit_shift)};
+        if (bit_shift != 0 && source + 1 < value.size()) {
+            shifted |= static_cast<uint16_t>(value[source + 1]) << (8 - bit_shift);
+        }
+        result[i] = static_cast<unsigned char>(shifted);
+    }
+    return result;
+}
+
+static std::vector<unsigned char> trim_trailing_zeros(std::vector<unsigned char> value)
+{
+    while (!value.empty() && value.back() == 0) value.pop_back();
+    return value;
 }
 
 template <typename T>
@@ -356,8 +382,6 @@ BOOST_AUTO_TEST_CASE(val64_add)
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
             std::vector<unsigned char> v2 =    m_rng.randbytes(len2);
 
-            BOOST_TEST_MESSAGE("Adding " << vector_to_string(v1) << " + " << vector_to_string(v2));
-
             const std::vector<unsigned char> expect = cpp_int_to_vector(vector_to_cpp_int(v1) + vector_to_cpp_int(v2));
 
             // Val64 version
@@ -376,6 +400,14 @@ BOOST_AUTO_TEST_CASE(val64_sub)
     uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::set_force_offset_span(offset_span);
+
+        // Underflow must not leave nonzero bytes in Val64's word padding.
+        {
+            Val64Test smaller{{0xb2, 0x89}};
+            const Val64Test larger{{0x16, 0xaa, 0x73, 0x3d}};
+            BOOST_CHECK(!Val64::op_sub(smaller, larger, varcost));
+            BOOST_CHECK_EQUAL(smaller.get(0) >> 16, 0U);
+        }
 
         // Sub zero (unchanged).
         for (size_t i = 0; i < 128; i++) {
@@ -406,7 +438,6 @@ BOOST_AUTO_TEST_CASE(val64_sub)
                 expected = vec_setbit(j, expected);
 
             std::vector<unsigned char> va = v64a.move_to_valtype();
-            BOOST_TEST_MESSAGE("i is " << i << " expected " << vector_to_string(expected) << " got " << vector_to_string(va));
             BOOST_CHECK(va == expected);
         }
         for (size_t i = 0; i < 1000; i++) {
@@ -415,8 +446,6 @@ BOOST_AUTO_TEST_CASE(val64_sub)
 
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
             std::vector<unsigned char> v2 =    m_rng.randbytes(len2);
-
-            BOOST_TEST_MESSAGE("Subtracting " << vector_to_string(v1) << " - " << vector_to_string(v2));
 
             const cpp_int cpp1 = vector_to_cpp_int(v1);
             const cpp_int cpp2 = vector_to_cpp_int(v2);
@@ -452,8 +481,6 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
             for (size_t j = 0; j < 128; j++) {
                 std::vector<unsigned char> va = vec_setbit(i);
                 std::vector<unsigned char> vb = vec_setbit(j);
-                BOOST_TEST_MESSAGE("Cmp " << vector_to_string(va) << " vs " << vector_to_string(vb));
-
                 Val64 v64a(std::move(va));
                 Val64 v64b(std::move(vb));
                 int res = v64a.cmp(v64b, varcost);
@@ -466,8 +493,6 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
                 else
                     expected = -1;
 
-                BOOST_TEST_MESSAGE("Got " << res << " expected " << expected);
-
                 BOOST_CHECK(res == expected);
             }
         }
@@ -478,8 +503,6 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
 
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
             std::vector<unsigned char> v2 =    m_rng.randbytes(len2);
-
-            BOOST_TEST_MESSAGE("Cmp " << vector_to_string(v1) << " vs " << vector_to_string(v2));
 
             const cpp_int cpp1 = vector_to_cpp_int(v1);
             const cpp_int cpp2 = vector_to_cpp_int(v2);
@@ -510,8 +533,6 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
         for (size_t i = 0; i < 128; i++) {
             for (size_t j = 0; j < 128; j++) {
                 std::vector<unsigned char> va = vec_setbit(i);
-                BOOST_TEST_MESSAGE("Upshift " << vector_to_string(va) << " by " << j);
-
                 Val64 v64a(std::move(va));
                 bool ok = Val64::op_upshift(v64a, val64_singleton(j), 1000, varcost);
                 BOOST_CHECK(ok);
@@ -520,8 +541,6 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
                 std::vector<unsigned char> expected = vec_setbit(i + j);
                 // Definitionally, upshift inserts an extra (j + 7) / 8 bytes.
                 expected.resize(1 + i / 8 + (j + 7) / 8);
-
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(va) << " expected " << vector_to_string(expected));
 
                 BOOST_CHECK(va == expected);
             }
@@ -533,11 +552,9 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
 
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
 
-            BOOST_TEST_MESSAGE("Left shifting " << vector_to_string(v1) << " by " << sbits);
-
             // Always leaves trailing zeroes
             const size_t expected_len = len1 + sbits / 8 + (sbits % 8 ? 1 : 0);
-            std::vector<unsigned char> expect = cpp_int_to_fixed_vector(vector_to_cpp_int(v1) << sbits, expected_len);
+            const std::vector<unsigned char> expect = shift_left_fixed(v1, sbits, expected_len);
 
             // Val64 version
             Val64 v64(std::move(v1));
@@ -559,8 +576,6 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
         for (size_t i = 0; i < 128; i++) {
             for (size_t j = 0; j < 128; j++) {
                 std::vector<unsigned char> va = vec_setbit(i);
-                BOOST_TEST_MESSAGE("Downshift " << vector_to_string(va) << " by " << j);
-
                 BOOST_CHECK(va.size() == (i + 8) / 8);
                 Val64 v64a(std::move(va));
                 Val64::op_downshift(v64a, val64_singleton(j), varcost);
@@ -574,8 +589,6 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
                 if (j / 8 <= (i + 8) / 8)
                     expected.resize((i + 8) / 8 - j / 8);
 
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(va) << " expected " << vector_to_string(expected));
-
                 BOOST_CHECK(va == expected);
             }
         }
@@ -586,11 +599,9 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
 
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
 
-            BOOST_TEST_MESSAGE("Right shifting " << vector_to_string(v1) << " by " << sbits);
-
             // We subtract only whole bytes from length.
             const size_t expected_len = v1.size() > sbits / 8 ? v1.size() - sbits / 8 : 0;
-            std::vector<unsigned char> expect = cpp_int_to_fixed_vector(vector_to_cpp_int(v1) >> sbits, expected_len);
+            const std::vector<unsigned char> expect = shift_right_fixed(v1, sbits, expected_len);
 
             // Val64 version
             Val64 v64(std::move(v1));
@@ -734,7 +745,6 @@ BOOST_AUTO_TEST_CASE(val64_mul)
         for (size_t lhs_bit = 0; lhs_bit < POWER_OF_TWO_BITS; lhs_bit++) {
             for (size_t rhs_bit = 0; rhs_bit < RHS_BOUNDARY_BITS; rhs_bit++) {
                 std::vector<unsigned char> va = vec_setbit(lhs_bit), vb = vec_setbit(rhs_bit);
-                BOOST_TEST_MESSAGE("Multiply " << vector_to_string(va) << " by " << vector_to_string(vb));
 
                 Val64 v64a(std::move(va));
                 Val64 v64b(std::move(vb));
@@ -742,16 +752,12 @@ BOOST_AUTO_TEST_CASE(val64_mul)
                 std::vector<unsigned char> retvec = ret.move_to_valtype();
 
                 std::vector<unsigned char> expected = vec_setbit(lhs_bit + rhs_bit);
-
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(retvec) << " expected " << vector_to_string(expected));
-
                 BOOST_CHECK(retvec == expected);
             }
 
             {
                 std::vector<unsigned char> va = vec_setbit(lhs_bit);
                 std::vector<unsigned char> vb;
-                BOOST_TEST_MESSAGE("Multiply " << vector_to_string(va) << " by zero");
 
                 Val64 v64a(std::move(va));
                 Val64 v64b(std::move(vb));
@@ -771,16 +777,13 @@ BOOST_AUTO_TEST_CASE(val64_mul)
                     va.back() = static_cast<unsigned char>((1U << high_byte_bits) - 1);
                 }
                 std::vector<unsigned char> vb = vec_setbit(shift);
-                BOOST_TEST_MESSAGE("Multiply " << vector_to_string(va) << " by " << vector_to_string(vb));
+                const std::vector<unsigned char> expected{
+                    trim_trailing_zeros(shift_left_fixed(va, shift, (bits + shift + 7) / 8))};
 
                 Val64 v64a(std::move(va));
                 Val64 v64b(std::move(vb));
                 Val64 ret = Val64::op_mul(v64a, v64b);
                 std::vector<unsigned char> retvec = ret.move_to_valtype();
-
-                const std::vector<unsigned char> expected = cpp_int_to_vector(((cpp_int{1} << bits) - 1) << shift);
-
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(retvec) << " expected " << vector_to_string(expected));
 
                 BOOST_CHECK(retvec == expected);
             }
@@ -791,8 +794,6 @@ BOOST_AUTO_TEST_CASE(val64_mul)
 
             std::vector<unsigned char> lhs = m_rng.randbytes(lhs_len);
             std::vector<unsigned char> rhs = m_rng.randbytes(rhs_len);
-
-            BOOST_TEST_MESSAGE("Multiplying " << vector_to_string(lhs) << " by " << vector_to_string(rhs));
 
             const std::vector<unsigned char> expect = cpp_int_to_vector(vector_to_cpp_int(lhs) * vector_to_cpp_int(rhs));
 
@@ -825,7 +826,6 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
 
                 // Append empty bytes (shouldn't make a difference)
                 va.insert(va.end(), j, 0);
-                BOOST_TEST_MESSAGE("2mul " << vector_to_string(va));
 
                 Val64 v64a(std::move(va));
                 Val64::op_2mul(v64a, varcost);
@@ -835,9 +835,6 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
 
                 if (i != 128)
                     expected = vec_setbit(i + 1);
-
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(va) << " expected " << vector_to_string(expected));
-
                 BOOST_CHECK(va == expected);
             }
         }
@@ -846,9 +843,8 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
             size_t len1 = m_rng.randrange(500);
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
 
-            BOOST_TEST_MESSAGE("2mul " << vector_to_string(v1));
-
-            const std::vector<unsigned char> expect = cpp_int_to_vector(vector_to_cpp_int(v1) << 1);
+            const std::vector<unsigned char> expect{
+                trim_trailing_zeros(shift_left_fixed(v1, 1, v1.size() + 1))};
 
             // Val64 version
             Val64 v64(std::move(v1));
@@ -888,7 +884,6 @@ BOOST_AUTO_TEST_CASE(val64_2div)
                 // Append empty bytes (shouldn't make a difference)
                 va.insert(va.end(), j, 0);
 
-                BOOST_TEST_MESSAGE("2div " << vector_to_string(va));
                 Val64 v64a(std::move(va));
                 Val64::op_2div(v64a, varcost);
                 va = v64a.move_to_valtype();
@@ -896,9 +891,6 @@ BOOST_AUTO_TEST_CASE(val64_2div)
                 std::vector<unsigned char> expected;
                 if (i > 0 && i != 128)
                     expected = vec_setbit(i - 1);
-
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(va) << " expected " << vector_to_string(expected));
-
                 BOOST_CHECK(va == expected);
             }
         }
@@ -907,9 +899,8 @@ BOOST_AUTO_TEST_CASE(val64_2div)
             size_t len1 = m_rng.randrange(500);
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
 
-            BOOST_TEST_MESSAGE("2div " << vector_to_string(v1));
-
-            const std::vector<unsigned char> expect = cpp_int_to_vector(vector_to_cpp_int(v1) >> 1);
+            const std::vector<unsigned char> expect{
+                trim_trailing_zeros(shift_right_fixed(v1, 1, v1.size()))};
 
             // Val64 version
             Val64 v64(std::move(v1));
@@ -960,7 +951,6 @@ BOOST_AUTO_TEST_CASE(val64_div_mod)
         for (size_t i = 0; i < 128; i++) {
             for (size_t j = 0; j < 129; j++) {
                 std::vector<unsigned char> va = vec_setbit(i), vb = vec_setbit(j);
-                BOOST_TEST_MESSAGE("Divide " << vector_to_string(va) << " by " << vector_to_string(vb));
 
                 Val64Test v64a_div(va), v64a_mod(va);
                 Val64Test v64b_div(vb), v64b_mod(vb);
@@ -977,7 +967,6 @@ BOOST_AUTO_TEST_CASE(val64_div_mod)
                 else
                     expected_remainder = vec_setbit(i);
 
-                BOOST_TEST_MESSAGE("Got " << vector_to_string(div_vec) << "/" << vector_to_string(mod_vec) << " expected " << vector_to_string(expected_div) << "/" << vector_to_string(expected_remainder));
 
                 BOOST_CHECK(div_vec == expected_div);
                 BOOST_CHECK(mod_vec == expected_remainder);
@@ -1000,8 +989,6 @@ BOOST_AUTO_TEST_CASE(val64_div_mod)
 
             std::vector<unsigned char> v1 =    m_rng.randbytes(len1);
             std::vector<unsigned char> v2 =    m_rng.randbytes(len2);
-
-            BOOST_TEST_MESSAGE("Dividing " << vector_to_string(v1) << " by " << vector_to_string(v2));
 
             const cpp_int cpp1 = vector_to_cpp_int(v1);
             const cpp_int cpp2 = vector_to_cpp_int(v2);
@@ -1255,7 +1242,6 @@ BOOST_AUTO_TEST_CASE(val64_portable_math_edge_cases)
 {
     for (bool portable_math : {false, true}) {
         Val64Test::set_force_portable_math(portable_math);
-        BOOST_TEST_MESSAGE("Testing with force_portable_math=" << portable_math);
 
     // Test multiplication edge case: (2^64-1) * (2^64-1)
     // This tests the mul_span portable implementation

@@ -707,8 +707,15 @@ bool Val64::op_sub(Val64& v1, const Val64& v2, uint64_t& varcost)
     size_t nonzero_len;
 
     bool underflow = sub_span(v1.m_u64span, v2.m_u64span, nonzero_len);
-    if (underflow)
+    if (underflow) {
+        // sub_span writes whole words, but padding bytes outside the logical value
+        // must remain zero even when the result is discarded for underflow.
+        if (v1.m_realsize < v1.m_u64span.size_bytes()) {
+            unsigned char* bytes{reinterpret_cast<unsigned char*>(v1.m_u64span.data())};
+            std::fill(bytes + v1.m_realsize, bytes + v1.m_u64span.size_bytes(), 0);
+        }
         return false;
+    }
 
     v1.trim_tail(nonzero_len);
     return true;

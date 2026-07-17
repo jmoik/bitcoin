@@ -8,23 +8,6 @@
 #include <stdexcept>
 #include <utility>
 
-namespace {
-
-valtype CopyWithVal64Capacity(const valtype& element)
-{
-    constexpr size_t WORD_BYTES{sizeof(uint64_t)};
-    const size_t capacity{element.size() + (WORD_BYTES - element.size() % WORD_BYTES) % WORD_BYTES};
-    if (capacity == element.size()) return element;
-
-    // Leave room for Val64's zero padding so converting this copy does not reallocate it.
-    valtype copy;
-    copy.reserve(capacity);
-    copy.insert(copy.end(), element.begin(), element.end());
-    return copy;
-}
-
-} // namespace
-
 ValtypeStack::ValtypeStack(const std::vector<std::vector<unsigned char>>& plain_stack) : stack(plain_stack)
 {
     recalculate_size_tracking();
@@ -61,8 +44,14 @@ ValtypeStack& ValtypeStack::operator=(ValtypeStack&& other) noexcept
 
 void ValtypeStack::push_back(const std::vector<unsigned char>& element)
 {
-    valtype copy{CopyWithVal64Capacity(element)};
-    stack.push_back(std::move(copy));
+    constexpr size_t WORD_BYTES{sizeof(uint64_t)};
+    const size_t capacity{element.size() + (WORD_BYTES - element.size() % WORD_BYTES) % WORD_BYTES};
+
+    // Reserve on the element in its final container so Val64's padding capacity
+    // is guaranteed to survive the copy.
+    stack.emplace_back();
+    stack.back().reserve(capacity);
+    stack.back().insert(stack.back().end(), element.begin(), element.end());
     update_size_tracking(stack.back(), true);
 }
 
