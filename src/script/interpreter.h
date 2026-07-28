@@ -149,6 +149,12 @@ enum class script_verify_flag_name : uint8_t {
     // Making unknown public key versions (in BIP 342 scripts) non-standard
     SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE,
 
+    // Enable BIP 440/441 script restoration and Tapscript v2.
+    SCRIPT_VERIFY_SCRIPT_RESTORATION,
+
+    // Reject Tapscript v2 before the deployment is active.
+    SCRIPT_VERIFY_DISCOURAGE_SCRIPT_RESTORATION,
+
     // Constants to point to the highest flag in use. Add new flags above this line.
     //
     SCRIPT_VERIFY_END_MARKER

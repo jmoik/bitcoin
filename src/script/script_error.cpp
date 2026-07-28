@@ -119,6 +119,8 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Signature is found in scriptCode";
         case SCRIPT_ERR_SCRIPTNUM:
             return "Script number overflowed or is non-minimally encoded";
+        case SCRIPT_ERR_DISCOURAGE_SCRIPT_RESTORATION:
+            return "Reserved for SCRIPT_RESTORATION soft-fork upgrade";
         case SCRIPT_ERR_DIVIDE_BY_ZERO:
             return "OP_DIV or OP_MOD by zero";
         case SCRIPT_ERR_SUB_UNDERFLOW:
