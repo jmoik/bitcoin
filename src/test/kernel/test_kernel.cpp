@@ -693,6 +693,64 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
         /*amount=*/135125,
         /*input_index=*/1,
         /*taproot=*/true);
+
+    // Tapleaf 0xC2 (BIPs 440 & 441): an output with an OP_1 and an OP_0 leaf of version 0xc2, and a spend of each
+    auto tapleaf_0xc2_spent_script_pubkey{ScriptPubkey{hex_string_to_byte_vec("51209ce255da292a400bd121108ea57476e0a8c9fc0803b6969f3189fba0a1df3590")}};
+    auto tapleaf_0xc2_true_spending_tx{Transaction{hex_string_to_byte_vec("02000000000101111111111111111111111111111111111111111111111111111111111111110000000000000000000001b8820100000000002251209ce255da292a400bd121108ea57476e0a8c9fc0803b6969f3189fba0a1df359002015141c384bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b0b771944998224bcfcee93880653cc4388b6da2301c2f862ffdd5821a3c4b4bcd00000000")}};
+    auto tapleaf_0xc2_false_spending_tx{Transaction{hex_string_to_byte_vec("02000000000101111111111111111111111111111111111111111111111111111111111111110000000000000000000001b8820100000000002251209ce255da292a400bd121108ea57476e0a8c9fc0803b6969f3189fba0a1df359002010041c384bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b07f2e1235044710205aaec280e6d3075ca84a1b2f239bdcb3fe1db04234142f9000000000")}};
+    std::vector<TransactionOutput> tapleaf_0xc2_spent_outputs;
+    tapleaf_0xc2_spent_outputs.emplace_back(tapleaf_0xc2_spent_script_pubkey, 100000);
+    auto tapleaf_0xc2_true_precomputed_txdata{PrecomputedTransactionData{
+        /*tx_to=*/tapleaf_0xc2_true_spending_tx,
+        /*spent_outputs=*/tapleaf_0xc2_spent_outputs,
+    }};
+    auto tapleaf_0xc2_false_precomputed_txdata{PrecomputedTransactionData{
+        /*tx_to=*/tapleaf_0xc2_false_spending_tx,
+        /*spent_outputs=*/tapleaf_0xc2_spent_outputs,
+    }};
+    // Without the TAPLEAF_0XC2 flag, 0xc2 is an unknown leaf version, so both spends pass.
+    run_verify_test(
+        /*spent_script_pubkey=*/tapleaf_0xc2_spent_script_pubkey,
+        /*spending_tx=*/tapleaf_0xc2_true_spending_tx,
+        /*precomputed_txdata=*/&tapleaf_0xc2_true_precomputed_txdata,
+        /*amount=*/100000,
+        /*input_index=*/0,
+        /*taproot=*/true);
+    run_verify_test(
+        /*spent_script_pubkey=*/tapleaf_0xc2_spent_script_pubkey,
+        /*spending_tx=*/tapleaf_0xc2_false_spending_tx,
+        /*precomputed_txdata=*/&tapleaf_0xc2_false_precomputed_txdata,
+        /*amount=*/100000,
+        /*input_index=*/0,
+        /*taproot=*/true);
+    // With the flag, the leaves are evaluated.
+    constexpr auto VERIFY_ALL_TAPLEAF_0XC2{ScriptVerificationFlags::ALL | ScriptVerificationFlags::TAPLEAF_0XC2};
+    auto status = ScriptVerifyStatus::OK;
+    BOOST_CHECK(tapleaf_0xc2_spent_script_pubkey.Verify(
+        100000,
+        tapleaf_0xc2_true_spending_tx,
+        &tapleaf_0xc2_true_precomputed_txdata,
+        0,
+        VERIFY_ALL_TAPLEAF_0XC2,
+        status));
+    BOOST_CHECK(status == ScriptVerifyStatus::OK);
+    BOOST_CHECK(!tapleaf_0xc2_spent_script_pubkey.Verify(
+        100000,
+        tapleaf_0xc2_false_spending_tx,
+        &tapleaf_0xc2_false_precomputed_txdata,
+        0,
+        VERIFY_ALL_TAPLEAF_0XC2,
+        status));
+    BOOST_CHECK(status == ScriptVerifyStatus::OK);
+    // The flag requires the taproot flag.
+    BOOST_CHECK(!tapleaf_0xc2_spent_script_pubkey.Verify(
+        100000,
+        tapleaf_0xc2_true_spending_tx,
+        &tapleaf_0xc2_true_precomputed_txdata,
+        0,
+        VERIFY_ALL_PRE_TAPROOT | ScriptVerificationFlags::TAPLEAF_0XC2,
+        status));
+    BOOST_CHECK(status == ScriptVerifyStatus::ERROR_INVALID_FLAGS_COMBINATION);
 }
 
 BOOST_AUTO_TEST_CASE(logging_tests)

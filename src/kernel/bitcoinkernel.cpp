@@ -74,6 +74,7 @@ bool is_valid_flag_combination(script_verify_flags flags)
 {
     if (flags & SCRIPT_VERIFY_CLEANSTACK && ~flags & (SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS)) return false;
     if (flags & SCRIPT_VERIFY_WITNESS && ~flags & SCRIPT_VERIFY_P2SH) return false;
+    if (flags & SCRIPT_VERIFY_TAPLEAF_0XC2 && ~flags & SCRIPT_VERIFY_TAPROOT) return false;
     return true;
 }
 
@@ -684,7 +685,7 @@ int btck_script_pubkey_verify(const btck_ScriptPubkey* script_pubkey,
                               btck_ScriptVerifyStatus* status)
 {
     // Assert that all specified flags are part of the interface before continuing
-    assert((flags & ~btck_ScriptVerificationFlags_ALL) == 0);
+    assert((flags & ~(btck_ScriptVerificationFlags_ALL | btck_ScriptVerificationFlags_TAPLEAF_0XC2)) == 0);
 
     if (!is_valid_flag_combination(script_verify_flags::from_int(flags))) {
         if (status) *status = btck_ScriptVerifyStatus_ERROR_INVALID_FLAGS_COMBINATION;

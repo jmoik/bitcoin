@@ -539,6 +539,7 @@ typedef uint32_t btck_ScriptVerificationFlags;
 #define btck_ScriptVerificationFlags_CHECKSEQUENCEVERIFY ((btck_ScriptVerificationFlags)(1U << 10)) //!< enable CHECKSEQUENCEVERIFY (BIP112)
 #define btck_ScriptVerificationFlags_WITNESS ((btck_ScriptVerificationFlags)(1U << 11))             //!< enable WITNESS (BIP141)
 #define btck_ScriptVerificationFlags_TAPROOT ((btck_ScriptVerificationFlags)(1U << 17))             //!< enable TAPROOT (BIPs 341 & 342)
+#define btck_ScriptVerificationFlags_TAPLEAF_0XC2 ((btck_ScriptVerificationFlags)(1U << 21))        //!< enable Tapleaf 0xC2 (BIPs 440 & 441); not in ALL
 #define btck_ScriptVerificationFlags_ALL ((btck_ScriptVerificationFlags)(btck_ScriptVerificationFlags_P2SH |                \
                                                                          btck_ScriptVerificationFlags_DERSIG |              \
                                                                          btck_ScriptVerificationFlags_NULLDUMMY |           \
@@ -807,6 +808,9 @@ BITCOINKERNEL_API btck_ScriptPubkey* BITCOINKERNEL_WARN_UNUSED_RESULT btck_scrip
  * `btck_ScriptVerificationFlags_WITNESS` flag is set in the flags bitfield, the
  * amount parameter is used. If the taproot flag is set, the precomputed data
  * must contain the spent outputs.
+ * With the Tapleaf 0xC2 flag, the input is checked within the varops budget
+ * of a maximum-weight block, not the budget that the transaction's Tapleaf
+ * 0xC2 inputs share (BIP 440).
  *
  * @param[in] script_pubkey      Non-null, script pubkey to be spent.
  * @param[in] amount             Amount of the script pubkey's associated output. May be zero if
