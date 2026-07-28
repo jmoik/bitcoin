@@ -135,6 +135,12 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0; // No activation delay
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 1815; // 90%
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 2016;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].min_activation_height = 0; // No activation delay
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].threshold = 1815; // 90%
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].period = 2016;
 
         ApplyDeploymentOptions(opts.dep_opts);
 
@@ -266,6 +272,12 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0; // No activation delay
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 1512; // 75%
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 2016;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].min_activation_height = 0; // No activation delay
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].threshold = 1512; // 75%
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].period = 2016;
 
         ApplyDeploymentOptions(opts.dep_opts);
 
@@ -374,6 +386,12 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0; // No activation delay
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 1512; // 75%
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 2016;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].min_activation_height = 0; // No activation delay
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].threshold = 1512; // 75%
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].period = 2016;
 
         ApplyDeploymentOptions(opts.dep_opts);
 
@@ -526,6 +544,12 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0; // No activation delay
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 1815; // 90%
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 2016;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].min_activation_height = 0; // No activation delay
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].threshold = 1815; // 90%
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].period = 2016;
 
         ApplyDeploymentOptions(options.dep_opts);
 
@@ -613,6 +637,12 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].min_activation_height = 0; // No activation delay
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 108; // 75%
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 144; // Faster than normal for regtest (144 instead of 2016)
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].bit = 2;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].min_activation_height = 0; // No activation delay
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].threshold = 108; // 75%
+        consensus.vDeployments[Consensus::DEPLOYMENT_TAPLEAF_0XC2].period = 144; // Faster than normal for regtest (144 instead of 2016)
 
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
