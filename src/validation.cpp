@@ -898,6 +898,20 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
+    // Until the next block enforces the Tapleaf 0xC2 rules, consensus treats a
+    // 0xc2 leaf as an unknown leaf version, so don't relay its spends, as for
+    // Taproot spends before Taproot's activation. Unlike Taproot's output type,
+    // the leaf version is in the witness, so reject the witness: rejecting the
+    // inputs would also reject the txid, and a forged witness could then block
+    // relay of the valid transaction.
+    if (m_pool.m_opts.require_standard && !DeploymentActiveAfter(m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman, Consensus::DEPLOYMENT_TAPLEAF_0XC2)) {
+        for (const CTxIn& txin : tx.vin) {
+            if (SpendsTapleaf0xC2(txin.scriptWitness, m_view.AccessCoin(txin.prevout).out.scriptPubKey)) {
+                return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard", "Tapleaf 0xC2 spend before activation");
+            }
+        }
+    }
+
     // Check for non-standard witnesses.
     if (tx.HasWitness() && m_pool.m_opts.require_standard && !IsWitnessStandard(tx, m_view)) {
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
@@ -2293,6 +2307,10 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
     // Enforce BIP147 NULLDUMMY (activated simultaneously with segwit)
     if (DeploymentActiveAt(block_index, chainman, Consensus::DEPLOYMENT_SEGWIT)) {
         flags |= SCRIPT_VERIFY_NULLDUMMY;
+    }
+
+    if (DeploymentActiveAt(block_index, chainman, Consensus::DEPLOYMENT_TAPLEAF_0XC2)) {
+        flags |= SCRIPT_VERIFY_TAPLEAF_0XC2;
     }
 
     return flags;
