@@ -29,6 +29,7 @@ EXPECTED_BOOST_INCLUDES = [
                            "boost/multi_index/sequenced_index.hpp",
                            "boost/multi_index/tag.hpp",
                            "boost/multi_index_container.hpp",
+                           "boost/multiprecision/cpp_int.hpp",
                            "boost/operators.hpp",
                            "boost/test/included/unit_test.hpp",
                            "boost/test/unit_test.hpp",
