@@ -2,6 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <crypto/sha256.h>
+#include <hash.h>
+#include <key.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 #include <script/op_tx.h>
@@ -18,9 +21,11 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -29,6 +34,15 @@ using valtype = std::vector<unsigned char>;
 using Stack = std::vector<valtype>;
 
 constexpr uint64_t DEFAULT_VAROPS{40'000'000'000};
+
+valtype TaggedHashPrefix(std::string_view tag)
+{
+    uint256 tag_hash;
+    CSHA256().Write(reinterpret_cast<const unsigned char*>(tag.data()), tag.size()).Finalize(tag_hash.begin());
+    valtype result{tag_hash.begin(), tag_hash.end()};
+    result.insert(result.end(), tag_hash.begin(), tag_hash.end());
+    return result;
+}
 
 valtype DecodeHex(const UniValue& value)
 {
@@ -362,6 +376,199 @@ BOOST_AUTO_TEST_CASE(future_selector_version_succeeds)
                 SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
     eval_script(CScript{} << OP_0 << OP_IF << selector << OP_TX << OP_ENDIF << OP_1,
                 SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS, SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_CASE(bip341_sighash_construction_csfs)
+{
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+
+    // Each aggregate selector emits the exact serialization committed by BIP 341.
+    const valtype globals{0x00, 0x07, 0x00, 0x00, 0x00, 0x00};
+    const valtype prevouts{0x00, 0x01, 0x00, 0x20, 0x03, 0x00};
+    const valtype amounts{0x00, 0x01, 0x00, 0x20, 0x04, 0x00};
+    const valtype scriptpubkeys{0x00, 0x01, 0x00, 0x20, 0x08, 0x00};
+    const valtype sequences{0x00, 0x01, 0x00, 0x20, 0x20, 0x00};
+    const valtype outputs{0x00, 0x01, 0x00, 0x02, 0x00, 0x03};
+    const valtype input_index{0x00, 0x01, 0x01, 0x00, 0x00, 0x00};
+    const valtype tapscript{0x00, 0x01, 0x04, 0x00, 0x00, 0x00};
+    const valtype codesep_position{0x00, 0x01, 0x80, 0x00, 0x00, 0x00};
+
+    CScript script;
+    valtype sighash_prefix{TaggedHashPrefix("TapSighash")};
+    sighash_prefix.push_back(0x00); // epoch
+    sighash_prefix.push_back(SIGHASH_DEFAULT);
+    script << sighash_prefix;
+
+    const auto append_value{[&](const valtype& selector) {
+        script << selector << OP_TX << OP_CAT;
+    }};
+    const auto append_hash{[&](const valtype& selector) {
+        script << selector << OP_TX << OP_SHA256 << OP_CAT;
+    }};
+
+    append_value(globals);
+    append_hash(prevouts);
+    append_hash(amounts);
+    append_hash(scriptpubkeys);
+    append_hash(sequences);
+    append_hash(outputs);
+    script << valtype{0x02} << OP_CAT; // script-path spend without annex
+    append_value(input_index);
+
+    valtype tapleaf_prefix{TaggedHashPrefix("TapLeaf")};
+    tapleaf_prefix.push_back(TAPROOT_LEAF_TAPSCRIPT_V2);
+    script << tapleaf_prefix << tapscript << OP_TX << OP_CAT << OP_SHA256 << OP_CAT;
+    script << valtype{0x00} << OP_CAT; // key version
+    append_value(codesep_position);
+    script << OP_SHA256 << pubkey << OP_CHECKSIGFROMSTACK;
+
+    CMutableTransaction mutable_tx;
+    mutable_tx.version = 2;
+    mutable_tx.nLockTime = 500'000;
+    mutable_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 3}, CScript{}, 0xfffffffd);
+    mutable_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 7}, CScript{}, 0xfffffffc);
+    mutable_tx.vout.emplace_back(80'000, CScript{} << OP_TRUE);
+    mutable_tx.vout.emplace_back(39'000, CScript{} << valtype{0xaa, 0xbb});
+    const CTransaction tx{mutable_tx};
+    const std::vector<CTxOut> spent_outputs{
+        CTxOut{50'000, CScript{} << OP_TRUE},
+        CTxOut{70'000, CScript{} << valtype{0x51, 0x52}},
+    };
+    PrecomputedTransactionData precomputed;
+    precomputed.Init(tx, std::vector<CTxOut>{spent_outputs}, /*force=*/true);
+
+    ScriptExecutionData sighash_execdata;
+    sighash_execdata.m_annex_init = true;
+    sighash_execdata.m_annex_present = false;
+    sighash_execdata.m_tapleaf_hash =
+        (HashWriter{HASHER_TAPLEAF} << TAPROOT_LEAF_TAPSCRIPT_V2 << script).GetSHA256();
+    sighash_execdata.m_tapleaf_hash_init = true;
+    sighash_execdata.m_codeseparator_pos = 0xffffffff;
+    sighash_execdata.m_codeseparator_pos_init = true;
+
+    uint256 expected_sighash;
+    BOOST_REQUIRE(SignatureHashSchnorr(expected_sighash, sighash_execdata, tx, /*in_pos=*/1,
+                                       SIGHASH_DEFAULT, SigVersion::TAPSCRIPT_V2, precomputed,
+                                       MissingDataBehavior::FAIL));
+    std::array<unsigned char, 64> signature;
+    BOOST_REQUIRE(key.SignSchnorr(expected_sighash, signature, /*merkle_root=*/nullptr, uint256::ZERO));
+
+    const OpTxChecker checker{tx, 1, spent_outputs};
+    ScriptExecutionData execdata;
+    const valtype control_block{TestControlBlock()};
+    InitOpTxContext(execdata, script, control_block);
+    ValtypeStack stack{Stack{valtype{signature.begin(), signature.end()}}};
+    varops::Budget budget{DEFAULT_VAROPS};
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    BOOST_REQUIRE(EvalTapscriptV2(stack, script, SCRIPT_VERIFY_NONE, checker, execdata, budget, &error));
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    BOOST_REQUIRE_EQUAL(stack.size(), 1);
+    BOOST_CHECK(stack.back() == valtype{0x01});
+}
+
+BOOST_AUTO_TEST_CASE(bip118_style_anyprevout_sighash_construction_csfs)
+{
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+
+    // SIGHASH_ANYPREVOUT | SIGHASH_ALL omits every outpoint aggregate and the
+    // current outpoint, while retaining the current amount, script, and sequence.
+    constexpr uint8_t SIGHASH_ANYPREVOUT_ALL{0x41};
+    const valtype globals{0x00, 0x07, 0x00, 0x00, 0x00, 0x00};
+    const valtype outputs{0x00, 0x01, 0x00, 0x02, 0x00, 0x03};
+    const valtype amount_scriptpubkey{0x00, 0x01, 0x00, 0x10, 0x0c, 0x00};
+    const valtype sequence{0x00, 0x01, 0x00, 0x10, 0x20, 0x00};
+    const valtype tapscript{0x00, 0x01, 0x04, 0x00, 0x00, 0x00};
+    const valtype codesep_position{0x00, 0x01, 0x80, 0x00, 0x00, 0x00};
+
+    CScript script;
+    valtype sighash_prefix{TaggedHashPrefix("TapSighash")};
+    sighash_prefix.push_back(0x00); // epoch
+    sighash_prefix.push_back(SIGHASH_ANYPREVOUT_ALL);
+    script << sighash_prefix;
+
+    const auto append_value{[&](const valtype& selector) {
+        script << selector << OP_TX << OP_CAT;
+    }};
+    const auto append_hash{[&](const valtype& selector) {
+        script << selector << OP_TX << OP_SHA256 << OP_CAT;
+    }};
+
+    append_value(globals);
+    append_hash(outputs);
+    script << valtype{0x02} << OP_CAT; // script-path spend without annex
+    append_value(amount_scriptpubkey);
+    append_value(sequence);
+
+    valtype tapleaf_prefix{TaggedHashPrefix("TapLeaf")};
+    tapleaf_prefix.push_back(TAPROOT_LEAF_TAPSCRIPT_V2);
+    script << tapleaf_prefix << tapscript << OP_TX << OP_CAT << OP_SHA256 << OP_CAT;
+    script << valtype{0x01} << OP_CAT; // BIP 118 key version
+    append_value(codesep_position);
+    script << OP_SHA256 << pubkey << OP_CHECKSIGFROMSTACK;
+
+    CMutableTransaction mutable_tx;
+    mutable_tx.version = 2;
+    mutable_tx.nLockTime = 500'000;
+    mutable_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 3}, CScript{}, 0xfffffffd);
+    mutable_tx.vout.emplace_back(119'000, CScript{} << OP_TRUE);
+    const CTransaction original_tx{mutable_tx};
+    const std::vector<CTxOut> spent_outputs{
+        CTxOut{120'000, CScript{} << OP_1 << pubkey},
+    };
+    BOOST_REQUIRE_EQUAL(GetSerializeSize(spent_outputs[0].scriptPubKey), 35);
+
+    HashWriter outputs_writer;
+    for (const CTxOut& output : original_tx.vout)
+        outputs_writer << output;
+    const uint256 outputs_hash{outputs_writer.GetSHA256()};
+    const uint256 tapleaf_hash{
+        (HashWriter{HASHER_TAPLEAF} << TAPROOT_LEAF_TAPSCRIPT_V2 << script).GetSHA256()};
+    const uint256 expected_sighash{
+        (HashWriter{HASHER_TAPSIGHASH}
+         << uint8_t{0x00} << SIGHASH_ANYPREVOUT_ALL << original_tx.version << original_tx.nLockTime
+         << outputs_hash << uint8_t{0x02} << spent_outputs[0].nValue << spent_outputs[0].scriptPubKey
+         << original_tx.vin[0].nSequence << tapleaf_hash << uint8_t{0x01} << uint32_t{0xffffffff})
+            .GetSHA256()};
+    std::array<unsigned char, 64> signature;
+    BOOST_REQUIRE(key.SignSchnorr(expected_sighash, signature, /*merkle_root=*/nullptr, uint256::ZERO));
+
+    const auto check_signature{[&](const CTransaction& tx, bool expected_valid) {
+        const OpTxChecker checker{tx, 0, spent_outputs};
+        ScriptExecutionData execdata;
+        const valtype control_block{TestControlBlock()};
+        InitOpTxContext(execdata, script, control_block);
+        ValtypeStack stack{Stack{valtype{signature.begin(), signature.end()}}};
+        varops::Budget budget{DEFAULT_VAROPS};
+        ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+        const bool success{
+            EvalTapscriptV2(stack, script, SCRIPT_VERIFY_NONE, checker, execdata, budget, &error)};
+        if (!expected_valid) {
+            BOOST_CHECK(!success);
+            BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SCHNORR_SIG);
+            return;
+        }
+        BOOST_REQUIRE_MESSAGE(success, ScriptErrorString(error));
+        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+        BOOST_REQUIRE_EQUAL(stack.size(), 1);
+        BOOST_CHECK(stack.back() == valtype{0x01});
+    }};
+
+    check_signature(original_tx, true);
+
+    // Replacing the current outpoint preserves the signature because neither
+    // the aggregate prevouts nor the current outpoint is selected.
+    mutable_tx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256::ZERO), 7};
+    check_signature(CTransaction{mutable_tx}, true);
+
+    // The current sequence is selected explicitly and remains committed.
+    --mutable_tx.vin[0].nSequence;
+    check_signature(CTransaction{mutable_tx}, false);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

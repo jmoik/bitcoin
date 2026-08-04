@@ -67,6 +67,7 @@ from test_framework.script import (
     OP_CHECKSEQUENCEVERIFY,
     OP_CHECKSIG,
     OP_CHECKSIGADD,
+    OP_CHECKSIGFROMSTACK,
     OP_DEPTH,
     OP_DROP,
     OP_ENDIF,
@@ -490,6 +491,27 @@ def tapscript_v2_spenders():
     return spenders
 
 
+def checksigfromstack_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    message = b"tapscript v2 checksigfromstack"
+    script = CScript([message, pub, OP_CHECKSIGFROMSTACK])
+    tap = taproot_construct(pub, [("csfs", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/checksigfromstack",
+        tap=tap,
+        leaf="csfs",
+        key=sec,
+        inputs=[getter("sign")],
+        sighash=message,
+        failure={"sighash": message + b"!"},
+        **ERR_SCHNORR_SIG,
+    )
+    return spenders
+
+
 def op_tx_spenders():
     sec = generate_privkey()
     pub = compute_xonly_pubkey(sec)[0]
@@ -719,6 +741,9 @@ class TapScriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 spender tests")
         self.test_spenders(self.nodes[0], tapscript_v2_spenders(), input_counts=[1, 2, 3])
+
+        self.log.info("Tapscript v2 OP_CHECKSIGFROMSTACK tests")
+        self.test_spenders(self.nodes[0], checksigfromstack_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])
@@ -1103,9 +1128,8 @@ class TapScriptV2Test(TaprootTest):
             "v2 future pubkey encoding remains upgradable",
         )
 
-        # Inquisition assigns semantics to 0xcb and 0xcc. On Core master they
-        # remain OP_SUCCESS code points, including in tapscript v2.
-        for name, success_op in (("0xcb", CScriptOp(0xcb)), ("0xcc", CScriptOp(0xcc))):
+        # OP_INTERNALKEY remains an OP_SUCCESS code point in tapscript v2.
+        for name, success_op in (("0xcb", CScriptOp(0xcb)),):
             utxo = self.fund_tapscript_v2(CScript([success_op, OP_RETURN]))
             spending_tx = self.spending_tx(utxo)
             self.submit_nonstandard_and_mine(spending_tx, f"{name} as v2 OP_SUCCESS leaf")

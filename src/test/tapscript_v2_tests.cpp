@@ -217,7 +217,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -1058,10 +1058,8 @@ BOOST_AUTO_TEST_CASE(op_success_redefinitions_are_checked_before_execution)
         BOOST_CHECK_EQUAL(before_outcome.error, SCRIPT_ERR_BAD_OPCODE);
     }
 
-    // Inquisition assigns these code points to OP_INTERNALKEY and
-    // OP_CHECKSIGFROMSTACK. On Core master they remain OP_SUCCESS opcodes, and
-    // tapscript v2 must not accidentally give them the Inquisition semantics.
-    for (const opcodetype opcode : {static_cast<opcodetype>(0xcb), static_cast<opcodetype>(0xcc)}) {
+    // OP_INTERNALKEY remains an OP_SUCCESS code point until it is specified for tapscript v2.
+    for (const opcodetype opcode : {static_cast<opcodetype>(0xcb)}) {
         CScript script;
         script << opcode << OP_RETURN;
         ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
@@ -1187,6 +1185,41 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_standard_verify_uses_unmetered_overload)
     const bool ok{VerifyScript(CScript{}, script_pub_key, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, BaseSignatureChecker{}, &error)};
     BOOST_CHECK(ok);
     BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_CASE(checksigfromstack)
+{
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+    const uint256 message_hash{uint256::ONE};
+    const valtype message{message_hash.begin(), message_hash.end()};
+    std::array<unsigned char, 64> signature;
+    BOOST_REQUIRE(key.SignSchnorr(message_hash, signature, /*merkle_root=*/nullptr, uint256::ZERO));
+    const valtype sig{signature.begin(), signature.end()};
+    const CScript script{OneOp(OP_CHECKSIGFROMSTACK)};
+    const uint64_t sigcheck_cost{varops::SigcheckCost(OP_CHECKSIGFROMSTACK)};
+
+    CheckEval(script, {sig, message, pubkey}, {Bytes({0x01})}, sigcheck_cost);
+
+    valtype wrong_message{message};
+    wrong_message.front() ^= 1;
+    CheckError(script, {sig, wrong_message, pubkey}, sigcheck_cost, SCRIPT_ERR_SCHNORR_SIG);
+    CheckError(script, {valtype(63, 0x01), message, pubkey}, sigcheck_cost, SCRIPT_ERR_SCHNORR_SIG_SIZE);
+    CheckEval(script, {{}, message, pubkey}, {{}}, 0);
+    CheckError(script, {{}, message, {}}, 0, SCRIPT_ERR_PUBKEYTYPE);
+    CheckError(script, {sig, message}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+    const valtype unknown_pubkey(33, 0x02);
+    CheckEval(script, {sig, message, unknown_pubkey}, {Bytes({0x01})}, sigcheck_cost);
+    const EvalOutcome discouraged{EvalTapscriptV2WithFlagsAndChecker(
+        script, {sig, message, unknown_pubkey}, SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE,
+        BaseSignatureChecker{}, varops::COST_PER_SIGOP)};
+    BOOST_CHECK(!discouraged.ok);
+    BOOST_CHECK_EQUAL(discouraged.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
+
+    CheckError(script, {sig, message, pubkey}, sigcheck_cost - 1, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(taproot_script_signing_propagates_leaf_sigversion)
