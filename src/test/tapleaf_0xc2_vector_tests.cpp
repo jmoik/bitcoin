@@ -15,6 +15,7 @@
 #include <script/valtype_stack.h>
 #include <script/varops.h>
 #include <streams.h>
+#include <test/data/extended_primitives.json.h>
 #include <test/data/op_tx.json.h>
 #include <test/data/tapleaf_0xc2.json.h>
 #include <test/data/varops.json.h>
@@ -516,5 +517,6 @@ BOOST_FIXTURE_TEST_SUITE(tapleaf_0xc2_vector_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(varops) { RunVectors("varops", json_tests::varops); }
 BOOST_AUTO_TEST_CASE(tapleaf_0xc2) { RunVectors("tapleaf_0xc2", json_tests::tapleaf_0xc2); }
 BOOST_AUTO_TEST_CASE(op_tx) { RunVectors("op_tx", json_tests::op_tx); }
+BOOST_AUTO_TEST_CASE(extended_primitives) { RunVectors("extended_primitives", json_tests::extended_primitives); }
 
 BOOST_AUTO_TEST_SUITE_END()

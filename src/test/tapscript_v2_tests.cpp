@@ -124,7 +124,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 189, 190, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -258,6 +258,37 @@ BOOST_AUTO_TEST_CASE(nop4_is_upgradable_nop)
                                          AMPLE_VAROPS_BUDGET);
     BOOST_CHECK(!outcome.ok);
     BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
+}
+
+BOOST_AUTO_TEST_CASE(checksigfromstack)
+{
+    // The extended primitives vectors cover OP_CHECKSIGFROMSTACK itself.
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+    const uint256 message_hash{uint256::ONE};
+    const valtype message{message_hash.begin(), message_hash.end()};
+    std::array<unsigned char, 64> signature;
+    BOOST_REQUIRE(key.SignSchnorr(message_hash, signature, /*merkle_root=*/nullptr, uint256::ZERO));
+    const valtype sig{signature.begin(), signature.end()};
+    const CScript script{OneOp(OP_CHECKSIGFROMSTACK)};
+
+    const EvalOutcome discouraged{RunTapscriptV2WithFlagsAndChecker(
+        script, {sig, message, valtype(33, 0x02)}, SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE,
+        BaseSignatureChecker{}, AMPLE_VAROPS_BUDGET)};
+    BOOST_CHECK(!discouraged.ok);
+    BOOST_CHECK_EQUAL(discouraged.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
+
+    // The whole charge is deducted before the signature check, so a budget
+    // one short of a valid signature's cost fails before checking.
+    const EvalOutcome valid{RunTapscriptV2(script, {sig, message, pubkey}, AMPLE_VAROPS_BUDGET)};
+    BOOST_REQUIRE(valid.ok);
+    const uint64_t cost{AMPLE_VAROPS_BUDGET - valid.remaining_budget};
+    valtype wrong_message{message};
+    wrong_message.front() ^= 1;
+    BOOST_CHECK_EQUAL(RunTapscriptV2(script, {sig, wrong_message, pubkey}, cost).error, SCRIPT_ERR_SCHNORR_SIG);
+    BOOST_CHECK_EQUAL(RunTapscriptV2(script, {sig, wrong_message, pubkey}, cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(leaf_signing)

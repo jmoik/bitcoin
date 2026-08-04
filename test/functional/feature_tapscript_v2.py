@@ -10,10 +10,12 @@ import random
 from feature_taproot import (
     ERR_EVAL_FALSE,
     ERR_PUSH_SIZE,
+    ERR_SCHNORR_SIG,
     TaprootTest,
     add_spender,
     bitflipper,
     get,
+    getter,
     make_spender,
 )
 
@@ -53,6 +55,7 @@ from test_framework.script import (
     OP_1,
     OP_CAT,
     OP_CHECKSIG,
+    OP_CHECKSIGFROMSTACK,
     OP_DROP,
     OP_EQUAL,
     OP_EQUALVERIFY,
@@ -134,6 +137,27 @@ def tapscript_v2_spenders():
         inputs=[cat_a, cat_b],
     )
 
+    return spenders
+
+
+def checksigfromstack_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    message = b"tapscript v2 checksigfromstack"
+    script = CScript([message, pub, OP_CHECKSIGFROMSTACK])
+    tap = taproot_construct(pub, [("csfs", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/checksigfromstack",
+        tap=tap,
+        leaf="csfs",
+        key=sec,
+        inputs=[getter("sign")],
+        sighash=message,
+        failure={"sighash": message + b"!"},
+        **ERR_SCHNORR_SIG,
+    )
     return spenders
 
 
@@ -247,6 +271,9 @@ class TapscriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 spender tests")
         self.test_spenders(self.nodes[0], tapscript_v2_spenders(), input_counts=[1, 2, 3])
+
+        self.log.info("Tapscript v2 OP_CHECKSIGFROMSTACK tests")
+        self.test_spenders(self.nodes[0], checksigfromstack_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])
@@ -614,12 +641,9 @@ class TapscriptV2Test(TaprootTest):
             "v2 future pubkey encoding remains upgradable",
         )
 
-        # Inquisition assigns semantics to 0xcb and 0xcc. On Core master they
-        # remain OP_SUCCESS code points, including in tapscript v2.
-        for name, success_op in (("0xcb", CScriptOp(0xcb)), ("0xcc", CScriptOp(0xcc))):
-            utxo = self.fund_tapscript_v2(CScript([success_op, OP_RETURN]))
-            spending_tx = self.spending_tx(utxo)
-            self.submit_nonstandard_and_mine(spending_tx, f"{name} as v2 OP_SUCCESS leaf")
+        # OP_INTERNALKEY remains an OP_SUCCESS code point in Tapscript v2.
+        utxo = self.fund_tapscript_v2(CScript([CScriptOp(0xcb), OP_RETURN]))
+        self.submit_nonstandard_and_mine(self.spending_tx(utxo), "0xcb as v2 OP_SUCCESS leaf")
 
     def test_transaction_wide_varops_budget(self):
         node = self.nodes[0]
