@@ -86,6 +86,7 @@ from test_framework.script import (
     OP_SIZE,
     OP_SUB,
     OP_TOALTSTACK,
+    OP_TWEAKADD,
     OP_TX,
     taproot_construct,
 )
@@ -99,6 +100,7 @@ ERR_VAROP_COUNT = {"err_msg": "Varops budget exceeded"}
 ERR_TOTAL_STACK_SIZE = {"err_msg": "Total stack size limit exceeded"}
 ERR_STACK_ELEMENT_SIZE = {"err_msg": "Stack element size limit exceeded"}
 ERR_HASH_OPERAND_SIZE = {"err_msg": "OP_RIPEMD160 or OP_SHA1 operand exceeds maximum permitted size"}
+ERR_TWEAKADD = {"err_msg": "Invalid OP_TWEAKADD input"}
 ERR_TX_SELECTOR = {"err_msg": "Malformed OP_TX selector"}
 ERR_TX_CONTEXT = {"err_msg": "OP_TX transaction context unavailable"}
 
@@ -491,6 +493,88 @@ def tapscript_v2_spenders():
     return spenders
 
 
+def tweakadd_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    generator = bytes.fromhex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    one = (1).to_bytes(32, "big")
+    two = (2).to_bytes(32, "big")
+    curve_order = bytes.fromhex("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+    two_g = bytes.fromhex("c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    script = CScript([OP_TWEAKADD, two_g, OP_EQUAL])
+    tap = taproot_construct(pub, [("tweakadd", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/tweakadd",
+        tap=tap,
+        leaf="tweakadd",
+        inputs=[one, generator],
+        failure={"inputs": [two, generator]},
+        **ERR_EVAL_FALSE,
+    )
+    add_spender(
+        spenders,
+        "v2/tweakadd_invalid_scalar",
+        tap=tap,
+        leaf="tweakadd",
+        inputs=[one, generator],
+        failure={"inputs": [curve_order, generator]},
+        **ERR_TWEAKADD,
+    )
+
+    def tagged_hash_prefix(tag):
+        tag_hash = hashlib.sha256(tag.encode()).digest()
+        return tag_hash + tag_hash
+
+    target_internal_pubkey = compute_xonly_pubkey(generate_privkey())[0]
+    target_tap = taproot_construct(target_internal_pubkey, [
+        ("true", CScript([OP_1]), LEAF_VERSION_TAPSCRIPT_V2),
+        ("drop", CScript([b"target", OP_DROP, OP_1]), LEAF_VERSION_TAPSCRIPT_V2),
+    ])
+    target_leaves = sorted(target_tap.leaves.values(), key=lambda leaf: leaf.leaf_hash)
+
+    # Reconstruct a two-leaf target tree, derive its TapTweak, and compute the
+    # target output key entirely in Tapscript v2.
+    tree_script_ops = [
+        tagged_hash_prefix("TapTweak"),
+        target_internal_pubkey,
+        tagged_hash_prefix("TapBranch"),
+    ]
+    for leaf in target_leaves:
+        leaf_preimage = bytes([leaf.version]) + ser_string(bytes(leaf.script))
+        tree_script_ops.extend([
+            tagged_hash_prefix("TapLeaf"),
+            leaf_preimage,
+            OP_CAT,
+            OP_SHA256,
+        ])
+    tree_script_ops.extend([
+        OP_CAT,
+        OP_CAT,
+        OP_SHA256,
+        OP_CAT,
+        OP_CAT,
+        OP_SHA256,
+        target_internal_pubkey,
+        OP_TWEAKADD,
+        OP_EQUAL,
+    ])
+    tree_script = CScript(tree_script_ops)
+    tap = taproot_construct(pub, [("tweakadd_tree", tree_script, LEAF_VERSION_TAPSCRIPT_V2)])
+    wrong_output_pubkey = target_tap.output_pubkey[:-1] + bytes([target_tap.output_pubkey[-1] ^ 1])
+    add_spender(
+        spenders,
+        "v2/tweakadd_taproot_tree",
+        tap=tap,
+        leaf="tweakadd_tree",
+        inputs=[target_tap.output_pubkey],
+        failure={"inputs": [wrong_output_pubkey]},
+        **ERR_EVAL_FALSE,
+    )
+    return spenders
+
+
 def checksigfromstack_spenders():
     sec = generate_privkey()
     pub = compute_xonly_pubkey(sec)[0]
@@ -744,6 +828,9 @@ class TapScriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_CHECKSIGFROMSTACK tests")
         self.test_spenders(self.nodes[0], checksigfromstack_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 OP_TWEAKADD tests")
+        self.test_spenders(self.nodes[0], tweakadd_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])

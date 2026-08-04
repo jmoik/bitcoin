@@ -2071,6 +2071,27 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                     stack.push_back(success ? vchTrue : vchFalse);
                 } break;
 
+                case OP_TWEAKADD: {
+                    // (tweak32 pubkey32 -- tweaked_pubkey32)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    const valtype& tweak = stacktop(-2);
+                    const valtype& pubkey = stacktop(-1);
+                    if (tweak.size() != XOnlyPubKey::size() || pubkey.size() != XOnlyPubKey::size()) {
+                        return set_error(serror, SCRIPT_ERR_TWEAKADD);
+                    }
+                    if (!varops_budget.Spend(varops::SigcheckCost(OP_TWEAKADD))) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
+
+                    const std::optional<XOnlyPubKey> tweaked{XOnlyPubKey{pubkey}.AddTweak(tweak)};
+                    if (!tweaked) return set_error(serror, SCRIPT_ERR_TWEAKADD);
+
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(valtype{tweaked->begin(), tweaked->end()});
+                } break;
+
                 case OP_CHECKMULTISIG:
                 case OP_CHECKMULTISIGVERIFY:
                 {

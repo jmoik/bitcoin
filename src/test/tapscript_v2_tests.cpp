@@ -18,6 +18,7 @@
 #include <script/varops.h>
 #include <test/util/tapscript_v2_test_utils.h>
 #include <test/util/setup_common.h>
+#include <util/strencodings.h>
 #include <util/translation.h>
 
 #include <boost/test/unit_test.hpp>
@@ -43,6 +44,11 @@ static valtype Bytes(std::string_view text)
 static valtype Bytes(std::initializer_list<unsigned char> bytes)
 {
     return valtype{bytes};
+}
+
+static valtype HexBytes(std::string_view hex)
+{
+    return ParseHex(hex);
 }
 
 static valtype Num(uint64_t value)
@@ -216,7 +222,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     });
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        187, 188, 191, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -1220,6 +1226,71 @@ BOOST_AUTO_TEST_CASE(checksigfromstack)
     BOOST_CHECK_EQUAL(discouraged.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
 
     CheckError(script, {sig, message, pubkey}, sigcheck_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+}
+
+BOOST_AUTO_TEST_CASE(tweakadd)
+{
+    const CScript script{OneOp(OP_TWEAKADD)};
+    struct TestVector {
+        std::string_view pubkey;
+        std::string_view tweak;
+        std::string_view expected;
+    };
+    const auto vectors = std::to_array<TestVector>({
+        {
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        },
+        {
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        },
+        {
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+        },
+        {
+            "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+            "0000000000000000000000000000000000000000000000000000000000000003",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        },
+        {
+            "5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+            "0000000000000000000000000000000000000000000000000000000000000009",
+            "e60fce93b59e9ec53011aabc21c23e97b2a31369b87a5ae9c44ee89e2a6dec0a",
+        },
+        {
+            "d415b187c6e7ce9da46ac888d20df20737d6f16a41639e68ea055311e1535dd9",
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "c6713b2ac2495d1a879dc136abc06129a7bf355da486cd25f757e0a5f6f40f74",
+        },
+    });
+    const uint64_t tweak_cost{varops::SigcheckCost(OP_TWEAKADD)};
+
+    for (const auto& vector : vectors) {
+        CheckEval(script, {HexBytes(vector.tweak), HexBytes(vector.pubkey)}, {HexBytes(vector.expected)}, tweak_cost);
+    }
+
+    const valtype generator{HexBytes(vectors[0].pubkey)};
+    const valtype zero_tweak{HexBytes(vectors[0].tweak)};
+    const valtype one_tweak{HexBytes(vectors[1].tweak)};
+    const valtype two_g{HexBytes(vectors[1].expected)};
+    const valtype curve_order{HexBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")};
+    const valtype curve_order_minus_one{HexBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140")};
+
+    CheckEval(script, {Bytes({0xaa}), one_tweak, generator}, {Bytes({0xaa}), two_g}, tweak_cost);
+    CheckError(script, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {one_tweak}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {valtype(31), generator}, 0, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {zero_tweak, valtype(31)}, 0, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order, generator}, tweak_cost, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {one_tweak, valtype(32)}, tweak_cost, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order_minus_one, generator}, tweak_cost, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckError(script, {one_tweak, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(taproot_script_signing_propagates_leaf_sigversion)
