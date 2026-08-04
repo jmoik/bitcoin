@@ -270,6 +270,13 @@ public:
      */
     bool VerifySchnorr(const uint256& msg, std::span<const unsigned char> sigbytes) const;
 
+    /** Verify a Schnorr signature over a message of any length (BIP 340), as
+     * OP_CHECKSIGFROMSTACK does.
+     *
+     * sigbytes must be exactly 64 bytes.
+     */
+    bool VerifySchnorr(std::span<const unsigned char> msg, std::span<const unsigned char> sigbytes) const;
+
     /** Compute the Taproot tweak as specified in BIP341, with *this as internal
      * key:
      *  - if merkle_root == nullptr: H_TapTweak(xonly_pubkey)
