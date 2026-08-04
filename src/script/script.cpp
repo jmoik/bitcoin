@@ -159,6 +159,9 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 348 (OP_CHECKSIGFROMSTACK)
     case OP_CHECKSIGFROMSTACK      : return "OP_CHECKSIGFROMSTACK";
 
+    // Opcode proposed by the Tapscript v2 Extended Primitives draft
+    case OP_BYTEREV                : return "OP_BYTEREV";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     } // no default case, so the compiler can warn about missing cases
@@ -402,6 +405,7 @@ bool IsTapscriptV2OpSuccess(opcodetype opcode)
     case OP_TWEAKADD:
     case OP_TX:
     case OP_CHECKSIGFROMSTACK:
+    case OP_BYTEREV:
         return false;
     // Opcodes BIP 441 makes OP_SUCCESSx
     case OP_1NEGATE:

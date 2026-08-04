@@ -53,6 +53,7 @@ from test_framework.script import (
     MAX_SCRIPT_ELEMENT_SIZE,
     OP_0,
     OP_1,
+    OP_BYTEREV,
     OP_CAT,
     OP_CHECKSIG,
     OP_CHECKSIGFROMSTACK,
@@ -138,6 +139,25 @@ def tapscript_v2_spenders():
         inputs=[cat_a, cat_b],
     )
 
+    return spenders
+
+
+def byterev_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    value = bytes(range(32))
+    script = CScript([OP_BYTEREV, value[::-1], OP_EQUAL])
+    tap = taproot_construct(pub, [("byterev", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/byterev",
+        tap=tap,
+        leaf="byterev",
+        inputs=[value],
+        failure={"inputs": [value[::-1]]},
+        **ERR_EVAL_FALSE,
+    )
     return spenders
 
 
@@ -300,6 +320,9 @@ class TapscriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_TWEAKADD tests")
         self.test_spenders(self.nodes[0], tweakadd_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 OP_BYTEREV tests")
+        self.test_spenders(self.nodes[0], byterev_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])

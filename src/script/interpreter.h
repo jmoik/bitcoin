@@ -438,6 +438,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
  *  whether an upgrade path, such as OP_SUCCESSx, ended validation successfully,
  *  in which case the final check, CheckTapscriptV2ScriptResult, does not apply. */
 bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr, bool* immediate_success = nullptr);
+/** Reverse bytes in place (OP_BYTEREV) using byte-swapped 64-bit words: one BIP 440 BIT pass. */
+void ReverseBytes(std::span<unsigned char> bytes);
 /** Check Tapscript v2 cleanstack and truthiness after execution. Consumes the final stack element. */
 bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_budget, ScriptError* error = nullptr);
 /** BIP 440: the varops budget of tx, whose inputs spend spent_outputs. It covers

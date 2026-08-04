@@ -6,8 +6,10 @@
 #include <script/interpreter.h>
 
 #include <attributes.h>
+#include <compat/byteswap.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
+#include <crypto/common.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
@@ -32,6 +34,23 @@
 #include <stdexcept>
 
 typedef std::vector<unsigned char> valtype;
+
+void ReverseBytes(std::span<unsigned char> bytes)
+{
+    // Exchange byte-swapped words from both ends; each result word depends on
+    // at most two input words. Fewer than 16 middle bytes remain.
+    size_t lo{0};
+    size_t hi{bytes.size()};
+    while (hi - lo >= 16) {
+        const uint64_t front{ReadLE64(bytes.data() + lo)};
+        const uint64_t back{ReadLE64(bytes.data() + hi - 8)};
+        WriteLE64(bytes.data() + lo, internal_bswap_64(back));
+        WriteLE64(bytes.data() + hi - 8, internal_bswap_64(front));
+        lo += 8;
+        hi -= 8;
+    }
+    std::reverse(bytes.begin() + lo, bytes.begin() + hi);
+}
 
 namespace {
 
@@ -2131,6 +2150,18 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                     stack.pop_back();
                     stack.pop_back();
                     stack.push_back(ScalarValue(success));
+                    break;
+                }
+
+                case OP_BYTEREV: {
+                    // (x -- reverse(x))
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    // The complete charge is paid before the reversal.
+                    meter.Add(varops::ByteReverseCost(stack.Top().size()));
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    valtype value{stack.PopValue()};
+                    ReverseBytes(value);
+                    stack.push_back(std::move(value));
                     break;
                 }
 

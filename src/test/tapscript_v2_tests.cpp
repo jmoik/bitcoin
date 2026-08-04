@@ -124,7 +124,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 189, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -289,6 +289,25 @@ BOOST_AUTO_TEST_CASE(checksigfromstack)
     wrong_message.front() ^= 1;
     BOOST_CHECK_EQUAL(RunTapscriptV2(script, {sig, wrong_message, pubkey}, cost).error, SCRIPT_ERR_SCHNORR_SIG);
     BOOST_CHECK_EQUAL(RunTapscriptV2(script, {sig, wrong_message, pubkey}, cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
+}
+
+BOOST_AUTO_TEST_CASE(byterev_kernel)
+{
+    // The word kernel matches a byte-wise reversal at every length and middle
+    // remainder. The extended primitives vectors cover OP_BYTEREV itself.
+    for (size_t size : {size_t{0}, size_t{1}, size_t{7}, size_t{8}, size_t{15}, size_t{16}, size_t{17},
+                        size_t{23}, size_t{24}, size_t{31}, size_t{32}, size_t{33}, size_t{200},
+                        size_t{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE}}) {
+        for (size_t offset : {size_t{0}, size_t{1}, size_t{3}}) {
+            if (size + offset > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) continue;
+            valtype buffer(size + offset);
+            for (size_t i{0}; i < buffer.size(); ++i) buffer[i] = static_cast<unsigned char>(i * 131 + 7);
+            valtype expected{buffer};
+            std::reverse(expected.begin() + offset, expected.end());
+            ReverseBytes(std::span{buffer}.subspan(offset));
+            BOOST_CHECK(buffer == expected);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(leaf_signing)

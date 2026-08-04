@@ -227,6 +227,9 @@ enum opcodetype
     // Opcode added by BIP 348 (OP_CHECKSIGFROMSTACK)
     OP_CHECKSIGFROMSTACK = 0xcc,
 
+    // Opcode proposed by the Tapscript v2 Extended Primitives draft
+    OP_BYTEREV = 0xcf,
+
     OP_INVALIDOPCODE = 0xff,
 };
 
