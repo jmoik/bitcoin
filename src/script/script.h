@@ -227,6 +227,9 @@ enum opcodetype
     // Opcode proposed by the Extended Primitives draft (BIP 348 semantics)
     OP_CHECKSIGFROMSTACK = 0xcc,
 
+    // Opcode proposed by the Extended Primitives draft
+    OP_BYTEREV = 0xcf,
+
     OP_INVALIDOPCODE = 0xff,
 };
 

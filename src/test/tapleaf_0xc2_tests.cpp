@@ -7,6 +7,7 @@
 #include <consensus/consensus.h>
 #include <key.h>
 #include <psbt.h>
+#include <script/biguint.h>
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/script_error.h>
@@ -107,7 +108,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapleaf_0xc2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 189, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -332,6 +333,21 @@ BOOST_AUTO_TEST_CASE(checksigfromstack)
     valtype wrong_message{message};
     wrong_message.front() ^= 1;
     BOOST_CHECK_EQUAL(RunTapleaf0xC2(script, {sig, wrong_message, pubkey}, cost).error, SCRIPT_ERR_SCHNORR_SIG);
+}
+
+BOOST_AUTO_TEST_CASE(byterev_kernel)
+{
+    // The word kernel matches a byte-wise reversal for every middle remainder.
+    // The extended primitives vectors cover OP_BYTEREV itself.
+    std::vector<size_t> sizes{MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE};
+    for (size_t size{0}; size <= 48; ++size) sizes.push_back(size);
+    for (const size_t size : sizes) {
+        valtype buffer(size);
+        for (size_t i{0}; i < size; ++i) buffer[i] = static_cast<unsigned char>(i * 131 + 7);
+        const valtype expected{buffer.rbegin(), buffer.rend()};
+        biguint::ReverseBytes(buffer);
+        BOOST_CHECK(buffer == expected);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(psbt_verification_sees_finalized_witnesses)
