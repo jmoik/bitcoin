@@ -159,6 +159,9 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 348 (OP_CHECKSIGFROMSTACK)
     case OP_CHECKSIGFROMSTACK: return "OP_CHECKSIGFROMSTACK";
 
+    // Opcode proposed by the covenant-support-opcodes draft
+    case OP_BYTEREV: return "OP_BYTEREV";
+
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     } // no default case, so the compiler can warn about missing cases
@@ -377,7 +380,7 @@ bool IsOpSuccess(const opcodetype& opcode, SigVersion sigversion)
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
         return opcode == OP_1NEGATE || opcode == OP_RESERVED || opcode == OP_VER ||
             (opcode >= OP_RESERVED1 && opcode <= OP_RESERVED2) || opcode == OP_NEGATE || opcode == OP_ABS ||
-            (opcode >= 187 && opcode <= 254 && opcode != OP_TX && opcode != OP_TWEAKADD && opcode != OP_CHECKSIGFROMSTACK);
+            (opcode >= 187 && opcode <= 254 && opcode != OP_TX && opcode != OP_TWEAKADD && opcode != OP_CHECKSIGFROMSTACK && opcode != OP_BYTEREV);
     }
     return opcode == 80 || opcode == 98 || (opcode >= 126 && opcode <= 129) ||
            (opcode >= 131 && opcode <= 134) || (opcode >= 137 && opcode <= 138) ||

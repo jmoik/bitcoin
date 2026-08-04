@@ -266,6 +266,9 @@ OP_TWEAKADD = CScriptOp(0xbe)
 # BIP 348 opcode (OP_CHECKSIGFROMSTACK)
 OP_CHECKSIGFROMSTACK = CScriptOp(0xcc)
 
+# Covenant-support opcode (provisional codepoint)
+OP_BYTEREV = CScriptOp(0xcf)
+
 OP_INVALIDOPCODE = CScriptOp(0xff)
 
 OPCODE_NAMES.update({
@@ -384,6 +387,7 @@ OPCODE_NAMES.update({
     OP_TX: 'OP_TX',
     OP_TWEAKADD: 'OP_TWEAKADD',
     OP_CHECKSIGFROMSTACK: 'OP_CHECKSIGFROMSTACK',
+    OP_BYTEREV: 'OP_BYTEREV',
     OP_INVALIDOPCODE: 'OP_INVALIDOPCODE',
 })
 

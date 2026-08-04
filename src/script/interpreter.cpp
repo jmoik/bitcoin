@@ -2092,6 +2092,18 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                     stack.push_back(valtype{tweaked->begin(), tweaked->end()});
                 } break;
 
+                case OP_BYTEREV: {
+                    // (x -- reverse(x))
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    if (!varops_budget.Spend(varops::ByteReverseCost(stack.back().size()))) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
+                    valtype value{stack.PopBackValue()};
+                    std::reverse(value.begin(), value.end());
+                    stack.push_back(std::move(value));
+                } break;
+
                 case OP_CHECKMULTISIG:
                 case OP_CHECKMULTISIGVERIFY:
                 {

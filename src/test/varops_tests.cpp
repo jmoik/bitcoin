@@ -152,6 +152,8 @@ BOOST_AUTO_TEST_CASE(bip440_and_bip441_word_granular_cost_helpers)
     BOOST_CHECK_EQUAL(varops::MinMaxCost(1, 9), 16 * varops::COST_OTHER);
 
     BOOST_CHECK_EQUAL(varops::InvertCost(9), 16 * varops::COST_OTHER);
+    BOOST_CHECK_EQUAL(varops::ByteReverseCost(0), 0);
+    BOOST_CHECK_EQUAL(varops::ByteReverseCost(9), 16 * varops::COST_OTHER);
     BOOST_CHECK_EQUAL(varops::AndCost(1, 9), (8 + 16) * varops::COST_FAST);
     BOOST_CHECK_EQUAL(varops::OrCost(1, 9), 8 * varops::COST_OTHER);
     BOOST_CHECK_EQUAL(varops::XorCost(9, 1), 8 * varops::COST_OTHER);

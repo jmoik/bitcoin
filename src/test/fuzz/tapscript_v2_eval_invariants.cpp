@@ -110,7 +110,7 @@ opcodetype ConsumeUsefulOpcode(FuzzedDataProvider& provider)
         OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_CHECKSIG,
         OP_CHECKSIGVERIFY, OP_CHECKSIGADD, OP_CODESEPARATOR, OP_TX, OP_TWEAKADD,
         static_cast<opcodetype>(0xcb), OP_CHECKSIGFROMSTACK,
-        static_cast<opcodetype>(0xce),
+        static_cast<opcodetype>(0xce), OP_BYTEREV,
     });
 }
 

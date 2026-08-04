@@ -241,6 +241,11 @@ constexpr uint64_t InvertCost(size_t size)
     return detail::WordSize(size) * COST_OTHER;
 }
 
+constexpr uint64_t ByteReverseCost(size_t size)
+{
+    return detail::WordSize(size) * COST_OTHER;
+}
+
 constexpr uint64_t AndCost(size_t size1, size_t size2)
 {
     // min * COST_OTHER + (max - min) * COST_FAST simplifies to this expression.
