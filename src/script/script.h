@@ -218,6 +218,9 @@ enum opcodetype
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
+    // Opcode added by BIP 449 (OP_TWEAKADD)
+    OP_TWEAKADD = 0xbe,
+
     // Opcode proposed by the OP_TX draft
     OP_TX = 0xbf,
 

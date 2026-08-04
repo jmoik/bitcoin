@@ -257,6 +257,9 @@ OP_NOP10 = CScriptOp(0xb9)
 # BIP 342 opcodes (Tapscript)
 OP_CHECKSIGADD = CScriptOp(0xba)
 
+# BIP 449 opcode (OP_TWEAKADD)
+OP_TWEAKADD = CScriptOp(0xbe)
+
 # OP_TX draft opcode
 OP_TX = CScriptOp(0xbf)
 
@@ -378,6 +381,7 @@ OPCODE_NAMES.update({
     OP_NOP9: 'OP_NOP9',
     OP_NOP10: 'OP_NOP10',
     OP_CHECKSIGADD: 'OP_CHECKSIGADD',
+    OP_TWEAKADD: 'OP_TWEAKADD',
     OP_TX: 'OP_TX',
     OP_CHECKSIGFROMSTACK: 'OP_CHECKSIGFROMSTACK',
     OP_INVALIDOPCODE: 'OP_INVALIDOPCODE',

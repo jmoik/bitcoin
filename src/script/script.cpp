@@ -150,6 +150,9 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
+    // Opcode added by BIP 449 (OP_TWEAKADD)
+    case OP_TWEAKADD               : return "OP_TWEAKADD";
+
     // Opcode proposed by the OP_TX draft
     case OP_TX                     : return "OP_TX";
 
@@ -396,6 +399,7 @@ bool IsTapscriptV2OpSuccess(opcodetype opcode)
     case OP_LSHIFT:
     case OP_RSHIFT:
     // Opcodes added for Tapscript v2 by other BIPs and drafts
+    case OP_TWEAKADD:
     case OP_TX:
     case OP_CHECKSIGFROMSTACK:
         return false;

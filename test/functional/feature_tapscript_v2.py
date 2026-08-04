@@ -64,6 +64,7 @@ from test_framework.script import (
     OP_RETURN,
     OP_SHA256,
     OP_SIZE,
+    OP_TWEAKADD,
     OP_TX,
     taproot_construct,
 )
@@ -137,6 +138,28 @@ def tapscript_v2_spenders():
         inputs=[cat_a, cat_b],
     )
 
+    return spenders
+
+
+def tweakadd_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    generator = bytes.fromhex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+    one = (1).to_bytes(32, "big")
+    two = (2).to_bytes(32, "big")
+    two_g = bytes.fromhex("c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5")
+    script = CScript([OP_TWEAKADD, two_g, OP_EQUAL])
+    tap = taproot_construct(pub, [("tweakadd", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/tweakadd",
+        tap=tap,
+        leaf="tweakadd",
+        inputs=[one, generator],
+        failure={"inputs": [two, generator]},
+        **ERR_EVAL_FALSE,
+    )
     return spenders
 
 
@@ -274,6 +297,9 @@ class TapscriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_CHECKSIGFROMSTACK tests")
         self.test_spenders(self.nodes[0], checksigfromstack_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 OP_TWEAKADD tests")
+        self.test_spenders(self.nodes[0], tweakadd_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])

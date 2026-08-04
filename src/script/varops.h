@@ -69,6 +69,8 @@ constexpr uint64_t SignatureCost() { return 500'000; }
 // BIP 340 verification of a msg_bytes message: the challenge hash over R || P ||
 // msg after the tag midstate, plus the signature check.
 constexpr uint64_t SchnorrVerifyCost(size_t msg_bytes) { return Sha256Cost(64 + msg_bytes) + SignatureCost(); }
+// OP_TWEAKADD (BIP 449): the public key tweak.
+constexpr uint64_t TweakCost() { return 170'000; }
 // OP_TX draft: selector decoding plus locating and encoding k selected values
 // or aggregate-scanned records.
 constexpr uint64_t TxSelectCost(size_t items) { return 2400 + 270 * static_cast<uint64_t>(items); }

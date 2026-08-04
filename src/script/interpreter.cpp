@@ -2077,6 +2077,25 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 //
                 // Opcodes added by other BIPs and drafts
                 //
+                case OP_TWEAKADD: {
+                    // (tweak pubkey -- tweaked_pubkey)
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& tweak{stack.Top(1)};
+                    const valtype& pubkey{stack.Top()};
+                    if (tweak.size() != XOnlyPubKey::size() || pubkey.size() != XOnlyPubKey::size()) {
+                        return set_error(serror, SCRIPT_ERR_TWEAKADD);
+                    }
+                    // The complete charge is paid before the elliptic-curve work.
+                    meter.Add(varops::TweakCost() + varops::WriteCost(XOnlyPubKey::size()));
+                    if (!meter.Prepay(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    const std::optional<XOnlyPubKey> tweaked{XOnlyPubKey{pubkey}.AddTweak(tweak)};
+                    if (!tweaked) return set_error(serror, SCRIPT_ERR_TWEAKADD);
+                    stack.pop_back();
+                    stack.pop_back();
+                    stack.push_back(valtype{tweaked->begin(), tweaked->end()});
+                    break;
+                }
+
                 case OP_TX: {
                     switch (EvalOpTx(stack, altstack, checker.GetTransactionData(), GetOpTxScriptContext(execdata), meter, varops_budget, serror)) {
                     case OpTxResult::SCRIPT_ERROR:
