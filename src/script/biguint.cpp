@@ -4,6 +4,8 @@
 
 #include <script/biguint.h>
 
+#include <compat/byteswap.h>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -283,6 +285,23 @@ void ShiftDown(Limbs a, uint64_t bits)
         a.Set(kept - 1, low);
     }
     std::fill(bytes.begin() + 8 * kept, bytes.end(), 0);
+}
+
+void ReverseBytes(std::span<unsigned char> bytes)
+{
+    // Swap byte-swapped words from both ends, then reverse the fewer than 16
+    // bytes left in the middle.
+    size_t lo{0};
+    size_t hi{bytes.size()};
+    while (hi - lo >= 16) {
+        const uint64_t front{ReadLE64(bytes.data() + lo)};
+        const uint64_t back{ReadLE64(bytes.data() + hi - 8)};
+        WriteLE64(bytes.data() + lo, internal_bswap_64(back));
+        WriteLE64(bytes.data() + hi - 8, internal_bswap_64(front));
+        lo += 8;
+        hi -= 8;
+    }
+    std::reverse(bytes.begin() + lo, bytes.begin() + hi);
 }
 
 } // namespace biguint
