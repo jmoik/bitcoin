@@ -402,6 +402,44 @@ static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, Scr
     return true;
 }
 
+/**
+ * Returns false when script execution must immediately fail.
+ */
+static bool EvalChecksigFromStack(const valtype& sig, const valtype& msg, const valtype& pubkey_in, script_verify_flags flags, ScriptError* serror, bool& success_out)
+{
+    /*
+     * The following validation sequence is consensus critical. Please note how --
+     *   upgradable public key versions precede other rules;
+     *   the script execution fails when using empty signature with invalid public key;
+     *   the script execution fails when using non-empty invalid signature.
+     */
+    success_out = !sig.empty();
+    if (pubkey_in.empty()) {
+        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+    } else if (pubkey_in.size() == 32) {
+        if (success_out) {
+            if (sig.size() != 64) {
+                return set_error(serror, SCRIPT_ERR_SCHNORR_SIG_SIZE);
+            }
+            XOnlyPubKey pubkey{pubkey_in};
+            if (!pubkey.VerifySchnorr(msg, sig)) {
+                return set_error(serror, SCRIPT_ERR_SCHNORR_SIG);
+            }
+        }
+    } else {
+        /*
+         * New public key version softforks should be defined before this `else` block.
+         * Generally, the new code should do nothing but fail script execution. To avoid
+         * consensus bugs, it should not modify any existing values (including `success_out`).
+         */
+        if ((flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE) != 0) {
+            return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
+        }
+    }
+
+    return true;
+}
+
 /** Helper for OP_CHECKSIG, OP_CHECKSIGVERIFY, and (in Tapscript) OP_CHECKSIGADD.
  *
  * A return value of false means the script fails entirely. When true is returned, the
@@ -2056,6 +2094,25 @@ static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, scri
                     case op_tx::Result::NORMAL:
                         break;
                     }
+                    break;
+                }
+
+                case OP_CHECKSIGFROMSTACK: {
+                    // (sig msg pubkey -- bool)
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const valtype& sig{stack.Top(2)};
+                    const valtype& msg{stack.Top(1)};
+                    const valtype& pubkey{stack.Top()};
+                    // Everything but the result is paid before hashing and verification.
+                    // The BIP 340 challenge hash covers R || P || msg after the tag midstate.
+                    if (!sig.empty()) meter.Add(varops::SchnorrVerifyCost(msg.size()));
+                    if (!meter.Fits()) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    bool success{true};
+                    if (!EvalChecksigFromStack(sig, msg, pubkey, flags, serror, success)) return false;
+                    stack.pop_back();
+                    stack.pop_back();
+                    stack.pop_back();
+                    PushScalar(stack, meter, success);
                     break;
                 }
 
