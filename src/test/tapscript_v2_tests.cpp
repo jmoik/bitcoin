@@ -223,7 +223,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 191, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -1291,6 +1291,36 @@ BOOST_AUTO_TEST_CASE(tweakadd)
     CheckError(script, {curve_order_minus_one, generator}, tweak_cost, SCRIPT_ERR_TWEAKADD);
     CheckError(script, {curve_order, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
     CheckError(script, {one_tweak, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+}
+
+BOOST_AUTO_TEST_CASE(byterev)
+{
+    const CScript script{OneOp(OP_BYTEREV)};
+    const valtype value{Bytes({0x00, 0x01, 0x02, 0x80, 0xff, 0x00, 0x42, 0x7f, 0x03})};
+    const valtype reversed{value.rbegin(), value.rend()};
+    const uint64_t cost{varops::ByteReverseCost(value.size())};
+
+    CheckEval(script, {value}, {reversed}, cost);
+    CheckEval(script, {{}}, {{}}, 0);
+    CheckEval(script, {Bytes({0x42})}, {Bytes({0x42})}, varops::ByteReverseCost(1));
+    CheckError(script, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {value}, cost - 1, SCRIPT_ERR_VAROP_COUNT);
+
+    CScript involution;
+    involution << OP_BYTEREV << OP_BYTEREV;
+    CheckEval(involution, {value}, {value}, 2 * cost);
+
+    // TapBranch orders its fixed-size child hashes lexicographically. Reversing
+    // them makes restored little-endian numeric comparison produce that order.
+    valtype lower(32, 0x00);
+    valtype higher(32, 0x00);
+    lower.front() = 0x01;
+    higher.front() = 0x02;
+    CScript tapbranch_order;
+    tapbranch_order << OP_SWAP << OP_BYTEREV << OP_SWAP << OP_BYTEREV << OP_LESSTHAN;
+    const uint64_t ordering_cost{2 * varops::ByteReverseCost(32) + varops::ComparisonCost(32, 32)};
+    CheckEval(tapbranch_order, {lower, higher}, {Bytes({0x01})}, ordering_cost);
+    CheckEval(tapbranch_order, {higher, lower}, {{}}, ordering_cost);
 }
 
 BOOST_AUTO_TEST_CASE(taproot_script_signing_propagates_leaf_sigversion)
