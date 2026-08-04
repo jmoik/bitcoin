@@ -221,6 +221,9 @@ enum opcodetype
     // Opcode proposed by the OP_TX draft
     OP_TX = 0xbd,
 
+    // Opcode added by BIP 449 (OP_TWEAKADD)
+    OP_TWEAKADD = 0xbe,
+
     // Opcode added by BIP 348 (OP_CHECKSIGFROMSTACK)
     OP_CHECKSIGFROMSTACK = 0xcc,
 

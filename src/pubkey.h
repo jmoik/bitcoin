@@ -284,6 +284,9 @@ public:
     /** Construct a Taproot tweaked output point with this point as internal key. */
     std::optional<std::pair<XOnlyPubKey, bool>> CreateTapTweak(const uint256* merkle_root) const;
 
+    /** Add a raw 32-byte scalar tweak to this point, returning the x-only result. */
+    std::optional<XOnlyPubKey> AddTweak(std::span<const unsigned char> tweak) const;
+
     /** Returns a list of CKeyIDs for the CPubKeys that could have been used to create this XOnlyPubKey.
      * As the CKeyID is the Hash160(full pubkey), the produced CKeyIDs are for the versions of this
      * XOnlyPubKey with 0x02 and 0x03 prefixes.
