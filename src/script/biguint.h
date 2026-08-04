@@ -128,6 +128,9 @@ uint64_t ShiftUp(Limbs a, unsigned bits);
 // the vacated top with zeros.
 void ShiftDown(Limbs a, uint64_t bits);
 
+/** Reverse bytes in place (OP_BYTEREV) using byte-swapped 64-bit words: one BIP 440 ARITH pass. */
+void ReverseBytes(std::span<unsigned char> bytes);
+
 } // namespace biguint
 
 /**

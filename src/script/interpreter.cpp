@@ -2135,6 +2135,18 @@ static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, scri
                     break;
                 }
 
+                case OP_BYTEREV: {
+                    // (x -- reverse(x))
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    // The value is reversed in place, so it pays no WRITE.
+                    meter.Add(varops::ArithCost(stack.Top().size()));
+                    if (!meter.Fits()) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    valtype value{stack.PopValue()};
+                    biguint::ReverseBytes(value);
+                    stack.push_back(std::move(value));
+                    break;
+                }
+
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
                 }
