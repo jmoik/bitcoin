@@ -43,6 +43,29 @@
         {"comment": "BIP 340 vector 17: message of size 17 (added 2022-12)", "stack": ["5130f39a4059b43bc7cac09a19ece52b5d8699d1a71e3c52da9afdb6b50ac370c4a482b77bf960f8681540e25b6771ece1e5a37fd80e5a51897c5566a97ea5a5", "0102030405060708090a0b0c0d0e0f1011", "778caa53b4393ac467774d09497a87224bf9fab6f6e68b23086497324d6fd117"], "script": ["OP_CHECKSIGFROMSTACK"], "final_stack": ["01"], "varops": 506326},
         {"comment": "BIP 340 vector 18: message of size 100 (added 2022-12)", "stack": ["403b12b0d8555a344175ea7ec746566303321e5dbfa8be6f091635163eca79a8585ed3e3170807e7c03b720fc54c7b23897fcba0e9d0b4a06894cfd249f22367", "99{100}", "778caa53b4393ac467774d09497a87224bf9fab6f6e68b23086497324d6fd117"], "script": ["OP_CHECKSIGFROMSTACK"], "final_stack": ["01"], "varops": 508886}
       ]
+    },
+    {
+      "category": "OP_TWEAKADD",
+      "vectors": [
+        {"comment": "BIP 449 vector 0", "stack": ["00{32}", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "final_stack": ["79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "varops": 501324},
+        {"comment": "BIP 449 vector 1", "stack": ["00{31}01", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "final_stack": ["c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"], "varops": 501324},
+        {"comment": "BIP 449 vector 2", "stack": ["00{31}02", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "final_stack": ["f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"], "varops": 501324},
+        {"comment": "BIP 449 vector 3", "stack": ["00{31}03", "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"], "script": ["OP_TWEAKADD"], "final_stack": ["2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"], "varops": 501324},
+        {"comment": "BIP 449 vector 4", "stack": ["00{31}09", "5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc"], "script": ["OP_TWEAKADD"], "final_stack": ["e60fce93b59e9ec53011aabc21c23e97b2a31369b87a5ae9c44ee89e2a6dec0a"], "varops": 501324},
+        {"comment": "BIP 449 vector 5", "stack": ["00{31}01", "d415b187c6e7ce9da46ac888d20df20737d6f16a41639e68ea055311e1535dd9"], "script": ["OP_TWEAKADD"], "final_stack": ["c6713b2ac2495d1a879dc136abc06129a7bf355da486cd25f757e0a5f6f40f74"], "varops": 501324},
+        {"comment": "A missing operand", "stack": ["00{31}01"], "script": ["OP_TWEAKADD"], "error": "INVALID_STACK_OPERATION"},
+        {"comment": "A 31-byte tweak", "stack": ["00{31}", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "error": "TWEAKADD"},
+        {"comment": "A 31-byte public key", "stack": ["00{32}", "00{31}"], "script": ["OP_TWEAKADD"], "error": "TWEAKADD"},
+        {"comment": "A tweak equal to the curve order", "stack": ["fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "error": "TWEAKADD"},
+        {"comment": "A public key not on the curve", "stack": ["00{31}01", "00{32}"], "script": ["OP_TWEAKADD"], "error": "TWEAKADD"},
+        {"comment": "A result at infinity", "stack": ["fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140", "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"], "script": ["OP_TWEAKADD"], "error": "TWEAKADD"}
+      ]
+    },
+    {
+      "category": "OP_TWEAKADD with a BIP 341 output key",
+      "vectors": [
+        {"comment": "BIP 341 output key 0", "stack": ["b86e7be8f39bab32a6f2c0443abbc210f0edac0e2c53d501b36b64437d9c6c70", "d6889cb081036e0faefa3a35157ad71086b123b2b144b649798b494c300a961d"], "script": ["OP_TWEAKADD"], "final_stack": ["53a1f6e454df1aa2776a2814a721372d6258050de330b3c6d10ee8f4e0dda343"], "varops": 501324}
+      ]
     }
   ]
 }
