@@ -14,6 +14,7 @@
 #include <prevector.h>
 #include <pubkey.h>
 #include <script/biguint.h>
+#include <script/op_tx.h>
 #include <script/script.h>
 #include <script/valtype_stack.h>
 #include <script/varops.h>
@@ -27,6 +28,7 @@
 #include <compare>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 typedef std::vector<unsigned char> valtype;
@@ -1295,12 +1297,31 @@ static ALWAYS_INLINE void PushScalar(ValtypeStack& stack, varops::Meter& meter, 
     PushBytes(stack, meter, biguint::ScalarValue(value));
 }
 
-static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
+//! The script path spend OP_TX reads, once script path validation has set all of it.
+static std::optional<op_tx::ScriptContext> GetOpTxScriptContext(const ScriptExecutionData& execdata)
+{
+    if (!execdata.m_annex_init || !execdata.m_tapscript_init || !execdata.m_tapleaf_hash_init ||
+        !execdata.m_control_block_init || !execdata.m_taptree_root_init || !execdata.m_codeseparator_pos_init) {
+        return std::nullopt;
+    }
+    return op_tx::ScriptContext{
+        .annex = execdata.m_annex_present ? execdata.m_annex : std::span<const unsigned char>{},
+        .tapscript = execdata.m_tapscript,
+        .tapleaf_hash = execdata.m_tapleaf_hash,
+        .control_block = execdata.m_control_block,
+        .taptree_root = execdata.m_taptree_root,
+        .codeseparator_pos = execdata.m_codeseparator_pos,
+    };
+}
+
+static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
 {
     set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
     const bool require_minimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
+    execdata.m_tapscript = script;
+    execdata.m_tapscript_init = true;
 
     // Witness values are funded by their weight and cost no varops.
     varops::Meter meter{varops_budget};
@@ -1327,7 +1348,8 @@ static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, scri
             }
             // Instructions skipped in an inactive branch are funded by their weight.
             if (!executing && !(OP_IF <= opcode && opcode <= OP_ENDIF)) continue;
-            meter.Add(varops::BaseCost());
+            // OP_TX pays BASE itself once it has a nonempty selector.
+            if (opcode != OP_TX) meter.Add(varops::BaseCost());
 
             if (is_push) {
                 valtype value{biguint::WordPaddedValue({op_begin + push_header, pc})};
@@ -2016,6 +2038,27 @@ static bool EvalTapleaf0xC2Impl(ValtypeStack& stack, const CScript& script, scri
                 case OP_CHECKMULTISIGVERIFY:
                     return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
 
+                //
+                // Opcodes added by other BIPs and drafts
+                //
+                case OP_TX: {
+                    switch (op_tx::Eval(stack, altstack, checker.GetOpTxView(), GetOpTxScriptContext(execdata), meter, serror)) {
+                    case op_tx::Result::SCRIPT_ERROR:
+                        return false;
+                    case op_tx::Result::IMMEDIATE_SUCCESS:
+                        if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                            return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+                        }
+                        // Earlier opcodes' charges are still deducted.
+                        if (!meter.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        if (immediate_success) *immediate_success = true;
+                        return set_success(serror);
+                    case op_tx::Result::NORMAL:
+                        break;
+                    }
+                    break;
+                }
+
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
                 }
@@ -2062,7 +2105,7 @@ bool EvalTapleaf0xC2(ValtypeStack& stack, const CScript& script, script_verify_f
     if (stack.size() > MAX_TAPLEAF_0XC2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
     if (stack.GetTotalSize() > MAX_TAPLEAF_0XC2_TOTAL_STACK_SIZE) return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
     if (stack.GetMaxElementSize() > MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
-    return EvalTapleaf0xC2Impl(stack, script, flags, checker, execdata, varops_budget, serror);
+    return EvalTapleaf0xC2Impl(stack, script, flags, checker, execdata, varops_budget, serror, immediate_success);
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
@@ -2822,6 +2865,12 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 // Tapleaf 0xC2 (BIP 441). Without the flag the leaf succeeds whatever
                 // the other flags, as a v1 program does without SCRIPT_VERIFY_TAPROOT.
                 if (!(flags & SCRIPT_VERIFY_TAPLEAF_0XC2)) return set_success(serror);
+                // OP_TX returns the annex, the control block and the script tree root.
+                if (execdata.m_annex_present) execdata.m_annex = witness.stack.back();
+                execdata.m_control_block = control;
+                execdata.m_control_block_init = true;
+                execdata.m_taptree_root = ComputeTaprootMerkleRoot(control, execdata.m_tapleaf_hash);
+                execdata.m_taptree_root_init = true;
                 exec_script = CScript(script.begin(), script.end());
                 ValtypeStack exec_stack{stack};
                 bool immediate_success{false};

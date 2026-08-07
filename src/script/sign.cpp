@@ -1087,5 +1087,25 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
             input_errors.erase(i);
         }
     }
+
+    // Inputs were verified one at a time against the transaction before signing,
+    // but OP_TX lets a Tapleaf 0xC2 input read the other inputs' scriptSigs and
+    // witnesses. So verify those inputs again against the signed transaction,
+    // replacing their earlier results. txdata does not cover scriptSigs or witnesses.
+    if (txdata.m_spent_outputs_ready) {
+        const CTransaction tx{mtx};
+        for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+            const CTxOut& spent_output{txdata.m_spent_outputs[i]};
+            if (!SpendsTapleaf0xC2(tx.vin[i].scriptWitness, spent_output.scriptPubKey)) continue;
+            ScriptError serror{SCRIPT_ERR_OK};
+            if (VerifyScript(tx.vin[i].scriptSig, spent_output.scriptPubKey, &tx.vin[i].scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS,
+                             TransactionSignatureChecker{&tx, i, spent_output.nValue, txdata, MissingDataBehavior::FAIL}, &serror)) {
+                input_errors.erase(i);
+            } else {
+                input_errors.emplace(i, Untranslated(ScriptErrorString(serror)));
+            }
+        }
+    }
+
     return input_errors.empty();
 }

@@ -49,6 +49,7 @@ add_library(bitcoinkernel
   ../randomenv.cpp
   ../script/biguint.cpp
   ../script/interpreter.cpp
+  ../script/op_tx.cpp
   ../script/script.cpp
   ../script/script_error.cpp
   ../script/sigcache.cpp

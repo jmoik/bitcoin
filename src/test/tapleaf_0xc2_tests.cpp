@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <addresstype.h>
 #include <coins.h>
 #include <consensus/consensus.h>
 #include <key.h>
@@ -105,7 +106,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
 {
     constexpr auto tapleaf_0xc2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        187, 188, 189, 190, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -303,11 +304,14 @@ BOOST_AUTO_TEST_CASE(nop4_is_upgradable_nop)
     BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
 }
 
-BOOST_AUTO_TEST_CASE(psbt_finalized_witness_is_signed_and_verified)
+BOOST_AUTO_TEST_CASE(psbt_verification_sees_finalized_witnesses)
 {
-    CScript normal_script;
-    normal_script << OP_1;
-    FinalizedTapleaf0xC2Spend spend{BuildFinalizedTapleaf0xC2Spend(normal_script, {})};
+    // OP_TX pushes the current input's witness item count, which is zero in the
+    // PSBT's unsigned transaction and two once the input is finalized.
+    const valtype witness_item_count_selector{0x00, 0x00, 0x00, 0x10, 0x40, 0x00};
+    CScript script;
+    script << witness_item_count_selector << OP_TX;
+    FinalizedTapleaf0xC2Spend spend{BuildFinalizedTapleaf0xC2Spend(script, {})};
 
     CMutableTransaction unsigned_tx{spend.tx};
     unsigned_tx.vin[0].scriptWitness.SetNull();
@@ -319,13 +323,66 @@ BOOST_AUTO_TEST_CASE(psbt_finalized_witness_is_signed_and_verified)
     txdata.Init(CTransaction{spend.tx}, std::vector<CTxOut>{spend.spent_output});
 
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &txdata));
-    BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, nullptr));
     BOOST_CHECK(FinalizePSBT(psbt));
 
     std::map<COutPoint, Coin> coins;
     coins.emplace(spend.tx.vin[0].prevout, Coin{spend.spent_output, 1, /*fCoinBaseIn=*/false});
     std::map<int, bilingual_str> input_errors;
     BOOST_CHECK(SignTransaction(spend.tx, &DUMMY_SIGNING_PROVIDER, coins, SignOptions{SIGHASH_DEFAULT}, input_errors));
+    BOOST_CHECK(input_errors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(op_tx_needs_a_spend_context)
+{
+    // A valid version 0 selector: the transaction's input count.
+    const Stack selector{{0x00, 0x10, 0x00, 0x00, 0x00, 0x00}};
+    // No transaction, as in standalone evaluation.
+    BOOST_CHECK_EQUAL(RunTapleaf0xC2(OneOp(OP_TX), selector, AMPLE_VAROPS_BUDGET).error, SCRIPT_ERR_TX_CONTEXT);
+    // A transaction, but no script path context: only the annex is initialized.
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, {CTxOut{1000, CScript{}}});
+    const MutableTransactionSignatureChecker checker{&tx, 0, 1000, txdata, MissingDataBehavior::FAIL};
+    BOOST_CHECK_EQUAL(RunTapleaf0xC2WithFlagsAndChecker(OneOp(OP_TX), selector, SCRIPT_VERIFY_NONE, checker, AMPLE_VAROPS_BUDGET).error,
+                      SCRIPT_ERR_TX_CONTEXT);
+}
+
+BOOST_AUTO_TEST_CASE(signing_sees_later_inputs)
+{
+    // OP_TX pushes input 1's witness item count, which is zero until input 1 is
+    // signed or finalized, after input 0 was verified.
+    const valtype input_1_witness_item_count_selector{0x00, 0x00, 0x00, 0x30, 0x40, 0x00};
+    CScript script;
+    script << OP_1 << input_1_witness_item_count_selector << OP_TX;
+    CScript script_pub_key;
+    const CScriptWitness witness{BuildTapleaf0xC2Witness(script, {}, script_pub_key)};
+    const CTxOut spent_output{100'000'000, script_pub_key};
+    const CKey key{GenerateRandomKey()};
+    FillableSigningProvider provider;
+    provider.AddKey(key);
+    const CTxOut p2wpkh_output{100'000'000, GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey()})};
+
+    CMutableTransaction tx;
+    tx.version = 2;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 1});
+    tx.vout.emplace_back(50'000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction psbt{tx};
+    psbt.inputs[0].witness_utxo = spent_output;
+    psbt.inputs[0].final_script_witness = witness;
+    psbt.inputs[1].witness_utxo = p2wpkh_output;
+    const std::optional<PrecomputedTransactionData> txdata{PrecomputePSBTData(psbt)};
+    BOOST_REQUIRE(txdata);
+    BOOST_REQUIRE(SignPSBTInput(provider, psbt, 1, &*txdata, {.sighash_type = SIGHASH_ALL, .finalize = false}));
+    BOOST_CHECK(FinalizePSBT(psbt));
+
+    tx.vin[0].scriptWitness = witness;
+    std::map<COutPoint, Coin> coins;
+    coins.emplace(tx.vin[0].prevout, Coin{spent_output, 1, /*fCoinBaseIn=*/false});
+    coins.emplace(tx.vin[1].prevout, Coin{p2wpkh_output, 1, /*fCoinBaseIn=*/false});
+    std::map<int, bilingual_str> input_errors;
+    BOOST_CHECK(SignTransaction(tx, &provider, coins, SignOptions{SIGHASH_DEFAULT}, input_errors));
     BOOST_CHECK(input_errors.empty());
 }
 
