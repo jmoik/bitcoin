@@ -13,6 +13,7 @@
 #include <crypto/sha256.h>
 #include <prevector.h>
 #include <pubkey.h>
+#include <script/op_tx.h>
 #include <script/script.h>
 #include <script/val64.h>
 #include <script/valtype_stack.h>
@@ -27,6 +28,7 @@
 #include <compare>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 typedef std::vector<unsigned char> valtype;
@@ -1299,12 +1301,31 @@ static ALWAYS_INLINE void PushBytes(ValtypeStack& stack, varops::Meter& meter, T
     stack.push_back(std::forward<T>(value));
 }
 
-static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
+//! The script path spend OP_TX reads, once script path validation has set all of it.
+static std::optional<OpTxScriptContext> GetOpTxScriptContext(const ScriptExecutionData& execdata)
+{
+    if (!execdata.m_annex_init || !execdata.m_tapscript_init || !execdata.m_tapleaf_hash_init ||
+        !execdata.m_control_block_init || !execdata.m_taptree_root_init || !execdata.m_codeseparator_pos_init) {
+        return std::nullopt;
+    }
+    return OpTxScriptContext{
+        .annex = execdata.m_annex_present ? execdata.m_annex : std::span<const unsigned char>{},
+        .tapscript = execdata.m_tapscript,
+        .tapleaf_hash = execdata.m_tapleaf_hash,
+        .control_block = execdata.m_control_block,
+        .taptree_root = execdata.m_taptree_root,
+        .codeseparator_pos = execdata.m_codeseparator_pos,
+    };
+}
+
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
 {
     set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
     const bool require_minimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
+    execdata.m_tapscript = script;
+    execdata.m_tapscript_init = true;
 
     // Charges, BASE included, accumulate in meter. Each opcode deducts them
     // from the budget once: when it completes, or before its work if that
@@ -1336,7 +1357,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
             }
             // Instructions skipped in an inactive branch are funded by their weight.
             if (!executing && !(OP_IF <= opcode && opcode <= OP_ENDIF)) continue;
-            meter.Add(varops::BaseCost());
+            // OP_TX pays BASE itself once its selector version is known.
+            if (opcode != OP_TX) meter.Add(varops::BaseCost());
 
             if (is_push) {
                 valtype value{WordPaddedValue({op_begin + push_header, pc})};
@@ -2014,6 +2036,27 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 case OP_CHECKMULTISIGVERIFY:
                     return set_error(serror, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
 
+                //
+                // Opcodes added by other BIPs and drafts
+                //
+                case OP_TX: {
+                    switch (EvalOpTx(stack, altstack, checker.GetTransactionData(), GetOpTxScriptContext(execdata), meter, varops_budget, serror)) {
+                    case OpTxResult::SCRIPT_ERROR:
+                        return false;
+                    case OpTxResult::IMMEDIATE_SUCCESS:
+                        if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                            return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+                        }
+                        // Earlier opcodes' charges are still deducted.
+                        if (!meter.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        if (immediate_success) *immediate_success = true;
+                        return set_success(serror);
+                    case OpTxResult::NORMAL:
+                        break;
+                    }
+                    break;
+                }
+
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
                 }
@@ -2061,7 +2104,7 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
     if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
     if (stack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
     if (stack.GetMaxElementSize() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
-    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, serror);
+    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, serror, immediate_success);
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
@@ -2739,7 +2782,8 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
     return k;
 }
 
-static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, const std::vector<unsigned char>& program, const uint256& tapleaf_hash)
+static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, const std::vector<unsigned char>& program,
+                                    const uint256& tapleaf_hash, uint256& merkle_root)
 {
     assert(control.size() >= TAPROOT_CONTROL_BASE_SIZE);
     assert(program.size() >= uint256::size());
@@ -2748,7 +2792,7 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     //! The output pubkey (taken from the scriptPubKey).
     const XOnlyPubKey q{program};
     // Compute the Merkle root from the leaf and the provided path.
-    const uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
+    merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
     // Verify that the output pubkey matches the tweaked internal pubkey, after correcting for parity.
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
@@ -2792,8 +2836,10 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
             const valtype& annex = SpanPopBack(stack);
             execdata.m_annex_hash = (HashWriter{} << annex).GetSHA256();
             execdata.m_annex_present = true;
+            execdata.m_annex = annex;
         } else {
             execdata.m_annex_present = false;
+            execdata.m_annex = {};
         }
         execdata.m_annex_init = true;
         if (stack.size() == 1) {
@@ -2810,10 +2856,13 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 return set_error(serror, SCRIPT_ERR_TAPROOT_WRONG_CONTROL_SIZE);
             }
             execdata.m_tapleaf_hash = ComputeTapleafHash(control[0] & TAPROOT_LEAF_MASK, script);
-            if (!VerifyTaprootCommitment(control, program, execdata.m_tapleaf_hash)) {
+            if (!VerifyTaprootCommitment(control, program, execdata.m_tapleaf_hash, execdata.m_taptree_root)) {
                 return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
             }
             execdata.m_tapleaf_hash_init = true;
+            execdata.m_taptree_root_init = true;
+            execdata.m_control_block = control;
+            execdata.m_control_block_init = true;
             if ((control[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT) {
                 // Tapscript (leaf version 0xc0)
                 exec_script = CScript(script.begin(), script.end());

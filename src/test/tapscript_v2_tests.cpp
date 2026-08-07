@@ -123,7 +123,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
 {
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        187, 188, 189, 190, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -291,11 +291,14 @@ BOOST_AUTO_TEST_CASE(leaf_signing)
     BOOST_CHECK_EQUAL(tx.vin[0].scriptWitness.stack.size(), 3U);
 }
 
-BOOST_AUTO_TEST_CASE(psbt_finalized_witness_is_signed_and_verified)
+BOOST_AUTO_TEST_CASE(psbt_verification_sees_finalized_witnesses)
 {
-    CScript normal_script;
-    normal_script << OP_1;
-    FinalizedTapscriptV2Spend spend{BuildFinalizedTapscriptV2Spend(normal_script, {})};
+    // OP_TX pushes the current input's witness item count, which is zero in the
+    // PSBT's unsigned transaction and two once the input is finalized.
+    const valtype witness_item_count_selector{0x00, 0x00, 0x00, 0x10, 0x40, 0x00};
+    CScript script;
+    script << witness_item_count_selector << OP_TX;
+    FinalizedTapscriptV2Spend spend{BuildFinalizedTapscriptV2Spend(script, {})};
 
     CMutableTransaction unsigned_tx{spend.tx};
     unsigned_tx.vin[0].scriptWitness.SetNull();
@@ -307,7 +310,6 @@ BOOST_AUTO_TEST_CASE(psbt_finalized_witness_is_signed_and_verified)
     txdata.Init(CTransaction{spend.tx}, std::vector<CTxOut>{spend.spent_output});
 
     BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &txdata));
-    BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, nullptr));
     BOOST_CHECK(PSBTFitsVaropsBudget(psbt, txdata));
     BOOST_CHECK(FinalizePSBT(psbt));
 

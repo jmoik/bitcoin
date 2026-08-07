@@ -13,6 +13,7 @@
 #include <consensus/validation.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
+#include <script/op_tx.h>
 #include <script/script.h>
 #include <script/script_error.h>
 #include <script/valtype_stack.h>
@@ -51,7 +52,7 @@ FUZZ_TARGET(tapscript_v2_eval)
     const CScript script{script_bytes.begin(), script_bytes.end()};
 
     // Commit to the script in a single-leaf Taproot output, spent by the
-    // smallest transaction.
+    // smallest transaction. OP_TX reads that transaction.
     CScript script_pub_key;
     const CScriptWitness spend_witness{BuildTapscriptV2Witness(script, witness, script_pub_key)};
     CMutableTransaction mutable_spend;
@@ -59,6 +60,8 @@ FUZZ_TARGET(tapscript_v2_eval)
     mutable_spend.vin[0].scriptWitness = spend_witness;
     mutable_spend.vout.emplace_back(0, script_pub_key);
     const CTransaction spend{mutable_spend};
+    const std::vector<CTxOut> spent_outputs{CTxOut{1, script_pub_key}};
+    const ScriptTransactionData tx_data{spend.version, spend.vin, spend.vout, spend.nLockTime, 0, spent_outputs};
     const uint256 leaf_hash{ComputeTapleafHash(TAPROOT_LEAF_TAPSCRIPT_V2, script)};
     // The transaction's budget caps the runs, so their time is bounded as it is
     // in validation.
@@ -69,9 +72,11 @@ FUZZ_TARGET(tapscript_v2_eval)
         ScriptExecutionData execdata;
         execdata.m_annex_init = true;
         execdata.m_annex_present = false;
-        execdata.m_tapleaf_hash = leaf_hash;
-        execdata.m_tapleaf_hash_init = true;
-        const FuzzedChecker checker{checker_results};
+        execdata.m_tapleaf_hash = execdata.m_taptree_root = leaf_hash;
+        execdata.m_tapleaf_hash_init = execdata.m_taptree_root_init = true;
+        execdata.m_control_block = spend_witness.stack.back();
+        execdata.m_control_block_init = true;
+        const FuzzedChecker checker{checker_results, tx_data};
         varops::Budget varops_budget{budget};
         ValtypeStack stack{witness};
         Outcome outcome;
@@ -92,7 +97,7 @@ FUZZ_TARGET(tapscript_v2_eval)
     Assert(run(cap, full.ok ? flags & ~other_flags : flags | other_flags).ok == full.ok);
 
     // Spending the output adds only the commitment and witness checks, which pass.
-    const FuzzedChecker checker{checker_results};
+    const FuzzedChecker checker{checker_results, tx_data};
     varops::Budget budget{cap};
     ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
     const script_verify_flags spend_flags{(flags & ~SCRIPT_VERIFY_DISCOURAGE_SCRIPT_RESTORATION) | TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS};

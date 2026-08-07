@@ -4,6 +4,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test Tapscript v2 leaf version 0xc2 behavior."""
 
+import hashlib
 import random
 
 from feature_taproot import (
@@ -11,6 +12,8 @@ from feature_taproot import (
     ERR_PUSH_SIZE,
     TaprootTest,
     add_spender,
+    bitflipper,
+    get,
     make_spender,
 )
 
@@ -29,6 +32,7 @@ from test_framework.messages import (
     CTxOut,
     MAX_BLOCK_WEIGHT,
     SEQUENCE_FINAL,
+    ser_string,
     tx_from_hex,
 )
 from test_framework.psbt import (
@@ -39,6 +43,7 @@ from test_framework.psbt import (
     PSBT_IN_WITNESS_UTXO,
 )
 from test_framework.script import (
+    ANNEX_TAG,
     CScript,
     CScriptOp,
     LEAF_VERSION_TAPSCRIPT,
@@ -54,7 +59,9 @@ from test_framework.script import (
     OP_MUL,
     OP_PUSHDATA1,
     OP_RETURN,
+    OP_SHA256,
     OP_SIZE,
+    OP_TX,
     taproot_construct,
 )
 from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
@@ -130,6 +137,93 @@ def tapscript_v2_spenders():
     return spenders
 
 
+def op_tx_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    spenders = []
+
+    current_input_amount = bytes.fromhex("000000100400")
+    def expected_input_amount(ctx):
+        return v2_num(get(ctx, "utxos")[get(ctx, "idx")].nValue)
+
+    script = CScript([current_input_amount, OP_TX, OP_EQUAL])
+    tap = taproot_construct(pub, [("amount", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    add_spender(
+        spenders,
+        "v2/op_tx_current_input_amount",
+        tap=tap,
+        leaf="amount",
+        inputs=[expected_input_amount],
+        failure={"inputs": [bitflipper(expected_input_amount)]},
+        **ERR_EVAL_FALSE,
+    )
+
+    internal_key = bytes.fromhex("000020000000")
+    script = CScript([internal_key, OP_TX, pub, OP_EQUAL])
+    tap = taproot_construct(pub, [("internal_key", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    add_spender(spenders, "v2/op_tx_internal_key", tap=tap, leaf="internal_key")
+
+    current_tree = bytes.fromhex("000148000000")
+    script = CScript([current_tree, OP_TX, OP_EQUAL])
+    tap = taproot_construct(pub, [
+        ("current_tree", script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("sibling", CScript([OP_1]), LEAF_VERSION_TAPSCRIPT_V2),
+    ])
+
+    def expected_current_tree(ctx):
+        return get(ctx, "tapleaf").leaf_hash + get(ctx, "tap").merkle_root
+
+    add_spender(
+        spenders,
+        "v2/op_tx_current_tapleaf_and_taptree_root",
+        tap=tap,
+        leaf="current_tree",
+        inputs=[expected_current_tree],
+        failure={"inputs": [bitflipper(expected_current_tree)]},
+        **ERR_EVAL_FALSE,
+    )
+
+    annex = bytes([ANNEX_TAG]) + b"op_tx"
+
+    def templatehash_like_hash(ctx):
+        tx = get(ctx, "tx")
+        current_annex = get(ctx, "annex")
+        preimage = tx.version.to_bytes(4, "little") + tx.nLockTime.to_bytes(4, "little")
+        preimage += len(tx.vin).to_bytes(4, "little")
+        preimage += b"".join(txin.nSequence.to_bytes(4, "little") for txin in tx.vin)
+        preimage += len(tx.vout).to_bytes(4, "little")
+        preimage += b"".join(txout.serialize() for txout in tx.vout)
+        preimage += get(ctx, "idx").to_bytes(4, "little")
+        preimage += ser_string(current_annex if current_annex is not None else b"")
+        return hashlib.sha256(preimage).digest()
+
+    script = CScript([bytes.fromhex("005703222003"), OP_TX, OP_SHA256, OP_EQUAL])
+    tap = taproot_construct(pub, [("templatehash", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    add_spender(
+        spenders,
+        "v2/op_tx_templatehash_like_commitment",
+        tap=tap,
+        leaf="templatehash",
+        annex=annex,
+        standard=False,
+        inputs=[templatehash_like_hash],
+        failure={"inputs": [bitflipper(templatehash_like_hash)]},
+        **ERR_EVAL_FALSE,
+    )
+
+    future_version_script = CScript([b"\x01", OP_TX, OP_RETURN])
+    tap = taproot_construct(pub, [("future_version", future_version_script, LEAF_VERSION_TAPSCRIPT_V2)])
+    add_spender(
+        spenders,
+        "v2/op_tx_future_selector_version",
+        tap=tap,
+        leaf="future_version",
+        standard=False,
+    )
+
+    return spenders
+
+
 class TapscriptV2Test(TaprootTest):
     def set_test_params(self):
         super().set_test_params()
@@ -153,6 +247,9 @@ class TapscriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 spender tests")
         self.test_spenders(self.nodes[0], tapscript_v2_spenders(), input_counts=[1, 2, 3])
+
+        self.log.info("Tapscript v2 OP_TX tests")
+        self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 transaction-wide varops budget test")
         self.test_transaction_wide_varops_budget()
