@@ -6,6 +6,7 @@
 #define BITCOIN_TEST_FUZZ_UTIL_TAPLEAF_0XC2_H
 
 #include <script/interpreter.h>
+#include <script/op_tx.h>
 #include <script/script.h>
 #include <script/script_error.h>
 #include <script/valtype_stack.h>
@@ -15,6 +16,7 @@
 #include <util/check.h>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -25,7 +27,7 @@ using test::tapleaf_0xc2::Stack;
 /** What a run exposes: its result, error, varops consumed and final stack. */
 struct Outcome {
     bool ok{false};
-    //! The run stopped early at an upgradable success, such as an OP_SUCCESSx.
+    //! The run stopped early at an upgradable success, such as a reserved OP_TX selector.
     bool immediate_success{false};
     ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
     uint64_t consumed{0};
@@ -37,17 +39,19 @@ struct Outcome {
 /**
  * Checker whose signature, locktime and sequence results the fuzzer chooses, as
  * in the signature_checker target. Results are read from fixed bits in call
- * order, so a rerun sees the same results.
+ * order, so a rerun sees the same results. OP_TX reads tx_data.
  */
 class FuzzedChecker final : public BaseSignatureChecker
 {
     const uint64_t m_results;
+    const std::optional<op_tx::TxView> m_tx_data;
     mutable unsigned m_calls{0};
 
     bool Next() const { return (m_results >> (m_calls++ % 64)) & 1; }
 
 public:
-    explicit FuzzedChecker(uint64_t results) : m_results{results} {}
+    FuzzedChecker(uint64_t results, std::optional<op_tx::TxView> tx_data)
+        : m_results{results}, m_tx_data{tx_data} {}
 
     bool CheckSchnorrSignature(std::span<const unsigned char>, std::span<const unsigned char>, SigVersion,
                                ScriptExecutionData&, ScriptError* serror) const override
@@ -58,6 +62,7 @@ public:
     }
     bool CheckLockTime(const CScriptNum&) const override { return Next(); }
     bool CheckSequence(const CScriptNum&) const override { return Next(); }
+    std::optional<op_tx::TxView> GetOpTxView() const override { return m_tx_data; }
 };
 
 inline Stack ConsumeStack(FuzzedDataProvider& provider, size_t max_items = 8, size_t max_size = 256)

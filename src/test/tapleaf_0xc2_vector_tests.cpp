@@ -15,6 +15,7 @@
 #include <script/valtype_stack.h>
 #include <script/varops.h>
 #include <streams.h>
+#include <test/data/op_tx.json.h>
 #include <test/data/tapleaf_0xc2.json.h>
 #include <test/data/varops.json.h>
 #include <test/util/setup_common.h>
@@ -75,6 +76,7 @@ constexpr auto SCRIPT_ERRORS{std::to_array<std::pair<ScriptError, std::string_vi
     SCRIPT_ERROR_NAME(OP_CODESEPARATOR), SCRIPT_ERROR_NAME(SIG_FINDANDDELETE), SCRIPT_ERROR_NAME(DIVIDE_BY_ZERO),
     SCRIPT_ERROR_NAME(SUB_UNDERFLOW), SCRIPT_ERROR_NAME(VAROP_COUNT), SCRIPT_ERROR_NAME(TOTAL_STACK_SIZE),
     SCRIPT_ERROR_NAME(STACK_ELEMENT_SIZE), SCRIPT_ERROR_NAME(HASH_OPERAND_SIZE),
+    SCRIPT_ERROR_NAME(TX_SELECTOR), SCRIPT_ERROR_NAME(TX_CONTEXT),
 #undef SCRIPT_ERROR_NAME
 })};
 
@@ -258,14 +260,18 @@ struct Context {
     std::vector<CTxOut> spent_outputs;
     uint32_t input_index;
     std::optional<valtype> annex;
+    valtype control_block;
 };
 
 Context ParseContext(const UniValue& context)
 {
     std::optional<valtype> annex;
     if (context.exists("annex")) annex = ParseHexRuns(context["annex"].get_str());
+    valtype control_block(TAPROOT_CONTROL_BASE_SIZE, 0);
+    control_block[0] = TAPROOT_LEAF_0XC2;
+    if (context.exists("control_block")) control_block = ParseHexRuns(context["control_block"].get_str());
     return Context{CTransaction{ParseTransaction(context["tx"])}, ParseOutputs(context["spent_outputs"]),
-                   context["input_index"].getInt<uint32_t>(), std::move(annex)};
+                   context["input_index"].getInt<uint32_t>(), std::move(annex), std::move(control_block)};
 }
 
 //! Run a script on a stack as the Tapleaf 0xC2 script of a script-path spend.
@@ -293,10 +299,15 @@ UniValue RunScript(const UniValue& vector, uint64_t budget)
                            *txdata, MissingDataBehavior::FAIL);
         if (context->annex) {
             execdata.m_annex_present = true;
+            execdata.m_annex = *context->annex;
             execdata.m_annex_hash = (HashWriter{} << *context->annex).GetSHA256();
         }
         execdata.m_tapleaf_hash_init = true;
         execdata.m_tapleaf_hash = ComputeTapleafHash(TAPROOT_LEAF_0XC2, script);
+        execdata.m_control_block_init = true;
+        execdata.m_control_block = context->control_block;
+        execdata.m_taptree_root_init = true;
+        execdata.m_taptree_root = ComputeTaprootMerkleRoot(context->control_block, execdata.m_tapleaf_hash);
     }
     const BaseSignatureChecker& checker{tx_checker ? static_cast<const BaseSignatureChecker&>(*tx_checker) : no_transaction};
 
@@ -485,5 +496,6 @@ BOOST_FIXTURE_TEST_SUITE(tapleaf_0xc2_vector_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(varops) { RunVectors("varops", json_tests::varops); }
 BOOST_AUTO_TEST_CASE(tapleaf_0xc2) { RunVectors("tapleaf_0xc2", json_tests::tapleaf_0xc2); }
+BOOST_AUTO_TEST_CASE(op_tx) { RunVectors("op_tx", json_tests::op_tx); }
 
 BOOST_AUTO_TEST_SUITE_END()

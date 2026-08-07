@@ -549,6 +549,17 @@ bool PSBTInputSigned(const PSBTInput& input)
     return !input.final_script_sig.empty() || !input.final_script_witness.IsNull();
 }
 
+/** The unsigned transaction with each input's finalized scriptSig and witness, as extracted. */
+static CMutableTransaction FinalizedTransaction(const PartiallySignedTransaction& psbt, CMutableTransaction tx)
+{
+    assert(tx.vin.size() == psbt.inputs.size());
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        tx.vin[i].scriptSig = psbt.inputs[i].final_script_sig;
+        tx.vin[i].scriptWitness = psbt.inputs[i].final_script_witness;
+    }
+    return tx;
+}
+
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata)
 {
     CTxOut utxo;
@@ -575,7 +586,13 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned
     if (!unsigned_tx) {
         return false;
     }
-    const CMutableTransaction& tx = *unsigned_tx;
+    // OP_TX reads scriptSigs and witnesses, so verify a Tapleaf 0xC2 spend
+    // against the transaction with the inputs finalized so far.
+    std::optional<CMutableTransaction> finalized;
+    if (SpendsTapleaf0xC2(input.final_script_witness, utxo.scriptPubKey)) {
+        finalized = FinalizedTransaction(psbt, *unsigned_tx);
+    }
+    const CMutableTransaction& tx{finalized ? *finalized : *unsigned_tx};
     if (txdata) {
         return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, STANDARD_SCRIPT_VERIFY_FLAGS, MutableTransactionSignatureChecker{&tx, input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL});
     } else {
@@ -811,6 +828,14 @@ bool FinalizePSBT(PartiallySignedTransaction& psbtx)
         const auto sign_result = SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, {.sighash_type = input.sighash_type, .finalize = true}, /*out_sigdata=*/nullptr);
         complete &= sign_result.has_value();
     }
+    // OP_TX lets a Tapleaf 0xC2 input read the final scriptSigs and witnesses of
+    // later inputs, so check the inputs again once all are finalized.
+    if (!complete) {
+        complete = true;
+        for (unsigned int i = 0; i < psbtx.inputs.size(); ++i) {
+            complete &= PSBTInputSignedAndVerified(psbtx, i, &txdata);
+        }
+    }
 
     return complete;
 }
@@ -827,11 +852,7 @@ bool FinalizeAndExtractPSBT(PartiallySignedTransaction& psbtx, CMutableTransacti
     if (!unsigned_tx) {
         return false;
     }
-    result = *unsigned_tx;
-    for (unsigned int i = 0; i < result.vin.size(); ++i) {
-        result.vin[i].scriptSig = psbtx.inputs[i].final_script_sig;
-        result.vin[i].scriptWitness = psbtx.inputs[i].final_script_witness;
-    }
+    result = FinalizedTransaction(psbtx, std::move(*unsigned_tx));
     return true;
 }
 
