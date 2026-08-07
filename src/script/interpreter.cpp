@@ -11,6 +11,7 @@
 #include <crypto/sha256.h>
 #include <prevector.h>
 #include <pubkey.h>
+#include <script/op_tx.h>
 #include <script/script.h>
 #include <script/val64.h>
 #include <script/valtype_stack.h>
@@ -1279,7 +1280,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     return set_success(serror);
 }
 
-bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, bool& success_override, ScriptError* serror)
 {
     static const valtype vchFalse(0);
     static const valtype vchTrue(1, 1);
@@ -1295,6 +1296,9 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
     uint32_t opcode_pos = 0;
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
+    execdata.m_tapscript = script;
+    execdata.m_tapscript_init = true;
+    success_override = false;
 
     try
     {
@@ -1316,7 +1320,7 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
             const bool executes_opcode{fExec || (OP_IF <= opcode && opcode <= OP_ENDIF)};
-            if (executes_opcode && !HasSignatureDependentExecutionCost(opcode) &&
+            if (executes_opcode && opcode != OP_TX && !HasSignatureDependentExecutionCost(opcode) &&
                 !varops_budget.Spend(varops::ExecutionCost(opcode))) {
                 return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
             }
@@ -1995,6 +1999,18 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
                 }
                 break;
 
+                case OP_TX: {
+                    const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, serror)};
+                    if (result == OpTxResult::ERROR) return false;
+                    if (result == OpTxResult::IMMEDIATE_SUCCESS) {
+                        if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                            return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+                        }
+                        success_override = true;
+                        return set_success(serror);
+                    }
+                } break;
+
                 case OP_CHECKMULTISIG:
                 case OP_CHECKMULTISIGVERIFY:
                 {
@@ -2219,6 +2235,12 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
         return set_error(serror, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
 
     return set_success(serror);
+}
+
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
+{
+    bool success_override{false};
+    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, success_override, serror);
 }
 
 uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
@@ -2848,6 +2870,9 @@ std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_v
         opcodetype opcode;
         if (!exec_script.GetOp(pc, opcode)) {
             // This condition is not reached when a valid OP_SUCCESSx is found first.
+            // Tapscript v2 may instead reach a runtime upgrade-success path before
+            // the malformed instruction, so defer this error to its evaluator.
+            if (sigversion == SigVersion::TAPSCRIPT_V2) return std::nullopt;
             return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
         }
         if (IsOpSuccess(opcode, sigversion)) {
@@ -2903,7 +2928,9 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
 
         ValtypeStack valtype_stack{stack_span};
 
-        if (!EvalTapscriptV2(valtype_stack, exec_script, flags, checker, execdata, varops_budget, serror)) return false;
+        bool success_override{false};
+        if (!EvalTapscriptV2Impl(valtype_stack, exec_script, flags, checker, execdata, varops_budget, success_override, serror)) return false;
+        if (success_override) return set_success(serror);
         return CheckTapscriptV2ScriptResult(valtype_stack, varops_budget, serror);
     }
 
@@ -2954,7 +2981,8 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
     return k;
 }
 
-static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, const std::vector<unsigned char>& program, const uint256& tapleaf_hash)
+static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, const std::vector<unsigned char>& program,
+                                    const uint256& tapleaf_hash, uint256& merkle_root)
 {
     assert(control.size() >= TAPROOT_CONTROL_BASE_SIZE);
     assert(program.size() >= uint256::size());
@@ -2963,7 +2991,7 @@ static bool VerifyTaprootCommitment(const std::vector<unsigned char>& control, c
     //! The output pubkey (taken from the scriptPubKey).
     const XOnlyPubKey q{program};
     // Compute the Merkle root from the leaf and the provided path.
-    const uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
+    merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
     // Verify that the output pubkey matches the tweaked internal pubkey, after correcting for parity.
     return q.CheckTapTweak(p, merkle_root, control[0] & 1);
 }
@@ -3007,8 +3035,10 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
             const valtype& annex = SpanPopBack(stack);
             execdata.m_annex_hash = (HashWriter{} << annex).GetSHA256();
             execdata.m_annex_present = true;
+            execdata.m_annex = annex;
         } else {
             execdata.m_annex_present = false;
+            execdata.m_annex = {};
         }
         execdata.m_annex_init = true;
         if (stack.size() == 1) {
@@ -3025,10 +3055,13 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
                 return set_error(serror, SCRIPT_ERR_TAPROOT_WRONG_CONTROL_SIZE);
             }
             execdata.m_tapleaf_hash = ComputeTapleafHash(control[0] & TAPROOT_LEAF_MASK, script);
-            if (!VerifyTaprootCommitment(control, program, execdata.m_tapleaf_hash)) {
+            if (!VerifyTaprootCommitment(control, program, execdata.m_tapleaf_hash, execdata.m_taptree_root)) {
                 return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
             }
             execdata.m_tapleaf_hash_init = true;
+            execdata.m_taptree_root_init = true;
+            execdata.m_control_block = control;
+            execdata.m_control_block_init = true;
             if ((control[0] & TAPROOT_LEAF_MASK) == TAPROOT_LEAF_TAPSCRIPT) {
                 // Tapscript (leaf version 0xc0)
                 exec_script = CScript(script.begin(), script.end());
