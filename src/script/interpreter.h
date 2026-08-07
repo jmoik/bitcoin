@@ -215,6 +215,11 @@ struct ScriptExecutionData
     //! The tapleaf hash.
     uint256 m_tapleaf_hash;
 
+    //! Whether m_taptree_root is initialized.
+    bool m_taptree_root_init = false;
+    //! The Taproot script tree Merkle root.
+    uint256 m_taptree_root;
+
     //! Whether m_codeseparator_pos is initialized.
     bool m_codeseparator_pos_init = false;
     //! Opcode position of the last executed OP_CODESEPARATOR (or 0xFFFFFFFF if none executed).
@@ -226,6 +231,16 @@ struct ScriptExecutionData
     bool m_annex_present;
     //! Hash of the annex data.
     uint256 m_annex_hash;
+    //! Raw annex including its 0x50 prefix, when present.
+    std::span<const unsigned char> m_annex;
+
+    //! Raw Taproot control block for script-path execution.
+    bool m_control_block_init = false;
+    std::span<const unsigned char> m_control_block;
+
+    //! Complete raw Tapscript currently being executed.
+    bool m_tapscript_init = false;
+    std::span<const unsigned char> m_tapscript;
 
     //! Whether m_validation_weight_left is initialized.
     bool m_validation_weight_left_init = false;
@@ -234,6 +249,16 @@ struct ScriptExecutionData
 
     //! The hash of the corresponding output
     std::optional<uint256> m_output_hash;
+};
+
+/** Read-only transaction context exposed to transaction-introspection opcodes. */
+struct ScriptTransactionData {
+    uint32_t version;
+    std::span<const CTxIn> inputs;
+    std::span<const CTxOut> outputs;
+    uint32_t lock_time;
+    uint32_t input_index;
+    std::span<const CTxOut> spent_outputs;
 };
 
 /** Signature hash sizes */
@@ -298,6 +323,11 @@ public:
          return false;
     }
 
+    virtual std::optional<ScriptTransactionData> GetTransactionData() const
+    {
+        return std::nullopt;
+    }
+
     virtual ~BaseSignatureChecker() = default;
 };
 
@@ -335,6 +365,18 @@ public:
     bool CheckSchnorrSignature(std::span<const unsigned char> sig, std::span<const unsigned char> pubkey, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror = nullptr) const override;
     bool CheckLockTime(const CScriptNum& nLockTime) const override;
     bool CheckSequence(const CScriptNum& nSequence) const override;
+    std::optional<ScriptTransactionData> GetTransactionData() const override
+    {
+        if (txTo == nullptr) return std::nullopt;
+        return ScriptTransactionData{
+            txTo->version,
+            txTo->vin,
+            txTo->vout,
+            txTo->nLockTime,
+            nIn,
+            txdata && txdata->m_spent_outputs_ready ? std::span<const CTxOut>{txdata->m_spent_outputs} : std::span<const CTxOut>{},
+        };
+    }
 };
 
 using TransactionSignatureChecker = GenericTransactionSignatureChecker<CTransaction>;
@@ -365,6 +407,10 @@ public:
     bool CheckSequence(const CScriptNum& nSequence) const override
     {
         return m_checker.CheckSequence(nSequence);
+    }
+    std::optional<ScriptTransactionData> GetTransactionData() const override
+    {
+        return m_checker.GetTransactionData();
     }
 };
 

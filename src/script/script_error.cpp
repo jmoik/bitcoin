@@ -133,6 +133,10 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Stack element size limit exceeded";
         case SCRIPT_ERR_HASH_OPERAND_SIZE:
             return "OP_RIPEMD160 or OP_SHA1 operand exceeds maximum permitted size";
+        case SCRIPT_ERR_TX_SELECTOR:
+            return "Malformed OP_TX selector";
+        case SCRIPT_ERR_TX_CONTEXT:
+            return "OP_TX transaction context unavailable";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
             break;

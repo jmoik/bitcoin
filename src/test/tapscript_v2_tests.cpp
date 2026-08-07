@@ -111,11 +111,6 @@ static uint64_t EncodedExecutionCost(const CScript& script)
     return count;
 }
 
-static uint64_t InvokedBodyCost(const CScript& body)
-{
-    return body.size() * varops::COST_COPYING + EncodedExecutionCost(body);
-}
-
 static void CheckEval(const CScript& script, const Stack& initial_stack, const Stack& expected_stack,
                       uint64_t additional_cost, std::optional<uint64_t> direct_executions = std::nullopt)
 {
@@ -221,7 +216,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     });
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        187, 188, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -1056,9 +1051,11 @@ BOOST_AUTO_TEST_CASE(op_success_redefinitions_are_checked_before_execution)
         malformed_before << opcode;
         error = SCRIPT_ERR_UNKNOWN_ERROR;
         const std::optional<bool> before_result{CheckTapscriptOpSuccess(malformed_before, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
-        BOOST_REQUIRE(before_result.has_value());
-        BOOST_CHECK(!*before_result);
-        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
+        BOOST_CHECK(!before_result.has_value());
+        const EvalOutcome before_outcome{VerifyTapscriptV2WithFlags(
+            malformed_before, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, 0)};
+        BOOST_CHECK(!before_outcome.ok);
+        BOOST_CHECK_EQUAL(before_outcome.error, SCRIPT_ERR_BAD_OPCODE);
     }
 
     // Inquisition assigns these code points to OP_INTERNALKEY and

@@ -72,6 +72,7 @@ add_executable(test_bitcoin
   netbase_tests.cpp
   node_init_tests.cpp
   node_warnings_tests.cpp
+  op_tx_tests.cpp
   orphanage_tests.cpp
   pcp_tests.cpp
   peerman_tests.cpp
@@ -153,6 +154,7 @@ target_json_data_sources(test_bitcoin
   data/blockfilters.json
   data/key_io_invalid.json
   data/key_io_valid.json
+  data/op_tx.json
   data/script_tests.json
   data/sighash.json
   data/siphash.json
