@@ -6,6 +6,7 @@
 """Exercise the utils via json-defined tests."""
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.util import assert_equal
 
 import difflib
 import json
@@ -34,6 +35,60 @@ class ToolUtils(BitcoinTestFramework):
         for i, test_obj in enumerate(input_data):
             self.log.debug(f"Running [{i}]: " + test_obj["description"])
             self.test_one(test_obj)
+
+        self.test_evalscript()
+
+    def run_evalscript(self, stdin, returncode=0):
+        process = subprocess.run(self.bins.util_argv() + ["evalscript"], capture_output=True, text=True, input=stdin)
+        assert_equal(process.returncode, returncode)
+        return process
+
+    def test_evalscript(self):
+        request = {
+            "protocol": 1,
+            "sigversion": "tapleaf_0xc2",
+            "script": "51",  # OP_1
+            "stack": [],
+            "varops_budget": 3_600,
+        }
+        result = json.loads(self.run_evalscript(json.dumps(request)).stdout)
+        remaining = result.pop("varops-budget-remaining")
+        assert 0 < remaining < request["varops_budget"]
+        assert_equal(result, {
+            "protocol": 1,
+            "context": "standalone",
+            "sigversion": "tapleaf_0xc2",
+            "success": True,
+            "error": None,
+            "stack-after": [],
+        })
+
+        request["script"] = "00"  # OP_0
+        result = json.loads(self.run_evalscript(json.dumps(request)).stdout)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Script evaluated without error but finished with a false/empty top stack element")
+        assert_equal(result["stack-after"], [])
+
+        # Without a transaction, OP_CHECKLOCKTIMEVERIFY and OP_TX fail.
+        request["script"] = "51b1"  # OP_1 OP_CHECKLOCKTIMEVERIFY
+        request["varops_budget"] = 10_000
+        result = json.loads(self.run_evalscript(json.dumps(request)).stdout)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Locktime requirement not satisfied")
+        request["script"] = "06001000000000bf"  # <00 10 00 00 00 00> OP_TX: the input count
+        result = json.loads(self.run_evalscript(json.dumps(request)).stdout)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "OP_TX selection outside the transaction, or transaction context unavailable")
+        # Without a transaction to sign, a nonempty signature is invalid.
+        request["script"] = "40" + "11" * 64 + "20" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" + "ac"
+        request["varops_budget"] = 1_000_000
+        result = json.loads(self.run_evalscript(json.dumps(request)).stdout)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Invalid Schnorr signature")
+
+        malformed = self.run_evalscript("not json", returncode=1)
+        assert_equal(malformed.stdout, "")
+        assert "evalscript standard input must be one JSON object" in malformed.stderr
 
     def test_one(self, testObj):
         """Runs a single test, comparing output and RC to expected output and RC.
