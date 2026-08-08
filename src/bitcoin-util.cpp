@@ -14,6 +14,11 @@
 #include <common/system.h>
 #include <compat/compat.h>
 #include <core_io.h>
+#include <script/interpreter.h>
+#include <script/script.h>
+#include <script/script_error.h>
+#include <script/valtype_stack.h>
+#include <script/varops.h>
 #include <streams.h>
 #include <univalue.h>
 #include <util/exception.h>
@@ -23,8 +28,14 @@
 #include <atomic>
 #include <cstdio>
 #include <functional>
+#include <iostream>
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 static const int CONTINUE_EXECUTION=-1;
 
@@ -38,6 +49,7 @@ static void SetupBitcoinUtilArgs(ArgsManager &argsman)
 
     argsman.AddCommand("grind", "Perform proof of work on hex header string");
     argsman.AddCommand("getchainparams", "Get hardcoded parameters for the selected chain");
+    argsman.AddCommand("evalscript", "Evaluate a standalone Tapscript v2 script from a JSON request on standard input");
 
     SetupChainParamsBaseOptions(argsman);
 }
@@ -209,6 +221,123 @@ static int GetChainParams(const std::vector<std::string>& args, std::string& str
     return EXIT_SUCCESS;
 }
 
+static const UniValue& RequiredEvalScriptField(const UniValue& request, const std::string& name)
+{
+    if (!request.exists(name)) {
+        throw std::runtime_error(strprintf("Missing required field \"%s\"", name));
+    }
+    return request[name];
+}
+
+static std::vector<unsigned char> ParseEvalScriptHex(const UniValue& value, const std::string& name)
+{
+    if (!value.isStr()) {
+        throw std::runtime_error(strprintf("Field \"%s\" must be a hex string", name));
+    }
+    const std::string& hex{value.get_str()};
+    if (!hex.empty() && !IsHex(hex)) {
+        throw std::runtime_error(strprintf("Field \"%s\" is not valid hex", name));
+    }
+    return ParseHex(hex);
+}
+
+static int EvalScriptCommand(const std::vector<std::string>& args, std::string& strPrint)
+{
+    if (!args.empty()) {
+        throw std::runtime_error("evalscript reads one JSON request from standard input and takes no arguments");
+    }
+
+    const std::string input{std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>()};
+    UniValue request;
+    if (!request.read(input) || !request.isObject()) {
+        throw std::runtime_error("evalscript standard input must be one JSON object");
+    }
+
+    const UniValue& protocol{RequiredEvalScriptField(request, "protocol")};
+    if (!protocol.isNum() || protocol.getInt<int>() != 1) {
+        throw std::runtime_error("Field \"protocol\" must be 1");
+    }
+    const UniValue& sigversion{RequiredEvalScriptField(request, "sigversion")};
+    if (!sigversion.isStr() || sigversion.get_str() != "tapscript_v2") {
+        throw std::runtime_error("Field \"sigversion\" must be \"tapscript_v2\"");
+    }
+
+    const auto script_bytes{ParseEvalScriptHex(RequiredEvalScriptField(request, "script"), "script")};
+    const CScript script{script_bytes.begin(), script_bytes.end()};
+
+    const UniValue& stack_value{RequiredEvalScriptField(request, "stack")};
+    if (!stack_value.isArray()) {
+        throw std::runtime_error("Field \"stack\" must be an array of hex strings");
+    }
+    std::vector<valtype> initial_stack;
+    initial_stack.reserve(stack_value.size());
+    for (const UniValue& item : stack_value.getValues()) {
+        initial_stack.push_back(ParseEvalScriptHex(item, "stack item"));
+    }
+
+    const UniValue& budget_value{RequiredEvalScriptField(request, "varops_budget")};
+    if (!budget_value.isNum()) {
+        throw std::runtime_error("Field \"varops_budget\" must be an unsigned integer");
+    }
+    const uint64_t budget_amount{budget_value.getInt<uint64_t>()};
+
+    ScriptExecutionData execdata;
+    execdata.m_annex_present = false;
+    execdata.m_annex_init = true;
+
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    varops::Budget budget{budget_amount};
+    ValtypeStack stack{initial_stack};
+    bool success{false};
+
+    const std::optional<bool> op_success{
+        CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    if (op_success.has_value()) {
+        success = *op_success;
+    } else if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
+        error = SCRIPT_ERR_STACK_SIZE;
+    } else if (stack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+        error = SCRIPT_ERR_TOTAL_STACK_SIZE;
+    } else if (stack.GetMaxElementSize() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+        error = SCRIPT_ERR_STACK_ELEMENT_SIZE;
+    } else {
+        bool immediate_success{false};
+        success = EvalTapscriptV2(
+            stack,
+            script,
+            SCRIPT_VERIFY_NONE,
+            BaseSignatureChecker{},
+            execdata,
+            budget,
+            &error,
+            &immediate_success);
+        if (success && !immediate_success) {
+            success = CheckTapscriptV2ScriptResult(stack, budget, &error);
+        }
+    }
+
+    UniValue result{UniValue::VOBJ};
+    result.pushKV("protocol", 1);
+    result.pushKV("context", "standalone");
+    result.pushKV("sigversion", "tapscript_v2");
+    result.pushKV("success", success);
+    if (success) {
+        result.pushKV("error", UniValue{});
+    } else {
+        result.pushKV("error", ScriptErrorString(error));
+    }
+
+    UniValue final_stack{UniValue::VARR};
+    for (const valtype& item : stack.GetStack()) {
+        final_stack.push_back(HexStr(item));
+    }
+    result.pushKV("stack-after", std::move(final_stack));
+    result.pushKV("varops-budget-remaining", budget.Remaining().value());
+
+    strPrint = result.write();
+    return EXIT_SUCCESS;
+}
+
 MAIN_FUNCTION
 {
     ArgsManager& args = gArgs;
@@ -240,6 +369,8 @@ MAIN_FUNCTION
             ret = Grind(cmd->args, strPrint);
         } else if (cmd->command == "getchainparams") {
             ret = GetChainParams(cmd->args, strPrint);
+        } else if (cmd->command == "evalscript") {
+            ret = EvalScriptCommand(cmd->args, strPrint);
         } else {
             assert(false); // unknown command should be caught earlier
         }
