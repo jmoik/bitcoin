@@ -6,6 +6,7 @@
 """Exercise the utils via json-defined tests."""
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.util import assert_equal
 
 import difflib
 import json
@@ -34,6 +35,88 @@ class ToolUtils(BitcoinTestFramework):
         for i, test_obj in enumerate(input_data):
             self.log.debug(f"Running [{i}]: " + test_obj["description"])
             self.test_one(test_obj)
+
+        self.test_evalscript()
+
+    def run_evalscript(self, request):
+        result = subprocess.run(
+            self.bins.util_argv() + ["evalscript"],
+            capture_output=True,
+            text=True,
+            input=json.dumps(request),
+        )
+        assert_equal(result.returncode, 0)
+        assert_equal(result.stderr, "")
+        return json.loads(result.stdout)
+
+    def test_evalscript(self):
+        request = {
+            "protocol": 1,
+            "sigversion": "tapscript_v2",
+            "script": "51",  # OP_1
+            "stack": [],
+            "varops_budget": 3_000,
+        }
+        result = self.run_evalscript(request)
+        assert_equal(result, {
+            "protocol": 1,
+            "context": "standalone",
+            "sigversion": "tapscript_v2",
+            "success": True,
+            "error": None,
+            "stack-after": [],
+            "varops-budget-remaining": 1_734,
+        })
+
+        request["script"] = "00"  # OP_0
+        result = self.run_evalscript(request)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Script evaluated without error but finished with a false/empty top stack element")
+        assert_equal(result["stack-after"], [])
+
+        request["script"] = "5151"  # OP_1 OP_1
+        result = self.run_evalscript(request)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Stack size must be exactly one after execution")
+        assert_equal(result["stack-after"], ["01", "01"])
+
+        request["script"] = "5253955687"  # OP_2 OP_3 OP_MUL OP_6 OP_EQUAL
+        request["varops_budget"] = 1_000_000
+        result = self.run_evalscript(request)
+        assert_equal(result["success"], True)
+        assert result["varops-budget-remaining"] < request["varops_budget"]
+
+        request["script"] = "51"
+        request["stack"] = [""] * 32_769
+        request["varops_budget"] = 100
+        result = self.run_evalscript(request)
+        assert_equal(result["success"], False)
+        assert_equal(result["error"], "Stack size limit exceeded")
+        assert_equal(len(result["stack-after"]), 32_769)
+
+        request["script"] = "0101bd6a"  # <future OP_TX version> OP_TX OP_RETURN
+        request["stack"] = []
+        request["varops_budget"] = 3_000
+        result = self.run_evalscript(request)
+        assert_equal(result, {
+            "protocol": 1,
+            "context": "standalone",
+            "sigversion": "tapscript_v2",
+            "success": True,
+            "error": None,
+            "stack-after": [],
+            "varops-budget-remaining": 1_747,
+        })
+
+        malformed = subprocess.run(
+            self.bins.util_argv() + ["evalscript"],
+            capture_output=True,
+            text=True,
+            input="not json",
+        )
+        assert_equal(malformed.returncode, 1)
+        assert_equal(malformed.stdout, "")
+        assert "evalscript standard input must be one JSON object" in malformed.stderr
 
     def test_one(self, testObj):
         """Runs a single test, comparing output and RC to expected output and RC.
