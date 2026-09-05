@@ -4,6 +4,7 @@
 
 #include <coins.h>
 #include <consensus/validation.h>
+#include <crypto/sha256.h>
 #include <key.h>
 #include <policy/policy.h>
 #include <psbt.h>
@@ -222,7 +223,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     });
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        187, 188, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -242,6 +243,112 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
 
     check_all_opcodes(SigVersion::TAPSCRIPT, tapscript_op_success);
     check_all_opcodes(SigVersion::TAPSCRIPT_V2, tapscript_v2_op_success);
+}
+
+BOOST_AUTO_TEST_CASE(op_multi_is_tapscript_v2_only_redefinition)
+{
+    CScript script{OneOp(OP_MULTI)};
+
+    BOOST_CHECK(IsOpSuccess(OP_MULTI, SigVersion::TAPSCRIPT));
+    BOOST_CHECK(!IsOpSuccess(OP_MULTI, SigVersion::TAPSCRIPT_V2));
+
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    const auto v2_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_CHECK(!v2_result.has_value());
+
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    const auto v1_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT, &error)};
+    BOOST_REQUIRE(v1_result.has_value());
+    BOOST_CHECK(*v1_result);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_CASE(multi_applies_supported_targets)
+{
+    const auto multi = [](opcodetype target) { return CScript{} << OP_MULTI << target; };
+    const uint64_t count_cost{varops::LengthConversionCost(Num(3).size())};
+    const auto multi_base = [](opcodetype target, uint64_t count) {
+        return (target == OP_SHA256 || target == OP_DUP || target == OP_DROP ? count : count - 1) *
+               varops::ExecutionCost(target);
+    };
+
+    CheckEval(multi(OP_CAT), {Bytes("ab"), Bytes("c"), Bytes("de"), Num(3)}, {Bytes("abcde")},
+              count_cost + multi_base(OP_CAT, 3) + (3 + 5) * varops::COST_COPYING, 0);
+
+    valtype digest(CSHA256::OUTPUT_SIZE);
+    CSHA256{}.Write(reinterpret_cast<const unsigned char*>("abcde"), 5).Finalize(digest.data());
+    CheckEval(multi(OP_SHA256), {Bytes("ab"), Bytes("c"), Bytes("de"), Num(3)}, {digest},
+              count_cost + multi_base(OP_SHA256, 3) + 5 * varops::COST_HASH, 0);
+
+    CheckEval(multi(OP_DUP), {Bytes("a"), Bytes("bb"), Bytes("c"), Num(3)},
+              {Bytes("a"), Bytes("bb"), Bytes("c"), Bytes("a"), Bytes("bb"), Bytes("c")},
+              count_cost + multi_base(OP_DUP, 3) + 4 * varops::COST_COPYING, 0);
+    CheckEval(multi(OP_DROP), {Bytes("a"), Bytes("bb"), Bytes("c"), Num(3)}, {},
+              count_cost + multi_base(OP_DROP, 3), 0);
+
+    CheckEval(multi(OP_ADD), {Num(1), Num(2), Num(3), Num(3)}, {Num(6)},
+              count_cost + multi_base(OP_ADD, 3) + varops::AddCost(1, 1) + varops::AddCost(1, 1), 0);
+    CheckEval(multi(OP_MIN), {Bytes({5, 0}), Num(2), Bytes({3, 0, 0}), Num(3)}, {Num(2)},
+              count_cost + multi_base(OP_MIN, 3) + varops::MinMaxCost(2, 1) + varops::MinMaxCost(1, 3), 0);
+    CheckEval(multi(OP_MAX), {Bytes({5, 0}), Num(2), Bytes({3, 0, 0}), Num(3)}, {Num(5)},
+              count_cost + multi_base(OP_MAX, 3) + varops::MinMaxCost(2, 1) + varops::MinMaxCost(1, 3), 0);
+
+    CheckEval(multi(OP_AND), {Bytes({0xff, 0xff}), Bytes({0x0f}), Bytes({0x03, 0xff, 0xaa}), Num(3)},
+              {Bytes({0x03, 0x00, 0x00})}, count_cost + multi_base(OP_AND, 3) + varops::AndCost(2, 1) + varops::AndCost(2, 3), 0);
+    CheckEval(multi(OP_OR), {Bytes({0x00, 0x10}), Bytes({0x01}), Bytes({0x00, 0x00, 0x80}), Num(3)},
+              {Bytes({0x01, 0x10, 0x80})}, count_cost + multi_base(OP_OR, 3) + varops::OrCost(2, 1) + varops::OrCost(2, 3), 0);
+    CheckEval(multi(OP_XOR), {Bytes({0x01, 0x10}), Bytes({0x01}), Bytes({0x00, 0x10, 0x80}), Num(3)},
+              {Bytes({0x00, 0x00, 0x80})}, count_cost + multi_base(OP_XOR, 3) + varops::XorCost(2, 1) + varops::XorCost(2, 3), 0);
+
+    CheckEval(multi(OP_BOOLAND), {Num(1), Num(2), Num(0), Num(3)}, {Num(0)},
+              count_cost + multi_base(OP_BOOLAND, 3) + varops::BoolAndCost(1, 1) + varops::BoolAndCost(1, 0), 0);
+    CheckEval(multi(OP_BOOLOR), {Num(0), Bytes({0x80}), Num(0), Num(3)}, {Num(1)},
+              count_cost + multi_base(OP_BOOLOR, 3) + varops::BoolOrCost(0, 1) + varops::BoolOrCost(1, 0), 0);
+
+    const uint64_t equal_cost{count_cost + multi_base(OP_EQUAL, 3) + 2 * 2 * varops::COST_FAST};
+    CheckEval(multi(OP_EQUAL), {Bytes("aa"), Bytes("aa"), Bytes("aa"), Num(3)}, {Num(1)}, equal_cost, 0);
+    CheckEval(multi(OP_EQUAL), {Bytes("aa"), Bytes("bb"), Bytes("c"), Num(3)}, {Num(0)},
+              count_cost + multi_base(OP_EQUAL, 3) + 2 * varops::COST_FAST, 0);
+}
+
+BOOST_AUTO_TEST_CASE(multi_count_and_execution_rules)
+{
+    const auto multi = [](opcodetype target) { return CScript{} << OP_MULTI << target; };
+    const uint64_t one_count_cost{varops::LengthConversionCost(Num(1).size())};
+
+    CheckEval(multi(OP_CAT), {Bytes({1, 0, 0}), Num(1)}, {Bytes({1, 0, 0})}, one_count_cost, 0);
+    CheckEval(multi(OP_ADD), {Bytes({1, 0, 0}), Num(1)}, {Num(1)},
+              one_count_cost + varops::CompareZeroCost(3), 0);
+    CheckEval(multi(OP_EQUAL), {Bytes("x"), Num(1)}, {Num(1)}, one_count_cost, 0);
+
+    CheckEval(OneOp(OP_DUP), {Bytes({})}, {Bytes({}), Bytes({})}, 0);
+    CheckEval(OneOp(OP_DROP), {Bytes({})}, {}, 0);
+
+    const uint64_t empty_multi_cost{varops::LengthConversionCost(Num(3).size()) +
+                                    3 * varops::COST_PER_OPCODE};
+    CheckEval(multi(OP_DUP), {Bytes({}), Bytes({}), Bytes({}), Num(3)},
+              {Bytes({}), Bytes({}), Bytes({}), Bytes({}), Bytes({}), Bytes({})}, empty_multi_cost, 0);
+    CheckError(multi(OP_DUP), {Bytes({}), Bytes({}), Bytes({}), Num(3)},
+               empty_multi_cost - 1, SCRIPT_ERR_VAROP_COUNT, 0);
+    CheckEval(multi(OP_DROP), {Bytes({}), Bytes({}), Bytes({}), Num(3)}, {}, empty_multi_cost, 0);
+
+    CheckError(multi(OP_CAT), {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(multi(OP_CAT), {Num(0)}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(multi(OP_CAT), {Bytes("x"), Num(2)}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(OneOp(OP_MULTI), {Num(1)}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(multi(OP_SUB), {Bytes("x"), Num(1)}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript malformed;
+    malformed << OP_MULTI;
+    malformed.push_back(OP_PUSHDATA1);
+    CheckError(malformed, {Bytes("x"), Num(1)}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    const uint64_t dup_cost{one_count_cost + varops::COST_PER_OPCODE + varops::COST_COPYING};
+    CheckError(multi(OP_DUP), {Bytes("x"), Num(1)}, dup_cost - 1, SCRIPT_ERR_VAROP_COUNT, 0);
+
+    CScript unexecuted;
+    unexecuted << OP_0 << OP_IF << OP_MULTI << OP_ENDIF << OP_1;
+    CheckEval(unexecuted, {}, {Num(1)}, 0, 4);
 }
 
 BOOST_AUTO_TEST_CASE(base_evalscript_rejects_tapscript_v2)
@@ -1091,6 +1198,17 @@ BOOST_AUTO_TEST_CASE(op_success_redefinitions_are_checked_before_execution)
                                                         0)};
     BOOST_CHECK(!discouraged_witness.ok);
     BOOST_CHECK_EQUAL(discouraged_witness.error, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+
+    CScript multi_success_target;
+    multi_success_target << OP_MULTI << OP_1NEGATE << OP_RETURN;
+    EvalOutcome multi_success_outcome{
+        VerifyTapscriptV2WithFlags(multi_success_target, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, 0)};
+    BOOST_CHECK(multi_success_outcome.ok);
+    BOOST_CHECK_EQUAL(multi_success_outcome.error, SCRIPT_ERR_OK);
+    multi_success_outcome = VerifyTapscriptV2WithFlags(
+        multi_success_target, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS, 0);
+    BOOST_CHECK(!multi_success_outcome.ok);
+    BOOST_CHECK_EQUAL(multi_success_outcome.error, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
 
     CScript unexecuted_success;
     unexecuted_success << OP_0 << OP_IF << OP_1NEGATE << OP_ENDIF << OP_RETURN;

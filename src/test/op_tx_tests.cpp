@@ -378,6 +378,51 @@ BOOST_AUTO_TEST_CASE(future_selector_version_succeeds)
                 SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS, SCRIPT_ERR_OK);
 }
 
+BOOST_AUTO_TEST_CASE(codeseparator_opcode_position_after_multi_csfs)
+{
+    CMutableTransaction mutable_tx;
+    mutable_tx.version = 2;
+    mutable_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    mutable_tx.vout.emplace_back(1, CScript{});
+    const CTransaction tx{mutable_tx};
+    const std::vector<CTxOut> spent_outputs{CTxOut{2, CScript{}}};
+    const OpTxChecker checker{tx, 0, spent_outputs};
+
+    const uint32_t expected_position{5};
+    const valtype expected_message{static_cast<unsigned char>(expected_position)};
+    uint256 message_hash;
+    CSHA256().Write(expected_message.data(), expected_message.size()).Finalize(message_hash.begin());
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+    std::array<unsigned char, 64> signature;
+    BOOST_REQUIRE(key.SignSchnorr(message_hash, signature, /*merkle_root=*/nullptr, uint256::ZERO));
+    const valtype sig{signature.begin(), signature.end()};
+
+    CScript script;
+    script << valtype(32, 0x01) << OP_DROP;
+    script << valtype{0x01} << OP_MULTI << OP_DROP;
+    script << OP_CODESEPARATOR << valtype{0x00, 0x00, 0x80, 0x00, 0x00, 0x00} << OP_TX
+           << OP_SHA256 << pubkey << OP_CHECKSIGFROMSTACK;
+
+    ScriptExecutionData execdata;
+    const valtype control_block{TestControlBlock()};
+    InitOpTxContext(execdata, script, control_block);
+    ValtypeStack stack{Stack{sig, valtype{0x42}}};
+    const uint64_t expected_cost{9 * varops::COST_PER_OPCODE + varops::LengthConversionCost(1) +
+                                 varops::COST_PER_SIGOP +
+                                 varops::COST_HASH + varops::COST_COPYING +
+                                 (32 + 1 + 6 + 32) * varops::COST_COPYING};
+    varops::Budget budget{expected_cost};
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    BOOST_REQUIRE(EvalTapscriptV2(stack, script, SCRIPT_VERIFY_NONE, checker, execdata, budget, &error));
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    BOOST_REQUIRE_EQUAL(stack.size(), 1);
+    BOOST_CHECK(stack.back() == valtype{0x01});
+    BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
+}
+
 BOOST_AUTO_TEST_CASE(bip341_sighash_construction_csfs)
 {
     CKey key;

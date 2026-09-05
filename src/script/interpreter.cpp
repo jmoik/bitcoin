@@ -58,6 +58,306 @@ uint64_t SignatureExecutionCost(opcodetype opcode, const valtype& signature)
            (signature.empty() ? 0 : varops::SigcheckCost(opcode));
 }
 
+constexpr bool IsMultiTarget(opcodetype opcode)
+{
+    switch (opcode) {
+    case OP_CAT:
+    case OP_ADD:
+    case OP_SHA256:
+    case OP_DUP:
+    case OP_DROP:
+    case OP_MIN:
+    case OP_MAX:
+    case OP_AND:
+    case OP_OR:
+    case OP_XOR:
+    case OP_BOOLAND:
+    case OP_BOOLOR:
+    case OP_EQUAL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool AddMultiCost(uint64_t& total, uint64_t cost)
+{
+    if (cost > std::numeric_limits<uint64_t>::max() - total) return false;
+    total += cost;
+    return true;
+}
+
+bool SpendMultiCost(varops::Budget& budget, uint64_t cost, ScriptError* serror)
+{
+    if (!budget.Spend(cost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+    return true;
+}
+
+uint64_t MultiLogicalOpcodeCount(opcodetype target, size_t count)
+{
+    switch (target) {
+    case OP_SHA256:
+    case OP_DUP:
+    case OP_DROP:
+        return count;
+    default:
+        return count - 1;
+    }
+}
+
+bool CheckMultiOutput(const ValtypeStack& stack, const ValtypeStack& altstack,
+                      size_t input_count, size_t input_bytes, size_t output_count,
+                      size_t output_bytes, size_t max_output_size, ScriptError* serror)
+{
+    if (max_output_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+        return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    }
+
+    const size_t base_count{stack.size() - input_count};
+    if (base_count > MAX_TAPSCRIPT_V2_STACK_SIZE ||
+        altstack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE - base_count ||
+        output_count > MAX_TAPSCRIPT_V2_STACK_SIZE - base_count - altstack.size()) {
+        return set_error(serror, SCRIPT_ERR_STACK_SIZE);
+    }
+
+    const size_t base_bytes{stack.GetTotalSize() - input_bytes};
+    if (base_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE ||
+        altstack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - base_bytes ||
+        output_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - base_bytes - altstack.GetTotalSize()) {
+        return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+    }
+    return true;
+}
+
+bool EvalMulti(ValtypeStack& stack, const ValtypeStack& altstack, opcodetype target,
+               varops::Budget& budget, ScriptError* serror)
+{
+    if (!IsMultiTarget(target)) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+    uint64_t count_cost{0};
+    uint64_t count64;
+    // Release a potentially heavily padded count before allocating the result.
+    {
+        Val64 count_value;
+        if (!stack.PopVal64(count_value)) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+        count64 = count_value.ToU64Ceil(stack.size() + 1, count_cost);
+        if (count64 == 0 || count64 > stack.size()) {
+            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+        }
+    }
+    const size_t count{static_cast<size_t>(count64)};
+    if (!AddMultiCost(count_cost, MultiLogicalOpcodeCount(target, count) * varops::ExecutionCost(target))) {
+        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+    }
+    if (!SpendMultiCost(budget, count_cost, serror)) return false;
+    const size_t first{stack.size() - count};
+
+    size_t input_bytes{0};
+    for (size_t i{first}; i < stack.size(); ++i) {
+        if (stack.at(i).size() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - input_bytes) {
+            return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+        }
+        input_bytes += stack.at(i).size();
+    }
+
+    auto pop_inputs = [&] {
+        for (size_t i{0}; i < count; ++i)
+            stack.pop_back();
+    };
+
+    if (target == OP_CAT) {
+        uint64_t cost{0};
+        size_t accumulator_size{stack.at(first).size()};
+        for (size_t i{first + 1}; i < stack.size(); ++i) {
+            if (!AddMultiCost(cost, (accumulator_size + stack.at(i).size()) * varops::COST_COPYING)) {
+                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            }
+            accumulator_size += stack.at(i).size();
+        }
+        if (!CheckMultiOutput(stack, altstack, count, input_bytes, 1, input_bytes, input_bytes, serror)) return false;
+        if (!SpendMultiCost(budget, cost, serror)) return false;
+
+        if (count == 1) return true;
+
+        valtype result;
+        result.reserve(input_bytes);
+        for (size_t i{first}; i < stack.size(); ++i) {
+            result.insert(result.end(), stack.at(i).begin(), stack.at(i).end());
+        }
+        pop_inputs();
+        stack.push_back(std::move(result));
+        return true;
+    }
+
+    if (target == OP_SHA256) {
+        constexpr size_t HASH_SIZE{CSHA256::OUTPUT_SIZE};
+        if (!CheckMultiOutput(stack, altstack, count, input_bytes, 1, HASH_SIZE, HASH_SIZE, serror)) return false;
+        uint64_t cost{0};
+        if (!AddMultiCost(cost, input_bytes * varops::COST_HASH)) {
+            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        }
+        if (!SpendMultiCost(budget, cost, serror)) return false;
+
+        CSHA256 hasher;
+        for (size_t i{first}; i < stack.size(); ++i) {
+            hasher.Write(stack.at(i).data(), stack.at(i).size());
+        }
+        valtype result(HASH_SIZE);
+        hasher.Finalize(result.data());
+        pop_inputs();
+        stack.push_back(std::move(result));
+        return true;
+    }
+
+    if (target == OP_DUP) {
+        if (input_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - input_bytes) {
+            return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
+        }
+        if (!CheckMultiOutput(stack, altstack, count, input_bytes, count * 2, input_bytes * 2,
+                              stack.GetMaxElementSize(), serror)) return false;
+        uint64_t cost{0};
+        if (!AddMultiCost(cost, input_bytes * varops::COST_COPYING)) {
+            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        }
+        if (!SpendMultiCost(budget, cost, serror)) return false;
+
+        stack.reserve(stack.size() + count);
+        for (size_t i{0}; i < count; ++i)
+            stack.push_back(stack.at(first + i));
+        return true;
+    }
+
+    if (target == OP_DROP) {
+        pop_inputs();
+        return true;
+    }
+
+    if (target == OP_BOOLAND || target == OP_BOOLOR) {
+        const auto truth_value = [](const valtype& value) {
+            return std::any_of(value.begin(), value.end(), [](unsigned char byte) { return byte != 0; });
+        };
+        bool result{false};
+        if (count == 1) {
+            const uint64_t cost{varops::CompareZeroCost(stack.at(first).size())};
+            if (!SpendMultiCost(budget, cost, serror)) return false;
+            result = truth_value(stack.at(first));
+        } else {
+            size_t accumulator_size{stack.at(first).size()};
+            bool first_fold{true};
+            for (size_t i{first + 1}; i < stack.size(); ++i) {
+                const uint64_t cost{
+                    target == OP_BOOLAND ? varops::BoolAndCost(accumulator_size, stack.at(i).size()) :
+                                           varops::BoolOrCost(accumulator_size, stack.at(i).size())};
+                if (!SpendMultiCost(budget, cost, serror)) return false;
+                if (first_fold) {
+                    result = truth_value(stack.at(first));
+                    first_fold = false;
+                }
+                const bool value{truth_value(stack.at(i))};
+                result = target == OP_BOOLAND ? result && value : result || value;
+                accumulator_size = result ? 1 : 0;
+            }
+        }
+        const size_t result_size{result ? 1U : 0U};
+        if (!CheckMultiOutput(stack, altstack, count, input_bytes, 1, result_size, result_size, serror)) return false;
+        pop_inputs();
+        stack.push_back(result ? valtype{1} : valtype{});
+        return true;
+    }
+
+    if (target == OP_EQUAL) {
+        uint64_t cost{0};
+        const valtype& reference{stack.at(first)};
+        for (size_t i{first + 1}; i < stack.size(); ++i) {
+            if (stack.at(i).size() == reference.size() &&
+                !AddMultiCost(cost, reference.size() * varops::COST_FAST)) {
+                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            }
+        }
+        if (!SpendMultiCost(budget, cost, serror)) return false;
+
+        bool result{true};
+        for (size_t i{first + 1}; i < stack.size(); ++i)
+            result &= stack.at(i) == reference;
+        const size_t result_size{result ? 1U : 0U};
+        if (!CheckMultiOutput(stack, altstack, count, input_bytes, 1, result_size, result_size, serror)) return false;
+        pop_inputs();
+        stack.push_back(result ? valtype{1} : valtype{});
+        return true;
+    }
+
+    uint64_t known_cost{0};
+    if (target == OP_AND || target == OP_OR || target == OP_XOR) {
+        size_t accumulator_size{stack.at(first).size()};
+        for (size_t i{first + 1}; i < stack.size(); ++i) {
+            const size_t next_size{stack.at(i).size()};
+            const uint64_t fold_cost{target == OP_AND ? varops::AndCost(accumulator_size, next_size) :
+                                     target == OP_OR  ? varops::OrCost(accumulator_size, next_size) :
+                                                        varops::XorCost(accumulator_size, next_size)};
+            if (!AddMultiCost(known_cost, fold_cost)) {
+                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            }
+            accumulator_size = std::max(accumulator_size, next_size);
+        }
+        if (!SpendMultiCost(budget, known_cost, serror)) return false;
+    } else {
+        if (count == 1 && (target == OP_ADD || target == OP_MIN || target == OP_MAX) &&
+            !AddMultiCost(known_cost, varops::CompareZeroCost(stack.at(first).size()))) {
+            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        }
+        if (!SpendMultiCost(budget, known_cost, serror)) return false;
+    }
+
+    std::vector<Val64> values;
+    values.reserve(count);
+    for (size_t i{0}; i < count; ++i) {
+        Val64 value;
+        const bool popped{stack.PopVal64(value)};
+        assert(popped);
+        values.push_back(std::move(value));
+    }
+    Val64 accumulator{std::move(values.back())};
+    if (count == 1 && (target == OP_ADD || target == OP_MIN || target == OP_MAX)) {
+        accumulator.TrimTrailingZeros();
+    }
+
+    for (size_t i{values.size() - 1}; i > 0; --i) {
+        Val64& value{values[i - 1]};
+        uint64_t fold_cost{0};
+        switch (target) {
+        case OP_ADD: fold_cost = varops::AddCost(accumulator.size(), value.size()); break;
+        case OP_MIN:
+        case OP_MAX: fold_cost = varops::MinMaxCost(accumulator.size(), value.size()); break;
+        case OP_AND: fold_cost = varops::AndCost(accumulator.size(), value.size()); break;
+        case OP_OR: fold_cost = varops::OrCost(accumulator.size(), value.size()); break;
+        case OP_XOR: fold_cost = varops::XorCost(accumulator.size(), value.size()); break;
+        default: assert(!"invalid OP_MULTI target");
+        }
+
+        if (target == OP_ADD || target == OP_MIN || target == OP_MAX) {
+            if (!SpendMultiCost(budget, fold_cost, serror)) return false;
+        }
+
+        uint64_t reported_cost{0};
+        switch (target) {
+        case OP_ADD: Val64::OpAdd(accumulator, value, reported_cost); break;
+        case OP_MIN: Val64::OpMin(accumulator, value, reported_cost); break;
+        case OP_MAX: Val64::OpMax(accumulator, value, reported_cost); break;
+        case OP_AND: Val64::OpAnd(accumulator, value, reported_cost); break;
+        case OP_OR: Val64::OpOr(accumulator, value, reported_cost); break;
+        case OP_XOR: Val64::OpXor(accumulator, value, reported_cost); break;
+        default: assert(!"invalid OP_MULTI target");
+        }
+        assert(reported_cost == fold_cost);
+        if (accumulator.size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+            return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+        }
+    }
+    stack.push_back(accumulator.MoveToValtype());
+    return true;
+}
+
+
 } // namespace
 
 bool CastToBool(const valtype& vch)
@@ -1359,7 +1659,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
             const bool executes_opcode{fExec || (OP_IF <= opcode && opcode <= OP_ENDIF)};
-            if (executes_opcode && opcode != OP_TX && !HasSignatureDependentExecutionCost(opcode) &&
+            // OP_TX handles upgrade success; OP_MULTI charges its logical operations.
+            if (executes_opcode && opcode != OP_TX && opcode != OP_MULTI &&
+                !HasSignatureDependentExecutionCost(opcode) &&
                 !varops_budget.Spend(varops::ExecutionCost(opcode))) {
                 return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
             }
@@ -2048,6 +2350,15 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                         success_override = true;
                         return set_success(serror);
                     }
+                } break;
+
+                case OP_MULTI: {
+                    opcodetype target;
+                    if (!script.GetOp(pc, target)) {
+                        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                    }
+                    ++opcode_pos;
+                    if (!EvalMulti(stack, altstack, target, varops_budget, serror)) return false;
                 } break;
 
                 case OP_CHECKSIGFROMSTACK: {

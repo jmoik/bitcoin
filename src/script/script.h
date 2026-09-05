@@ -224,6 +224,9 @@ enum opcodetype
     // Opcode added by BIP 449 (OP_TWEAKADD)
     OP_TWEAKADD = 0xbe,
 
+    // Opcode proposed by the covenant-support-opcodes draft
+    OP_MULTI = 0xbf,
+
     // Opcode added by BIP 348 (OP_CHECKSIGFROMSTACK)
     OP_CHECKSIGFROMSTACK = 0xcc,
 

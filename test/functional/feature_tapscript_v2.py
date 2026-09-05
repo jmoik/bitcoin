@@ -78,6 +78,7 @@ from test_framework.script import (
     OP_IF,
     OP_LSHIFT,
     OP_MUL,
+    OP_MULTI,
     OP_PICK,
     OP_PUSHDATA1,
     OP_RETURN,
@@ -696,6 +697,26 @@ def op_tx_spenders():
         "v2/op_tx_variable_arity_fee",
         tap=tap,
         leaf="fee",
+        inputs=[expected_fee],
+        failure={"inputs": [bitflipper(expected_fee)]},
+        **ERR_EVAL_FALSE,
+    )
+
+    input_amounts = bytes.fromhex("000000200400")
+    input_count = bytes.fromhex("001000000000")
+    output_amounts = bytes.fromhex("000000020001")
+    output_count = bytes.fromhex("004000000000")
+    script = CScript([
+        input_amounts, OP_TX, input_count, OP_TX, OP_MULTI, OP_ADD,
+        output_amounts, OP_TX, output_count, OP_TX, OP_MULTI, OP_ADD,
+        OP_SUB, OP_EQUAL,
+    ])
+    tap = taproot_construct(pub, [("multi_fee", script, LEAF_VERSION_TAPSCRIPT_V2)])
+    add_spender(
+        spenders,
+        "v2/op_multi_variable_arity_fee",
+        tap=tap,
+        leaf="multi_fee",
         inputs=[expected_fee],
         failure={"inputs": [bitflipper(expected_fee)]},
         **ERR_EVAL_FALSE,

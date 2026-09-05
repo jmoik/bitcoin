@@ -1420,6 +1420,62 @@ static void AddTimelockCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 TimelockSequenceCost(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE));
 }
 
+
+
+static CScript MultiCycle(opcodetype target, size_t count)
+{
+    const valtype count_value{Val64(count).MoveToValtype()};
+    CScript sequence;
+    sequence << count_value << OP_MULTI << OP_DUP
+             << count_value << OP_MULTI;
+    if (target == OP_DUP || target == OP_DROP) {
+        sequence << OP_DROP;
+    } else {
+        sequence << target << OP_DROP;
+    }
+    return sequence;
+}
+
+static void AddMultiCases(std::vector<CaseSpec>& specs, opcodetype opcode)
+{
+    const auto add = [&](opcodetype target, size_t count, size_t item_size,
+                         std::string case_label) {
+        std::vector<valtype> stack(
+            count, PatternBytes(item_size, item_size == 0 ? "zero" : "one-low"));
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, std::move(case_label),
+                strprintf("%ux%s", count, FormatBytes(item_size)),
+                item_size == 0 ? "empty-items" : "padded-one",
+                MultiCycle(target, count), FixedStack(std::move(stack)));
+    };
+
+    constexpr size_t representative_count{1024};
+    for (const opcodetype target : {
+             OP_CAT, OP_SHA256, OP_ADD, OP_MIN, OP_MAX, OP_AND, OP_OR, OP_XOR,
+             OP_BOOLAND, OP_BOOLOR, OP_EQUAL}) {
+        add(target, representative_count, 1, "multi-" + OpcodeName(target));
+    }
+
+    constexpr size_t boundary_count{16'383};
+    for (size_t item_size : {0U, 1U, 10U}) {
+        add(OP_DUP, boundary_count, item_size, "multi-dup-drop-boundary");
+    }
+    for (size_t count : {16U, 1024U}) {
+        add(OP_DUP, count, 0, "multi-dup-drop-count-scaling");
+    }
+    for (const opcodetype target : {OP_CAT, OP_SHA256}) {
+        for (size_t item_size : {0U, 10U}) {
+            add(target, boundary_count, item_size, "multi-boundary-" + OpcodeName(target));
+        }
+    }
+
+    for (size_t item_size : {0U, 1U, 10U}) {
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, "direct-dup-drop-control",
+                FormatBytes(item_size), item_size == 0 ? "empty-item" : "padded-one",
+                Ops({OP_DUP, OP_DROP}),
+                FixedStack({PatternBytes(item_size, item_size == 0 ? "zero" : "one-low")}));
+    }
+}
+
 static void AddControlAndFloorCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
     const auto forced_push = [](opcodetype push_opcode, size_t size) {
@@ -1571,6 +1627,7 @@ static const std::vector<OpcodeEntry>& OpcodeRegistry()
         const CaseGenerator binary_restored{[](auto& out, auto op) { AddBinaryDataCases(out, op, true); }};
 
         add(AddControlAndFloorCases, {OP_0, OP_PUSHDATA1, OP_PUSHDATA2, OP_PUSHDATA4, OP_IF, OP_VERIFY, OP_NOP, OP_CODESEPARATOR});
+        add(AddMultiCases, {OP_MULTI});
         add(AddStackOpcodeCases, {OP_TOALTSTACK, OP_FROMALTSTACK, OP_2DROP, OP_2DUP, OP_3DUP, OP_2OVER, OP_2ROT, OP_2SWAP,
                                   OP_IFDUP, OP_DEPTH, OP_DROP, OP_DUP, OP_NIP, OP_OVER, OP_PICK, OP_ROLL, OP_ROT, OP_SWAP, OP_TUCK});
         add(unary_common, {OP_1ADD, OP_1SUB, OP_NOT, OP_0NOTEQUAL});
