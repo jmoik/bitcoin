@@ -13,6 +13,15 @@ Tapscript v2. It targets 30-second blocks and activates the
 - Initial target nBits: `1e0377ae`
 - GSR deployment: always active (`script_restoration:-1:0`)
 
+## Public explorer
+
+- Explorer: `https://gsr-net.65-21-21-199.sslip.io`
+- REST API: `https://gsr-net.65-21-21-199.sslip.io/api/`
+- Broadcast a raw transaction: `POST /api/tx`
+
+The temporary `sslip.io` hostname resolves directly to the public server IP and
+lets Caddy provision HTTPS without requiring a purchased domain.
+
 Connect with this branch's binaries:
 
 ```sh
@@ -22,6 +31,6 @@ bitcoind -signet \
   -addnode=65.21.21.199:38333
 ```
 
-The RPC service is intentionally bound to loopback. Do not expose port 38332
-to the public internet. Public transaction submission will be provided by the
-explorer/API layer.
+The RPC service is intentionally unavailable on the public internet. It is
+bound to loopback and the isolated `172.29.0.0/24` explorer bridge. Public
+transaction submission is provided by the explorer/API layer instead.

@@ -31,7 +31,7 @@ services:
       - --cookie=gsr-mempool:${RPC_PASSWORD}
       - --network=signet
       - --magic=3777fcb0
-      - --daemon-rpc-addr=host.docker.internal:38332
+      - --daemon-rpc-addr=172.29.0.1:38332
       - --blocks-dir=/root/.bitcoin/signet/blocks
       - --timestamp
       - --jsonrpc-import
@@ -39,8 +39,6 @@ services:
       - --electrum-rpc-addr=0.0.0.0:50001
       - --http-addr=0.0.0.0:3003
       - --electrum-banner=Welcome to gsr-net
-    extra_hosts:
-      - host.docker.internal:host-gateway
     volumes:
       - /var/lib/gsr-net:/root/.bitcoin:ro
       - /var/lib/gsr-net/explorer/electrs:/root/.electrs
@@ -62,7 +60,7 @@ services:
       ELECTRUM_PORT: "50001"
       ELECTRUM_TLS_ENABLED: "false"
       ESPLORA_REST_API_URL: http://electrs:3003
-      CORE_RPC_HOST: host.docker.internal
+      CORE_RPC_HOST: 172.29.0.1
       CORE_RPC_PORT: "38332"
       CORE_RPC_USERNAME: gsr-mempool
       CORE_RPC_PASSWORD: ${RPC_PASSWORD}
@@ -73,8 +71,6 @@ services:
       DATABASE_PASSWORD: ${MYSQL_PASSWORD}
       STATISTICS_ENABLED: "true"
       LIGHTNING_ENABLED: "false"
-    extra_hosts:
-      - host.docker.internal:host-gateway
     volumes:
       - /var/lib/gsr-net/explorer/mempool:/backend/cache
     networks: [gsrnet]
