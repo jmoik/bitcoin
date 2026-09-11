@@ -1,0 +1,22 @@
+[Unit]
+Description=gsr-net public faucet
+After=gsr-net-node.service network-online.target
+Requires=gsr-net-node.service
+
+[Service]
+Type=simple
+User=gsrnet
+Group=gsrnet
+Environment=GSR_FAUCET_AMOUNT=1.0
+Environment=GSR_FAUCET_COOLDOWN=3600
+ExecStart=/usr/bin/python3 /opt/gsr-net/contrib/gsr-net/faucet.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gsr-net
+
+[Install]
+WantedBy=multi-user.target

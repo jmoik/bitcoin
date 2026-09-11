@@ -16,11 +16,19 @@ Tapscript v2. It targets 30-second blocks and activates the
 ## Public explorer
 
 - Explorer: `https://gsr-net.65-21-21-199.sslip.io`
+- Faucet: `https://gsr-net.65-21-21-199.sslip.io/faucet/`
+- Playground: `https://gsr-net.65-21-21-199.sslip.io/playground/`
 - REST API: `https://gsr-net.65-21-21-199.sslip.io/api/`
 - Broadcast a raw transaction: `POST /api/tx`
 
 The temporary `sslip.io` hostname resolves directly to the public server IP and
 lets Caddy provision HTTPS without requiring a purchased domain.
+
+The faucet sends 1 test BTC per address and client IP per hour. The playground
+creates disposable server-managed wallets, sends ordinary payments, and can
+build a real leaf-version-`0xc2` transaction that executes `OP_BYTEREV`. Its
+wallets are custodial test accounts and must never be used for valuable keys or
+coins.
 
 Connect with this branch's binaries:
 

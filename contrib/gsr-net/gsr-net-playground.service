@@ -1,0 +1,21 @@
+[Unit]
+Description=gsr-net browser playground
+After=gsr-net-node.service network-online.target
+Requires=gsr-net-node.service
+
+[Service]
+Type=simple
+User=gsrnet
+Group=gsrnet
+Environment=PYTHONPATH=/opt/gsr-net/test/functional
+ExecStart=/usr/bin/python3 /opt/gsr-net/contrib/gsr-net/playground.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gsr-net
+
+[Install]
+WantedBy=multi-user.target
