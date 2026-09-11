@@ -1,0 +1,4 @@
+gsr-net.65-21-21-199.sslip.io {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}

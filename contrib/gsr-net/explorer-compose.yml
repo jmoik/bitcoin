@@ -1,0 +1,99 @@
+services:
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: mempool
+      MYSQL_USER: mempool
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    command:
+      - --innodb-buffer-pool-size=512M
+      - --innodb-log-file-size=256M
+      - --innodb-flush-log-at-trx-commit=2
+    volumes:
+      - /var/lib/gsr-net/explorer/mysql:/var/lib/mysql
+    networks: [gsrnet]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  electrs:
+    image: mempool/electrs:v3.3.0
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: /bin/electrs
+    command:
+      - -vvvv
+      - --address-search
+      - --cookie=gsr-mempool:${RPC_PASSWORD}
+      - --network=signet
+      - --magic=3777fcb0
+      - --daemon-rpc-addr=host.docker.internal:38332
+      - --blocks-dir=/root/.bitcoin/signet/blocks
+      - --timestamp
+      - --jsonrpc-import
+      - --db-dir=/root/.electrs
+      - --electrum-rpc-addr=0.0.0.0:50001
+      - --http-addr=0.0.0.0:3003
+      - --electrum-banner=Welcome to gsr-net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - /var/lib/gsr-net:/root/.bitcoin:ro
+      - /var/lib/gsr-net/explorer/electrs:/root/.electrs
+    networks: [gsrnet]
+
+  api:
+    image: mempool/backend:v3.3.1
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      electrs:
+        condition: service_started
+    environment:
+      MEMPOOL_NETWORK: signet
+      MEMPOOL_BACKEND: electrum
+      MEMPOOL_AUTOMATIC_POOLS_UPDATE: "false"
+      ELECTRUM_HOST: electrs
+      ELECTRUM_PORT: "50001"
+      ELECTRUM_TLS_ENABLED: "false"
+      ESPLORA_REST_API_URL: http://electrs:3003
+      CORE_RPC_HOST: host.docker.internal
+      CORE_RPC_PORT: "38332"
+      CORE_RPC_USERNAME: gsr-mempool
+      CORE_RPC_PASSWORD: ${RPC_PASSWORD}
+      DATABASE_ENABLED: "true"
+      DATABASE_HOST: db
+      DATABASE_DATABASE: mempool
+      DATABASE_USERNAME: mempool
+      DATABASE_PASSWORD: ${MYSQL_PASSWORD}
+      STATISTICS_ENABLED: "true"
+      LIGHTNING_ENABLED: "false"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - /var/lib/gsr-net/explorer/mempool:/backend/cache
+    networks: [gsrnet]
+
+  web:
+    image: mempool/frontend:v3.3.1
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      MAINNET_ENABLED: "false"
+      ROOT_NETWORK: signet
+      FRONTEND_HTTP_PORT: "8080"
+      BACKEND_MAINNET_HTTP_HOST: api
+      LIGHTNING: "false"
+      MINING_DASHBOARD: "false"
+    ports:
+      - 127.0.0.1:8080:8080
+    networks: [gsrnet]
+
+networks:
+  gsrnet:
+    external: true

@@ -1,0 +1,22 @@
+[Unit]
+Description=gsr-net Bitcoin Signet node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsrnet
+Group=gsrnet
+ExecStart=/opt/gsr-net/bin/bitcoind -datadir=/var/lib/gsr-net -conf=/etc/gsr-net/bitcoin.conf
+ExecStop=/opt/gsr-net/bin/bitcoin-cli -datadir=/var/lib/gsr-net -conf=/etc/gsr-net/bitcoin.conf stop
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gsr-net
+
+[Install]
+WantedBy=multi-user.target

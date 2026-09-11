@@ -248,7 +248,9 @@ def trivial_challenge(spkhex):
     return False
 
 class Generate:
-    INTERVAL = 600.0*2016/2015 # 10 minutes, adjusted for the off-by-one bug
+    # gsr-net targets 30-second blocks, adjusted for the historical retarget
+    # off-by-one behavior in the same way as the upstream 10-minute default.
+    INTERVAL = 30.0*2016/2015
 
 
     def __init__(self, multiminer=None, ultimate_target=None, poisson=False, max_interval=1800,

@@ -1,0 +1,19 @@
+[Unit]
+Description=gsr-net 30-second Signet miner
+After=gsr-net-node.service
+Requires=gsr-net-node.service
+
+[Service]
+Type=simple
+User=gsrnet
+Group=gsrnet
+ExecStart=/usr/bin/python3 /opt/gsr-net/contrib/signet/miner "--cli=/opt/gsr-net/bin/bitcoin-cli -datadir=/var/lib/gsr-net -rpcwallet=miner" generate "--grind-cmd=/opt/gsr-net/bin/bitcoin-util grind" --address=tb1qk6n9czzhp67r5ftrhnvhj06tv38x7yc3h5h4wd --nbits=1e0377ae --ongoing --poisson --poolid=/gsr-net/
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gsr-net
+
+[Install]
+WantedBy=multi-user.target
