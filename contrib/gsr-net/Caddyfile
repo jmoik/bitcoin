@@ -13,3 +13,21 @@ gsr-net.65-21-21-199.sslip.io {
         reverse_proxy 127.0.0.1:8080
     }
 }
+
+# Direct-IP fallback for clients whose DNS provider blocks sslip.io as a
+# rebinding-protection measure. This endpoint is intentionally HTTP-only.
+http://65.21.21.199 {
+    encode zstd gzip
+
+    handle_path /faucet* {
+        reverse_proxy 127.0.0.1:8081
+    }
+
+    handle_path /playground* {
+        reverse_proxy 127.0.0.1:8082
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8080
+    }
+}
