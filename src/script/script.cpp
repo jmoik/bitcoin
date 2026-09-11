@@ -150,6 +150,10 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
+    // Opcodes proposed by the covenant-support-opcodes draft
+    case OP_DEFINE: return "OP_DEFINE";
+    case OP_INVOKE: return "OP_INVOKE";
+
     // Opcode proposed by the OP_TX draft
     case OP_TX: return "OP_TX";
 
@@ -382,9 +386,10 @@ bool IsOpSuccess(const opcodetype& opcode, SigVersion sigversion)
     assert(IsTapscript(sigversion));
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
         return opcode == OP_1NEGATE || opcode == OP_RESERVED || opcode == OP_VER ||
-            (opcode >= OP_RESERVED1 && opcode <= OP_RESERVED2) || opcode == OP_NEGATE || opcode == OP_ABS ||
-            (opcode >= 187 && opcode <= 254 && opcode != OP_TX && opcode != OP_TWEAKADD &&
-             opcode != OP_MULTI && opcode != OP_CHECKSIGFROMSTACK && opcode != OP_BYTEREV);
+               (opcode >= OP_RESERVED1 && opcode <= OP_RESERVED2) || opcode == OP_NEGATE || opcode == OP_ABS ||
+               (opcode >= 187 && opcode <= 254 && opcode != OP_DEFINE && opcode != OP_INVOKE &&
+                opcode != OP_TX && opcode != OP_TWEAKADD && opcode != OP_MULTI &&
+                opcode != OP_CHECKSIGFROMSTACK && opcode != OP_BYTEREV);
     }
     return opcode == 80 || opcode == 98 || (opcode >= 126 && opcode <= 129) ||
            (opcode >= 131 && opcode <= 134) || (opcode >= 137 && opcode <= 138) ||

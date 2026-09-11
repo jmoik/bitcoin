@@ -74,6 +74,7 @@ BOOST_AUTO_TEST_CASE(bip440_cost_constants)
     BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_0NOTEQUAL), 3'000);
     BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_RSHIFT), 3'000);
     BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_HASH160), 4'000);
+    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_INVOKE), 4'000);
     BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_DIV), 3'000);
     BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_MOD), 3'000);
     BOOST_CHECK_EQUAL(varops::TxBudget(4), 40'000);

@@ -218,6 +218,10 @@ enum opcodetype
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
+    // Opcodes proposed by the covenant-support-opcodes draft.
+    OP_DEFINE = 0xbb,
+    OP_INVOKE = 0xbc,
+
     // Opcode proposed by the OP_TX draft
     OP_TX = 0xbd,
 

@@ -257,6 +257,10 @@ OP_NOP10 = CScriptOp(0xb9)
 # BIP 342 opcodes (Tapscript)
 OP_CHECKSIGADD = CScriptOp(0xba)
 
+# Experimental Tapscript v2 reusable-function opcodes
+OP_DEFINE = CScriptOp(0xbb)
+OP_INVOKE = CScriptOp(0xbc)
+
 # OP_TX draft opcode
 OP_TX = CScriptOp(0xbd)
 
@@ -387,6 +391,8 @@ OPCODE_NAMES.update({
     OP_NOP9: 'OP_NOP9',
     OP_NOP10: 'OP_NOP10',
     OP_CHECKSIGADD: 'OP_CHECKSIGADD',
+    OP_DEFINE: 'OP_DEFINE',
+    OP_INVOKE: 'OP_INVOKE',
     OP_TX: 'OP_TX',
     OP_TWEAKADD: 'OP_TWEAKADD',
     OP_MULTI: 'OP_MULTI',

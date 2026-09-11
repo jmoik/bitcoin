@@ -108,9 +108,9 @@ opcodetype ConsumeUsefulOpcode(FuzzedDataProvider& provider)
         OP_MUL, OP_DIV, OP_MOD, OP_LSHIFT, OP_RSHIFT, OP_CAT, OP_SUBSTR, OP_LEFT,
         OP_RIGHT, OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256,
         OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_CHECKSIG,
-        OP_CHECKSIGVERIFY, OP_CHECKSIGADD, OP_CODESEPARATOR, OP_TX, OP_TWEAKADD,
-        OP_MULTI, static_cast<opcodetype>(0xcb), OP_CHECKSIGFROMSTACK,
-        static_cast<opcodetype>(0xce), OP_BYTEREV,
+        OP_CHECKSIGVERIFY, OP_CHECKSIGADD, OP_CODESEPARATOR,
+        OP_DEFINE, OP_INVOKE, OP_TX, OP_TWEAKADD, OP_MULTI, static_cast<opcodetype>(0xcb),
+        OP_CHECKSIGFROMSTACK, static_cast<opcodetype>(0xce), OP_BYTEREV,
     });
 }
 

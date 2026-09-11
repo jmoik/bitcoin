@@ -22,10 +22,12 @@
 #include <uint256.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <compare>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 typedef std::vector<unsigned char> valtype;
@@ -56,6 +58,27 @@ uint64_t SignatureExecutionCost(opcodetype opcode, const valtype& signature)
 {
     return varops::ExecutionCost(opcode) +
            (signature.empty() ? 0 : varops::SigcheckCost(opcode));
+}
+
+static constexpr size_t MAX_EXECUTED_FUNCTION_BODY_BYTES{4'000'000};
+
+struct FunctionExecutionState {
+    std::array<std::optional<valtype>, 256> definitions;
+    std::array<bool, 256> active{};
+    size_t definition_count{0};
+    size_t stored_body_bytes{0};
+    size_t invoked_body_bytes{0};
+};
+
+bool ParseFunctionId(const valtype& id_bytes, uint8_t& id)
+{
+    if (id_bytes.empty()) {
+        id = 0;
+        return true;
+    }
+    if (id_bytes.size() != 1 || id_bytes[0] == 0) return false;
+    id = id_bytes[0];
+    return true;
 }
 
 constexpr bool IsMultiTarget(opcodetype opcode)
@@ -356,7 +379,6 @@ bool EvalMulti(ValtypeStack& stack, const ValtypeStack& altstack, opcodetype tar
     stack.push_back(accumulator.MoveToValtype());
     return true;
 }
-
 
 } // namespace
 
@@ -1619,25 +1641,33 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     return set_success(serror);
 }
 
-static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, bool& success_override, ScriptError* serror)
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker,
+                                ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror,
+                                bool& immediate_success, FunctionExecutionState* shared_function_state = nullptr,
+                                ValtypeStack* shared_altstack = nullptr, bool in_function = false)
 {
     static const valtype vchFalse(0);
     static const valtype vchTrue(1, 1);
+
+    FunctionExecutionState local_function_state;
+    FunctionExecutionState& function_state{shared_function_state ? *shared_function_state : local_function_state};
+    ValtypeStack local_altstack;
+    ValtypeStack& altstack{shared_altstack ? *shared_altstack : local_altstack};
+    set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+    const bool fRequireMinimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
+    if (!in_function) {
+        execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
+        execdata.m_codeseparator_pos_init = true;
+        execdata.m_tapscript = script;
+        execdata.m_tapscript_init = true;
+    }
 
     CScript::const_iterator pc = script.begin();
     CScript::const_iterator pend = script.end();
     opcodetype opcode;
     valtype vchPushValue;
     ConditionStack vfExec;
-    ValtypeStack altstack;
-    set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
-    bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
     uint32_t opcode_pos = 0;
-    execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
-    execdata.m_codeseparator_pos_init = true;
-    execdata.m_tapscript = script;
-    execdata.m_tapscript_init = true;
-    success_override = false;
 
     try
     {
@@ -1655,6 +1685,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
             //
             if (!script.GetOp(pc, opcode, vchPushValue))
                 return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+            if (in_function && fExec && opcode == OP_CODESEPARATOR) {
+                return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
+            }
             if (vchPushValue.size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
@@ -2340,6 +2373,59 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 }
                 break;
 
+                case OP_DEFINE: {
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    const valtype id_bytes{stack.PopBackValue()};
+                    uint8_t id;
+                    if (!ParseFunctionId(id_bytes, id)) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    if (function_state.definitions[id].has_value()) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    valtype body_bytes{stack.PopBackValue()};
+                    ++function_state.definition_count;
+                    function_state.stored_body_bytes += body_bytes.size();
+                    function_state.definitions[id].emplace(std::move(body_bytes));
+                } break;
+
+                case OP_INVOKE: {
+                    if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    const valtype id_bytes{stack.PopBackValue()};
+                    uint8_t id;
+                    if (!ParseFunctionId(id_bytes, id)) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    if (!function_state.definitions[id].has_value() || function_state.active[id]) {
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    }
+
+                    const valtype& body_bytes{*function_state.definitions[id]};
+                    if (function_state.invoked_body_bytes > MAX_EXECUTED_FUNCTION_BODY_BYTES - body_bytes.size()) {
+                        return set_error(serror, SCRIPT_ERR_SCRIPT_SIZE);
+                    }
+                    function_state.invoked_body_bytes += body_bytes.size();
+                    if (!varops_budget.Spend(body_bytes.size() * varops::COST_COPYING)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
+
+                    const CScript body{body_bytes.begin(), body_bytes.end()};
+                    const std::optional<bool> op_success{
+                        CheckTapscriptOpSuccess(body, flags, SigVersion::TAPSCRIPT_V2, serror)};
+                    if (op_success.has_value()) {
+                        if (!*op_success) return false;
+                        immediate_success = true;
+                        return true;
+                    }
+
+                    function_state.active[id] = true;
+                    if (!EvalTapscriptV2Impl(stack, body, flags, checker, execdata, varops_budget,
+                                             serror, immediate_success, &function_state, &altstack,
+                                             /*in_function=*/true)) {
+                        function_state.active[id] = false;
+                        return false;
+                    }
+                    function_state.active[id] = false;
+                    if (immediate_success) return true;
+                } break;
+
                 case OP_TX: {
                     const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, serror)};
                     if (result == OpTxResult::ERROR) return false;
@@ -2347,7 +2433,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                         if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
                             return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
                         }
-                        success_override = true;
+                        immediate_success = true;
                         return set_success(serror);
                     }
                 } break;
@@ -2607,11 +2693,15 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
             }
 
             // Size limits
-            if (stack.size() + altstack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
+            const size_t stack_entries{stack.size() + altstack.size()};
+            if (function_state.definition_count > MAX_TAPSCRIPT_V2_STACK_SIZE ||
+                stack_entries > MAX_TAPSCRIPT_V2_STACK_SIZE - function_state.definition_count) {
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
             }
 
-            if (stack.GetTotalSize() + altstack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+            const size_t stack_bytes{stack.GetTotalSize() + altstack.GetTotalSize()};
+            if (function_state.stored_body_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE ||
+                stack_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - function_state.stored_body_bytes) {
                 return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
             }
 
@@ -2641,12 +2731,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
     return set_success(serror);
 }
 
-bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
-{
-    bool success_override{false};
-    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, success_override, serror);
-}
-
 uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
 {
     assert(spent_outputs.size() == tx.vin.size());
@@ -2671,6 +2755,15 @@ uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxO
         }
     }
     return has_participant ? varops::TxBudget(weight) : 0;
+}
+
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
+{
+    bool local_immediate_success{false};
+    const bool success{EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget,
+                                           serror, local_immediate_success)};
+    if (immediate_success) *immediate_success = local_immediate_success;
+    return success;
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
@@ -3332,9 +3425,12 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
 
         ValtypeStack valtype_stack{stack_span};
 
-        bool success_override{false};
-        if (!EvalTapscriptV2Impl(valtype_stack, exec_script, flags, checker, execdata, varops_budget, success_override, serror)) return false;
-        if (success_override) return set_success(serror);
+        bool immediate_success{false};
+        if (!EvalTapscriptV2Impl(valtype_stack, exec_script, flags, checker, execdata,
+                                 varops_budget, serror, immediate_success)) {
+            return false;
+        }
+        if (immediate_success) return true;
         return CheckTapscriptV2ScriptResult(valtype_stack, varops_budget, serror);
     }
 

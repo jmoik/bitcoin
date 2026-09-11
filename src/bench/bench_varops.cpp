@@ -184,6 +184,7 @@ struct CaseOptions {
     std::string saturation_hint;
     std::optional<uint64_t> expected_varops_per_repeat;
     std::optional<SaturationExpectation> expected_saturation;
+    std::string sequence_label;
 };
 
 struct CaseSpec {
@@ -703,7 +704,8 @@ static void AddCase(std::vector<CaseSpec>& specs, opcodetype opcode, HeadlineRol
                     CaseOptions options = {})
 {
     const std::string opcode_name{OpcodeName(opcode)};
-    const std::string sequence_opcodes{SequenceOpcodeNames(sequence)};
+    const std::string sequence_opcodes{
+        options.sequence_label.empty() ? SequenceOpcodeNames(sequence) : options.sequence_label};
     const std::string name{strprintf("%s/%s/%s/%s/%s/%s/%s", DomainName(DomainFor(role)), opcode_name,
                                      sequence_opcodes, case_label, shape, pattern, ScriptErrorString(options.expected_error))};
     specs.push_back({name, opcode, opcode_name, sequence_opcodes, std::move(shape), std::move(pattern),
@@ -1476,6 +1478,177 @@ static void AddMultiCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     }
 }
 
+static CScript RepeatedDupDropBody(size_t body_size)
+{
+    if (body_size == 0 || body_size % 2 != 0) {
+        throw std::runtime_error("function DUP/DROP body size must be positive and even");
+    }
+    CScript body;
+    body.reserve(body_size);
+    while (body.size() < body_size)
+        body << OP_DUP << OP_DROP;
+    return body;
+}
+
+static CScript RepeatedSequenceBody(const CScript& sequence, size_t body_size)
+{
+    if (sequence.empty() || body_size % sequence.size() != 0) {
+        throw std::runtime_error("function body size must be a multiple of its sequence size");
+    }
+    CScript body;
+    body.reserve(body_size);
+    while (body.size() < body_size) {
+        body.insert(body.end(), sequence.begin(), sequence.end());
+    }
+    return body;
+}
+
+static CScript FunctionCalls(const CScript& body, size_t calls)
+{
+    const valtype body_bytes{body.begin(), body.end()};
+    const valtype function_id{Val64(1).MoveToValtype()};
+    CScript sequence;
+    sequence << body_bytes << function_id << OP_DEFINE;
+    for (size_t call{0}; call < calls; ++call) {
+        sequence << function_id << OP_INVOKE;
+    }
+    return sequence;
+}
+
+static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
+{
+    const auto add_with_stack = [&](const CScript& body, size_t calls, std::vector<valtype> stack,
+                                    std::string case_label, std::string shape, std::string pattern,
+                                    std::string saturation) {
+        CScript sequence{FunctionCalls(body, calls)};
+        CaseOptions options{FixedCase(SCRIPT_ERR_OK, 1, stack.size(), std::move(saturation))};
+        options.sequence_label = strprintf("DEFINE_%uB+%u_CALLS", body.size(), calls);
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, std::move(case_label),
+                strprintf("%uB-body/%u-calls/%s", body.size(), calls, std::move(shape)),
+                std::move(pattern), std::move(sequence), FixedStack(std::move(stack)), std::move(options));
+    };
+    const auto add = [&](const CScript& body, size_t calls, size_t item_size,
+                         std::string case_label, std::string saturation) {
+        add_with_stack(body, calls,
+                       {PatternBytes(item_size, item_size == 0 ? "zero" : "one-low")},
+                       std::move(case_label), FormatBytes(item_size),
+                       item_size == 0 ? "empty-item" : "padded-one", std::move(saturation));
+    };
+
+    for (size_t body_size : {2U, 32U, 256U}) {
+        const CScript body{RepeatedDupDropBody(body_size)};
+        const size_t definition_size{(CScript{} << valtype{body.begin(), body.end()}
+                                                << Val64(1).MoveToValtype() << OP_DEFINE)
+                                         .size()};
+        const size_t call_size{(CScript{} << Val64(1).MoveToValtype() << OP_INVOKE).size()};
+        const size_t script_calls{(SCRIPT_BYTES - definition_size - 2) / call_size};
+        const size_t body_calls{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size()};
+        const size_t calls{std::min(script_calls, body_calls)};
+        add(body, calls, 1, "function-dup-drop-body-scaling",
+            calls == body_calls ? "function-body-bytes" : "script-bytes");
+        if (body_size == 32) {
+            add(body, calls, 0, "function-dup-drop-item-scaling", "function-body-bytes");
+            add(body, calls, 10, "function-dup-drop-item-scaling", "function-body-bytes");
+        }
+    }
+
+    CScript push_body;
+    push_body << valtype(10, 0x42) << OP_DROP;
+    add(push_body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / push_body.size(), 0,
+        "function-push-drop-body", "function-body-bytes");
+
+    constexpr size_t hash_body_size{252};
+    for (const opcodetype target : {OP_RIPEMD160, OP_SHA1}) {
+        constexpr size_t item_size{519};
+        constexpr size_t stack_items{3};
+        const CScript hash_sequence{Ops({OP_3DUP, target, OP_DROP, target, OP_DROP, target, OP_DROP})};
+        const CScript body{RepeatedSequenceBody(hash_sequence, hash_body_size)};
+        const uint64_t hash_sequence_cost{
+            SequenceExecutionCost(hash_sequence) + stack_items * item_size * varops::COST_COPYING +
+            stack_items * item_size * varops::COST_HASH};
+        const uint64_t body_cost{body.size() / hash_sequence.size() * hash_sequence_cost};
+        // Definition, cleanup, and final truth checks are outside the calls.
+        const uint64_t fixed_cost{
+            SequenceExecutionCost(FunctionCalls(body, 0)) +
+            (3 + stack_items + 1) * varops::COST_PER_OPCODE + varops::CompareZeroCost(1)};
+        const CScript call{CScript{} << Val64(1).MoveToValtype() << OP_INVOKE};
+        const uint64_t call_cost{
+            SequenceExecutionCost(call) + body.size() * varops::COST_COPYING + body_cost};
+        const size_t calls{static_cast<size_t>((TOTAL_VAROPS_BUDGET - fixed_cost) / call_cost)};
+        add_with_stack(body, calls,
+                       std::vector<valtype>(stack_items, PatternBytes(item_size, "late-nonzero")),
+                       "function-slow-" + OpcodeName(target), "3x519B", "late-nonzero",
+                       "varops-budget");
+    }
+
+    const CScript div_body{RepeatedSequenceBody(Ops({OP_2DUP, OP_DIV, OP_DROP}), 255)};
+    add_with_stack(div_body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / div_body.size(),
+                   {PatternBytes(17, "dense"), DivisorTopClear(9)},
+                   "function-slow-OP_DIV", "17Bx9B", "normalization-top-clear", "function-body-bytes");
+
+    // Cheap sustaining sequences found by the per-opcode calibration probes.
+    // Preserve the initial values without unnecessary per-iteration copies.
+    const auto add_probe = [&](std::string label, const CScript& sequence,
+                               std::vector<valtype> stack, std::string shape) {
+        const CScript body{RepeatedSequenceBody(sequence, (256 / sequence.size()) * sequence.size())};
+        add_with_stack(body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size(),
+                       std::move(stack), "function-probe-" + label, std::move(shape),
+                       "calibration-worst-pattern", "function-body-bytes");
+    };
+    for (size_t size : {1U, 17U}) {
+        add_probe("div-identity", Ops({OP_1, OP_DIV}), {PatternBytes(size, "dense")}, FormatBytes(size));
+    }
+    add_probe("mul-identity", Ops({OP_1, OP_MUL}), {PatternBytes(9, "dense")}, "9B");
+    add_probe("mod-half-divisor", Ops({OP_2DUP, OP_MOD, OP_DROP}),
+              {PatternBytes(7, "dense"), DivisorTopClear(3)}, "7Bx3B");
+    for (const auto target : {OP_SHA256, OP_SHA1, OP_RIPEMD160, OP_HASH160, OP_HASH256}) {
+        const size_t digest_size{target == OP_SHA256 || target == OP_HASH256 ? 32U : 20U};
+        add_probe("chain-" + OpcodeName(target), Ops({target}),
+                  {PatternBytes(digest_size, "dense")}, FormatBytes(digest_size));
+        add_probe("tiny-" + OpcodeName(target), Ops({OP_DUP, target, OP_DROP}),
+                  {valtype{1}}, "1B");
+    }
+    for (const auto target : {OP_NUMEQUALVERIFY, OP_EQUALVERIFY}) {
+        add_probe(OpcodeName(target), Ops({OP_2DUP, target}),
+                  {PatternBytes(17, "dense"), PatternBytes(17, "dense")}, "17Bx17B");
+    }
+    for (const auto target : {OP_BOOLAND, OP_BOOLOR}) {
+        add_probe(OpcodeName(target), Ops({OP_2DUP, target, OP_DROP}),
+                  {PaddedNumber(1, 17), PaddedNumber(1, 17)}, "17Bx17B");
+    }
+    add_probe("within", Ops({OP_3DUP, OP_WITHIN, OP_DROP}),
+              std::vector<valtype>(3, PatternBytes(55, "dense")), "55Bx55Bx55B");
+    for (const size_t body_size : {0U, 1U}) {
+        CScript body;
+        body.insert(body.end(), body_size, OP_NOP);
+        add_with_stack(body, 65'536, {}, "function-probe-call-overhead",
+                       "no-operands", "empty-or-nop", "invocation-overhead");
+    }
+    for (const size_t literal_size : {4096U, 65536U}) {
+        CScript body;
+        body << valtype(literal_size, 0x42) << OP_DROP;
+        add_with_stack(body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size(), {},
+                       "function-probe-large-literal", FormatBytes(literal_size),
+                       "repeated-push-copy", "function-body-bytes");
+    }
+
+    constexpr size_t multi_count{16'383};
+    constexpr size_t multi_calls{960};
+    const CScript multi_body{MultiCycle(OP_DUP, multi_count)};
+    for (size_t item_size : {0U, 1U, 10U}) {
+        std::vector<valtype> stack(
+            multi_count, PatternBytes(item_size, item_size == 0 ? "zero" : "one-low"));
+        CScript sequence{FunctionCalls(multi_body, multi_calls)};
+        CaseOptions options{FixedCase(SCRIPT_ERR_OK, 1, multi_count, "varops-near-limit")};
+        options.sequence_label =
+            strprintf("DEFINE_MULTI_%u+%u_CALLS", multi_count, multi_calls);
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, "function-with-multi-dup-drop",
+                strprintf("%ux%s/%u-calls", multi_count, FormatBytes(item_size), multi_calls),
+                item_size == 0 ? "empty-items" : "padded-one", std::move(sequence),
+                FixedStack(std::move(stack)), std::move(options));
+    }
+}
+
 static void AddControlAndFloorCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
     const auto forced_push = [](opcodetype push_opcode, size_t size) {
@@ -1628,6 +1801,7 @@ static const std::vector<OpcodeEntry>& OpcodeRegistry()
 
         add(AddControlAndFloorCases, {OP_0, OP_PUSHDATA1, OP_PUSHDATA2, OP_PUSHDATA4, OP_IF, OP_VERIFY, OP_NOP, OP_CODESEPARATOR});
         add(AddMultiCases, {OP_MULTI});
+        add(AddFunctionCases, {OP_DEFINE});
         add(AddStackOpcodeCases, {OP_TOALTSTACK, OP_FROMALTSTACK, OP_2DROP, OP_2DUP, OP_3DUP, OP_2OVER, OP_2ROT, OP_2SWAP,
                                   OP_IFDUP, OP_DEPTH, OP_DROP, OP_DUP, OP_NIP, OP_OVER, OP_PICK, OP_ROLL, OP_ROT, OP_SWAP, OP_TUCK});
         add(unary_common, {OP_1ADD, OP_1SUB, OP_NOT, OP_0NOTEQUAL});

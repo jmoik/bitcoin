@@ -24,6 +24,8 @@ static constexpr uint64_t COST_PER_OPCODE = 1'250;
 constexpr uint64_t ExecutionCost(opcodetype opcode)
 {
     switch (opcode) {
+    case OP_INVOKE:
+        return 4'000;
     case OP_MUL:
     case OP_DIV:
     case OP_MOD:

@@ -118,6 +118,11 @@ static uint64_t EncodedExecutionCost(const CScript& script)
     return count;
 }
 
+static uint64_t InvokedBodyCost(const CScript& body)
+{
+    return body.size() * varops::COST_COPYING + EncodedExecutionCost(body);
+}
+
 static void CheckEval(const CScript& script, const Stack& initial_stack, const Stack& expected_stack,
                       uint64_t additional_cost, std::optional<uint64_t> direct_executions = std::nullopt)
 {
@@ -223,7 +228,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     });
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 192, 193, 194, 195, 196, 197, 198, 199,
+        192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -245,22 +250,76 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     check_all_opcodes(SigVersion::TAPSCRIPT_V2, tapscript_v2_op_success);
 }
 
-BOOST_AUTO_TEST_CASE(op_multi_is_tapscript_v2_only_redefinition)
+BOOST_AUTO_TEST_CASE(meta_opcodes_are_tapscript_v2_only_redefinitions)
 {
-    CScript script{OneOp(OP_MULTI)};
+    for (const opcodetype opcode : {OP_DEFINE, OP_INVOKE, OP_MULTI}) {
+        CScript script{OneOp(opcode)};
 
-    BOOST_CHECK(IsOpSuccess(OP_MULTI, SigVersion::TAPSCRIPT));
-    BOOST_CHECK(!IsOpSuccess(OP_MULTI, SigVersion::TAPSCRIPT_V2));
+        BOOST_CHECK(IsOpSuccess(opcode, SigVersion::TAPSCRIPT));
+        BOOST_CHECK(!IsOpSuccess(opcode, SigVersion::TAPSCRIPT_V2));
 
-    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
-    const auto v2_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
-    BOOST_CHECK(!v2_result.has_value());
+        ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+        const auto v2_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+        BOOST_CHECK(!v2_result.has_value());
 
-    error = SCRIPT_ERR_UNKNOWN_ERROR;
-    const auto v1_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT, &error)};
-    BOOST_REQUIRE(v1_result.has_value());
-    BOOST_CHECK(*v1_result);
-    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+        error = SCRIPT_ERR_UNKNOWN_ERROR;
+        const auto v1_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT, &error)};
+        BOOST_REQUIRE(v1_result.has_value());
+        BOOST_CHECK(*v1_result);
+        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(function_invocation_executes_field_fragment)
+{
+    CScript body;
+    body << OP_MUL << Num(13) << OP_MOD;
+    const valtype body_bytes{body.begin(), body.end()};
+
+    CScript script;
+    script << body_bytes << Num(1) << OP_DEFINE << Num(7) << Num(11) << Num(1) << OP_INVOKE;
+
+    const uint64_t cost{varops::MulCost(1, 1) + varops::ModCost(1, 1) + InvokedBodyCost(body)};
+    CheckEval(script, {}, {Num(12)}, cost);
+}
+
+BOOST_AUTO_TEST_CASE(literal_push_copying_budget)
+{
+    for (const size_t size : {0U, 1U, 520U, 65'536U, 4'000'000U}) {
+        const valtype value(size, 0x42);
+        const CScript body{CScript{} << value};
+        const uint64_t cost{varops::COST_PER_OPCODE + 3 * size};
+        const auto direct{EvalTapscriptV2(body, {}, cost)};
+        BOOST_CHECK(direct.ok);
+        BOOST_CHECK_EQUAL(direct.remaining_budget, 0);
+        BOOST_CHECK(direct.stack == Stack{value});
+        BOOST_CHECK_EQUAL(EvalTapscriptV2(body, {}, cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
+
+        if (size <= 65'536) {
+            const CScript script{CScript{} << valtype{body.begin(), body.end()} << OP_1 << OP_DEFINE << OP_1 << OP_INVOKE};
+            // The definition's literal and the executed body's literal both copy bytes.
+            const uint64_t function_cost{5 * varops::COST_PER_OPCODE + varops::ExecutionCost(OP_INVOKE) +
+                                         3 * (2 * body.size() + size)};
+            const auto function{EvalTapscriptV2(script, {}, function_cost)};
+            BOOST_CHECK(function.ok);
+            BOOST_CHECK_EQUAL(function.remaining_budget, 0);
+            BOOST_CHECK(function.stack == direct.stack);
+            BOOST_CHECK_EQUAL(EvalTapscriptV2(script, {}, function_cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(function_invocation_shares_altstack)
+{
+    const CScript body{OneOp(OP_FROMALTSTACK)};
+    const valtype body_bytes{body.begin(), body.end()};
+
+    CScript script;
+    script << Num(7) << OP_TOALTSTACK
+           << body_bytes << Num(1) << OP_DEFINE
+           << Num(1) << OP_INVOKE;
+
+    CheckEval(script, {}, {Num(7)}, InvokedBodyCost(body));
 }
 
 BOOST_AUTO_TEST_CASE(multi_applies_supported_targets)
@@ -349,6 +408,198 @@ BOOST_AUTO_TEST_CASE(multi_count_and_execution_rules)
     CScript unexecuted;
     unexecuted << OP_0 << OP_IF << OP_MULTI << OP_ENDIF << OP_1;
     CheckEval(unexecuted, {}, {Num(1)}, 0, 4);
+
+    const CScript body{multi(OP_ADD)};
+    CScript function;
+    function << valtype{body.begin(), body.end()} << Num(1) << OP_DEFINE
+             << Num(2) << Num(3) << Num(2) << Num(1) << OP_INVOKE;
+    CheckEval(function, {}, {Num(5)}, body.size() * varops::COST_COPYING +
+              varops::COST_PER_OPCODE + varops::LengthConversionCost(Num(2).size()) + varops::AddCost(1, 1));
+}
+
+BOOST_AUTO_TEST_CASE(function_ids_are_canonical_and_immutable)
+{
+    const CScript body{OneOp(OP_1)};
+    const valtype body_bytes{body.begin(), body.end()};
+
+    for (const valtype& id : {valtype{}, valtype{0xff}}) {
+        CScript script;
+        script << body_bytes << id << OP_DEFINE << id << OP_INVOKE;
+        CheckEval(script, {}, {Num(1)}, InvokedBodyCost(body));
+    }
+
+    for (const valtype& invalid_id : {valtype{0x00}, valtype{0x01, 0x00}}) {
+        CheckError(OneOp(OP_DEFINE), {body_bytes, invalid_id}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+        CheckError(OneOp(OP_INVOKE), {invalid_id}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    }
+
+    CScript duplicate;
+    duplicate << body_bytes << Num(1) << OP_DEFINE << body_bytes << Num(1) << OP_DEFINE;
+    CheckError(duplicate, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+    CheckError(OneOp(OP_INVOKE), {Num(1)}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+}
+
+BOOST_AUTO_TEST_CASE(function_bodies_are_validated_when_invoked)
+{
+    const valtype malformed_body{static_cast<unsigned char>(OP_PUSHDATA1)};
+    CScript define_only;
+    define_only << malformed_body << Num(1) << OP_DEFINE << OP_1;
+    CheckEval(define_only, {}, {Num(1)}, 0);
+
+    CScript invoke_malformed;
+    invoke_malformed << malformed_body << Num(1) << OP_DEFINE << Num(1) << OP_INVOKE;
+    CheckError(invoke_malformed, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    const CScript malformed_multi{OneOp(OP_MULTI)};
+    CScript invoke_malformed_multi;
+    invoke_malformed_multi << valtype{malformed_multi.begin(), malformed_multi.end()} << Num(1) << OP_DEFINE
+                           << Num(1) << OP_INVOKE;
+    CheckError(invoke_malformed_multi, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript conditional_body;
+    conditional_body << OP_IF << OP_2 << OP_ELSE << OP_3 << OP_ENDIF;
+    CScript conditional;
+    conditional << valtype{conditional_body.begin(), conditional_body.end()} << Num(1) << OP_DEFINE
+                << OP_1 << Num(1) << OP_INVOKE;
+    CheckEval(conditional, {}, {Num(2)},
+              InvokedBodyCost(conditional_body) - varops::ExecutionCost(OP_3));
+
+    CScript skipped_codeseparator_body;
+    skipped_codeseparator_body << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF << OP_1;
+    CScript skipped_codeseparator;
+    skipped_codeseparator << valtype{skipped_codeseparator_body.begin(), skipped_codeseparator_body.end()}
+                          << Num(1) << OP_DEFINE << Num(1) << OP_INVOKE;
+    CheckEval(skipped_codeseparator, {}, {Num(1)},
+              InvokedBodyCost(skipped_codeseparator_body) - varops::ExecutionCost(OP_CODESEPARATOR));
+
+    const CScript codeseparator_body{OneOp(OP_CODESEPARATOR)};
+    CScript codeseparator;
+    codeseparator << valtype{codeseparator_body.begin(), codeseparator_body.end()} << Num(1) << OP_DEFINE
+                  << Num(1) << OP_INVOKE;
+    CheckError(codeseparator, {}, 0, SCRIPT_ERR_OP_CODESEPARATOR);
+}
+
+BOOST_AUTO_TEST_CASE(function_invocation_rejects_recursion)
+{
+    const CScript direct_body{CScript{} << Num(1) << OP_INVOKE};
+    CScript direct;
+    direct << valtype{direct_body.begin(), direct_body.end()} << Num(1) << OP_DEFINE
+           << Num(1) << OP_INVOKE;
+    CheckError(direct, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+    const CScript first_body{CScript{} << Num(2) << OP_INVOKE};
+    const CScript second_body{CScript{} << Num(1) << OP_INVOKE};
+    CScript indirect;
+    indirect << valtype{first_body.begin(), first_body.end()} << Num(1) << OP_DEFINE
+             << valtype{second_body.begin(), second_body.end()} << Num(2) << OP_DEFINE
+             << Num(1) << OP_INVOKE;
+    CheckError(indirect, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+    const CScript inner_body{OneOp(OP_1)};
+    CScript outer_body;
+    outer_body << valtype{inner_body.begin(), inner_body.end()} << Num(2) << OP_DEFINE
+               << Num(2) << OP_INVOKE;
+    CScript nested;
+    nested << valtype{outer_body.begin(), outer_body.end()} << Num(1) << OP_DEFINE
+           << Num(1) << OP_INVOKE;
+    CheckEval(nested, {}, {Num(1)}, InvokedBodyCost(outer_body) + InvokedBodyCost(inner_body));
+}
+
+BOOST_AUTO_TEST_CASE(function_signature_uses_callers_codeseparator)
+{
+    const CScript body{OneOp(OP_CHECKSIG)};
+    CScript script;
+    script << OP_CODESEPARATOR << valtype{body.begin(), body.end()} << Num(1) << OP_DEFINE
+           << Num(1) << OP_INVOKE;
+
+    RecordingChecker checker;
+    const Stack stack{valtype(64, 0x01), valtype(32, 0x02)};
+    const uint64_t budget{EncodedExecutionCost(script) + InvokedBodyCost(body) +
+                          varops::SigcheckCost(OP_CHECKSIG)};
+    const EvalOutcome outcome{EvalTapscriptV2WithFlagsAndChecker(
+        script, stack, SCRIPT_VERIFY_NONE, checker, budget)};
+    BOOST_REQUIRE(outcome.ok);
+    BOOST_CHECK_EQUAL(checker.schnorr_calls, 1);
+    BOOST_CHECK_EQUAL(checker.last_codeseparator_pos, 0);
+}
+
+BOOST_AUTO_TEST_CASE(invoked_op_success_is_terminal)
+{
+    CScript body;
+    body << OP_1NEGATE;
+    body.push_back(static_cast<unsigned char>(OP_PUSHDATA4));
+
+    CScript script;
+    script << valtype{body.begin(), body.end()} << Num(1) << OP_DEFINE
+           << Num(1) << OP_INVOKE << OP_RETURN;
+    const uint64_t body_read_cost{body.size() * varops::COST_COPYING};
+
+    EvalOutcome outcome{VerifyTapscriptV2WithFlags(
+        script, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, body_read_cost)};
+    BOOST_CHECK(outcome.ok);
+    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_OK);
+
+    outcome = VerifyTapscriptV2WithFlags(
+        script, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS,
+        body_read_cost);
+    BOOST_CHECK(!outcome.ok);
+    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+
+    CScript uninvoked;
+    uninvoked << valtype{body.begin(), body.end()} << Num(1) << OP_DEFINE << OP_1;
+    outcome = VerifyTapscriptV2(uninvoked, {}, FinalSuccessCost(1));
+    BOOST_CHECK(outcome.ok);
+
+    const CScript caller_body{CScript{} << Num(2) << OP_INVOKE};
+    CScript nested;
+    nested << valtype{caller_body.begin(), caller_body.end()} << Num(1) << OP_DEFINE
+           << valtype{body.begin(), body.end()} << Num(2) << OP_DEFINE
+           << Num(1) << OP_INVOKE << OP_RETURN << OP_IF;
+    outcome = VerifyTapscriptV2WithFlags(
+        nested, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS,
+        InvokedBodyCost(caller_body) + body_read_cost);
+    BOOST_CHECK(outcome.ok);
+}
+
+BOOST_AUTO_TEST_CASE(function_execution_and_storage_limits)
+{
+    constexpr size_t half_execution_limit{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / 2};
+    CScript half_limit_body;
+    half_limit_body << valtype(half_execution_limit - 6, 0x42) << OP_DROP;
+    BOOST_REQUIRE_EQUAL(half_limit_body.size(), half_execution_limit);
+
+    CScript exact_execution;
+    exact_execution << valtype{half_limit_body.begin(), half_limit_body.end()} << Num(1) << OP_DEFINE
+                    << Num(1) << OP_INVOKE << Num(1) << OP_INVOKE << OP_1;
+    CheckEval(exact_execution, {}, {Num(1)}, 2 * InvokedBodyCost(half_limit_body));
+
+    CScript excessive_execution;
+    excessive_execution << valtype{half_limit_body.begin(), half_limit_body.end()} << Num(1) << OP_DEFINE
+                        << Num(1) << OP_INVOKE << Num(1) << OP_INVOKE << Num(1) << OP_INVOKE;
+    CheckError(excessive_execution, {}, 0, SCRIPT_ERR_SCRIPT_SIZE);
+
+    const valtype maximum_body(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x00);
+    const valtype maximum_live_value(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
+    const Stack byte_limit_stack{maximum_live_value, maximum_body, valtype{}};
+    CheckEval(OneOp(OP_DEFINE), byte_limit_stack, {maximum_live_value}, 0);
+
+    CScript exceed_byte_limit;
+    exceed_byte_limit << OP_DEFINE << OP_DUP;
+    CheckError(exceed_byte_limit, byte_limit_stack, 0, SCRIPT_ERR_TOTAL_STACK_SIZE);
+
+    Stack entry_limit_stack(MAX_TAPSCRIPT_V2_STACK_SIZE - 2, valtype{});
+    entry_limit_stack.push_back(valtype{}); // Body.
+    entry_limit_stack.push_back(valtype{}); // Function ID zero.
+    CScript exact_entry_limit;
+    exact_entry_limit << OP_DEFINE << OP_0;
+    const EvalOutcome exact_entries{EvalTapscriptV2(
+        exact_entry_limit, entry_limit_stack, EncodedExecutionCost(exact_entry_limit))};
+    BOOST_CHECK(exact_entries.ok);
+
+    CScript exceed_entry_limit;
+    exceed_entry_limit << OP_DEFINE << OP_0 << OP_0;
+    CheckError(exceed_entry_limit, entry_limit_stack, 0, SCRIPT_ERR_STACK_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(base_evalscript_rejects_tapscript_v2)

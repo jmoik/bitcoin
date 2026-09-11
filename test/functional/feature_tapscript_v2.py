@@ -62,6 +62,7 @@ from test_framework.script import (
     OP_0,
     OP_1,
     OP_1NEGATE,
+    OP_ADD,
     OP_BYTEREV,
     OP_CAT,
     OP_CHECKLOCKTIMEVERIFY,
@@ -69,13 +70,16 @@ from test_framework.script import (
     OP_CHECKSIG,
     OP_CHECKSIGADD,
     OP_CHECKSIGFROMSTACK,
+    OP_DEFINE,
     OP_DEPTH,
     OP_DROP,
+    OP_DUP,
     OP_ENDIF,
     OP_EQUAL,
     OP_EQUALVERIFY,
     OP_FROMALTSTACK,
     OP_IF,
+    OP_INVOKE,
     OP_LSHIFT,
     OP_MUL,
     OP_MULTI,
@@ -514,6 +518,30 @@ def byterev_spenders():
     return spenders
 
 
+def function_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    body = CScript([OP_DUP, OP_ADD])
+    script = CScript([bytes(body), 1, OP_DEFINE, 1, OP_INVOKE, 6, OP_EQUAL])
+    recursive_body = CScript([1, OP_INVOKE])
+    recursive_script = CScript([bytes(recursive_body), 1, OP_DEFINE, 1, OP_INVOKE])
+    tap = taproot_construct(pub, [
+        ("function", script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("recursion", recursive_script, LEAF_VERSION_TAPSCRIPT_V2),
+    ])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/function",
+        tap=tap,
+        leaf="function",
+        inputs=[b"\x03"],
+        failure={"leaf": "recursion"},
+        **ERR_INVALID_STACK_OPERATION,
+    )
+    return spenders
+
+
 def tweakadd_spenders():
     sec = generate_privkey()
     pub = compute_xonly_pubkey(sec)[0]
@@ -875,6 +903,9 @@ class TapScriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_BYTEREV tests")
         self.test_spenders(self.nodes[0], byterev_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 reusable function tests")
+        self.test_spenders(self.nodes[0], function_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])
