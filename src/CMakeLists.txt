@@ -77,6 +77,7 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   script/biguint.cpp
   script/interpreter.cpp
   script/op_tx.cpp
+  script/reusable_macros.cpp
   script/script.cpp
   script/script_error.cpp
   script/valtype_stack.cpp

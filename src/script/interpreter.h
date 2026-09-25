@@ -430,7 +430,8 @@ uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const u
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
-/** Evaluate a Tapleaf 0xC2 script (BIP 441) on stack. immediate_success reports success through
+/** Evaluate a Tapleaf 0xC2 script (BIP 441) on stack, unrolling its macro references after the
+ *  static decoding and the initial stack checks. immediate_success reports success through
  *  an upgrade path such as OP_SUCCESSx, to which CheckTapleaf0xC2ScriptResult does not apply. */
 bool EvalTapleaf0xC2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr, bool* immediate_success = nullptr);
 /** Check Tapleaf 0xC2 cleanstack and truthiness after execution. Consumes the final stack element. */
