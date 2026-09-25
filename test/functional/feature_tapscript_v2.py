@@ -34,6 +34,7 @@ from test_framework.messages import (
     CTxOut,
     MAX_BLOCK_WEIGHT,
     SEQUENCE_FINAL,
+    ser_compact_size,
     ser_string,
     tx_from_hex,
 )
@@ -53,13 +54,17 @@ from test_framework.script import (
     MAX_SCRIPT_ELEMENT_SIZE,
     OP_0,
     OP_1,
+    OP_ADD,
     OP_BYTEREV,
     OP_CAT,
     OP_CHECKSIG,
+    OP_CALLMACRO,
     OP_CHECKSIGFROMSTACK,
     OP_DROP,
+    OP_DUP,
     OP_EQUAL,
     OP_EQUALVERIFY,
+    OP_MACRO,
     OP_MUL,
     OP_PUSHDATA1,
     OP_RETURN,
@@ -157,6 +162,34 @@ def byterev_spenders():
         inputs=[value],
         failure={"inputs": [value[::-1]]},
         **ERR_EVAL_FALSE,
+    )
+    return spenders
+
+
+def macro_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    body = CScript([OP_DUP, OP_ADD])
+    def declaration(body):
+        return bytes([OP_MACRO]) + ser_compact_size(len(body)) + bytes(body)
+
+    reference = bytes([OP_CALLMACRO, 0])
+    script = CScript(declaration(body) + reference + bytes(CScript([6, OP_EQUAL])))
+    # A body cannot reference itself.
+    nested_script = CScript(declaration(CScript(reference)) + reference)
+    tap = taproot_construct(pub, [
+        ("macro", script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("nested", nested_script, LEAF_VERSION_TAPSCRIPT_V2),
+    ])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/macro",
+        tap=tap,
+        leaf="macro",
+        inputs=[b"\x03"],
+        failure={"leaf": "nested"},
+        err_msg="Opcode missing or not understood",
     )
     return spenders
 
@@ -323,6 +356,9 @@ class TapscriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_BYTEREV tests")
         self.test_spenders(self.nodes[0], byterev_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 reusable macro tests")
+        self.test_spenders(self.nodes[0], macro_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])

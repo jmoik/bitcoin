@@ -127,6 +127,7 @@ add_executable(fuzz
   strprintf.cpp
   system.cpp
   tapscript_v2_eval.cpp
+  tapscript_v2_macro_equivalence.cpp
   threadpool.cpp
   timeoffsets.cpp
   torcontrol.cpp

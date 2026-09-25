@@ -16,6 +16,7 @@
 #include <prevector.h>
 #include <pubkey.h>
 #include <script/op_tx.h>
+#include <script/reusable_macros.h>
 #include <script/script.h>
 #include <script/val64.h>
 #include <script/valtype_stack.h>
@@ -32,6 +33,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -1375,13 +1377,17 @@ static std::optional<OpTxScriptContext> GetOpTxScriptContext(const ScriptExecuti
     };
 }
 
-static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& unrolled, const CScript& committed,
+                                script_verify_flags flags, const BaseSignatureChecker& checker,
+                                ScriptExecutionData& execdata, varops::Budget& varops_budget,
+                                ScriptError* serror, bool* immediate_success)
 {
     set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
     const bool require_minimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
     execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
     execdata.m_codeseparator_pos_init = true;
-    execdata.m_tapscript = script;
+    // Transaction introspection sees the committed script, not the unrolled one.
+    execdata.m_tapscript = committed;
     execdata.m_tapscript_init = true;
 
     // Charges, BASE included, accumulate in meter. Each opcode deducts them
@@ -1394,8 +1400,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
 
     ValtypeStack altstack;
     ConditionStack conditions;
-    CScript::const_iterator pc{script.begin()};
-    const CScript::const_iterator pend{script.end()};
+    CScript::const_iterator pc{unrolled.begin()};
+    const CScript::const_iterator pend{unrolled.end()};
+    // The unrolled script is at most MAX_TAPSCRIPT_V2_UNROLLED_SIZE bytes, so
+    // positions fit in 32 bits.
     uint32_t opcode_pos{0};
 
     try {
@@ -2198,21 +2206,28 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
 bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
 {
     if (immediate_success) *immediate_success = false;
-    // OP_SUCCESSx processing overrides everything, including stack limits.
-    for (CScript::const_iterator pc{script.begin()}; pc < script.end();) {
-        opcodetype opcode;
-        if (!script.GetOp(pc, opcode)) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-        if (IsTapscriptV2OpSuccess(opcode)) {
-            if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
-            if (immediate_success) *immediate_success = true;
-            return set_success(serror);
-        }
-    }
+    // Static decoding reaches the first OP_SUCCESSx or decoding failure. OP_SUCCESSx
+    // processing overrides everything, including stack limits.
+    MacroProgram program{script};
+    switch (DecodeTapscriptV2(program)) {
+    case MacroDecodeResult::WELL_FORMED:
+        break;
+    case MacroDecodeResult::OP_SUCCESS:
+        if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+        if (immediate_success) *immediate_success = true;
+        return set_success(serror);
+    case MacroDecodeResult::MALFORMED:
+        return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+    } // no default case, so the compiler can warn about missing cases
     // Initial stack limits (the altstack is empty here)
     if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
     if (stack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
     if (stack.GetMaxElementSize() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
-    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, serror, immediate_success);
+    // Unrolling the macro references is the pre-execution step of reusable macros.
+    CScript unrolled;
+    if (!UnrollTapscriptV2(program, varops_budget, unrolled, serror)) return false;
+    return EvalTapscriptV2Impl(stack, program.bodies.empty() ? script : unrolled, script, flags, checker, execdata,
+                               varops_budget, serror, immediate_success);
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)

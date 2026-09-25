@@ -269,6 +269,10 @@ OP_CHECKSIGFROMSTACK = CScriptOp(0xcc)
 # Extended Primitives draft opcode
 OP_BYTEREV = CScriptOp(0xcf)
 
+# Reusable macros draft opcodes
+OP_MACRO = CScriptOp(0xd0)
+OP_CALLMACRO = CScriptOp(0xd1)
+
 OP_INVALIDOPCODE = CScriptOp(0xff)
 
 OPCODE_NAMES.update({
@@ -388,6 +392,8 @@ OPCODE_NAMES.update({
     OP_TX: 'OP_TX',
     OP_CHECKSIGFROMSTACK: 'OP_CHECKSIGFROMSTACK',
     OP_BYTEREV: 'OP_BYTEREV',
+    OP_MACRO: 'OP_MACRO',
+    OP_CALLMACRO: 'OP_CALLMACRO',
     OP_INVALIDOPCODE: 'OP_INVALIDOPCODE',
 })
 

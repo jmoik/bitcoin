@@ -6,9 +6,11 @@
 // copied unchanged from the bip-0441 directory of the BIPs repository.
 
 #include <addresstype.h>
+#include <crypto/sha256.h>
 #include <hash.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
+#include <script/reusable_macros.h>
 #include <script/script.h>
 #include <script/script_error.h>
 #include <script/signingprovider.h>
@@ -17,6 +19,7 @@
 #include <streams.h>
 #include <test/data/extended_primitives.json.h>
 #include <test/data/op_tx.json.h>
+#include <test/data/reusable_macros.json.h>
 #include <test/data/tapleaf_0xc2.json.h>
 #include <test/data/varops.json.h>
 #include <test/util/json.h>
@@ -202,6 +205,35 @@ CScript ParseScript(const UniValue& tokens)
     return script;
 }
 
+//! Tokens for a script without macro declarations; undecodable bytes stay raw.
+UniValue ScriptJson(const CScript& script)
+{
+    UniValue tokens{UniValue::VARR};
+    CScript::const_iterator pc{script.begin()};
+    while (pc < script.end()) {
+        const CScript::const_iterator start{pc};
+        opcodetype opcode;
+        valtype data;
+        if (!script.GetOp(pc, opcode, data)) {
+            tokens.push_back("0x" + HexRuns(valtype{start, script.end()}));
+            break;
+        }
+        const std::string name{opcode == OP_0 ? "OP_0" : GetOpName(opcode)};
+        if (opcode > OP_0 && opcode <= OP_PUSHDATA4) {
+            tokens.push_back("0x" + HexRuns(valtype{start, pc}));
+        } else if (opcode == OP_1NEGATE) {
+            tokens.push_back("OP_1NEGATE");
+        } else if (opcode >= OP_1 && opcode <= OP_16) {
+            tokens.push_back("OP_" + util::ToString(CScript::DecodeOP_N(opcode)));
+        } else if (name.starts_with("OP_") && name != "OP_UNKNOWN") {
+            tokens.push_back(name);
+        } else {
+            tokens.push_back("0x" + HexStr(valtype{start, pc}));
+        }
+    }
+    return tokens;
+}
+
 template <typename T>
 T Deserialize(const UniValue& hex)
 {
@@ -232,6 +264,9 @@ const std::map<std::string, std::vector<std::string_view>, std::less<>> RESULT_F
     {"scripts", {"final_stack", "varops", "error"}},
     {"transactions", {"budget", "varops", "error"}},
     {"signing", {"script_pubkey", "leaf_hash", "control_block", "sighash"}},
+    {"decoding", {"result", "declarations"}},
+    {"unrolling", {"declarations", "unrolled_length", "substituted_instructions", "references_visited",
+                   "within_limit", "unrolling_charge", "unrolled_sha256", "unrolled"}},
 };
 
 UniValue EvaluatePrimitive(const UniValue& vector)
@@ -434,18 +469,82 @@ UniValue EvaluateSigning(const UniValue& vector)
     return result;
 }
 
+constexpr size_t MAX_LISTED_UNROLLED_SIZE{10'000};
+
+struct Decoding {
+    MacroDecodeResult result;
+    uint64_t declarations{0};
+    MacroTotals totals;
+    CScript unrolled;
+};
+
+Decoding Decode(const CScript& script)
+{
+    MacroProgram program{script};
+    Decoding decoding;
+    decoding.result = DecodeTapscriptV2(program);
+    if (decoding.result != MacroDecodeResult::WELL_FORMED) return decoding;
+    decoding.declarations = program.bodies.size();
+    decoding.totals = program.main_totals;
+    varops::Budget budget{std::numeric_limits<uint64_t>::max()};
+    UnrollTapscriptV2(program, budget, decoding.unrolled, nullptr);
+    if (program.bodies.empty()) decoding.unrolled = script;
+    return decoding;
+}
+
+UniValue EvaluateDecoding(const UniValue& vector)
+{
+    const Decoding decoding{Decode(ParseScript(vector["script"]))};
+    UniValue result{UniValue::VOBJ};
+    switch (decoding.result) {
+    case MacroDecodeResult::WELL_FORMED:
+        result.pushKV("result", "well-formed");
+        result.pushKV("declarations", decoding.declarations);
+        break;
+    case MacroDecodeResult::OP_SUCCESS: result.pushKV("result", "success"); break;
+    case MacroDecodeResult::MALFORMED: result.pushKV("result", "failure"); break;
+    }
+    return result;
+}
+
+UniValue EvaluateUnrolling(const UniValue& vector)
+{
+    const Decoding decoding{Decode(ParseScript(vector["script"]))};
+    if (decoding.result != MacroDecodeResult::WELL_FORMED) throw std::invalid_argument("unrolling needs a well-formed script");
+    const bool within_limit{decoding.totals.length <= MAX_TAPSCRIPT_V2_UNROLLED_SIZE};
+    UniValue result{UniValue::VOBJ};
+    result.pushKV("declarations", decoding.declarations);
+    result.pushKV("unrolled_length", decoding.totals.length);
+    result.pushKV("substituted_instructions", decoding.totals.substituted);
+    result.pushKV("references_visited", decoding.totals.references);
+    result.pushKV("within_limit", within_limit);
+    if (within_limit) {
+        const uint64_t write{decoding.declarations > 0 ? varops::WriteCost(decoding.totals.length) : 0};
+        result.pushKV("unrolling_charge", (decoding.totals.substituted + decoding.totals.references) * varops::BaseCost() + write);
+        uint256 hash;
+        CSHA256{}.Write(decoding.unrolled.data(), decoding.unrolled.size()).Finalize(hash.begin());
+        result.pushKV("unrolled_sha256", HexStr(hash));
+        // Long unrolled scripts are given by their hash alone.
+        if (decoding.unrolled.size() <= MAX_LISTED_UNROLLED_SIZE) result.pushKV("unrolled", ScriptJson(decoding.unrolled));
+    }
+    return result;
+}
+
 UniValue Evaluate(std::string_view group, const UniValue& vector)
 {
     if (group == "primitives") return EvaluatePrimitive(vector);
     if (group == "scripts") return EvaluateScript(vector);
     if (group == "transactions") return EvaluateTransaction(vector);
     if (group == "signing") return EvaluateSigning(vector);
+    if (group == "decoding") return EvaluateDecoding(vector);
+    if (group == "unrolling") return EvaluateUnrolling(vector);
     throw std::invalid_argument("unknown group " + std::string{group});
 }
 
 bool SameResult(std::string_view field, const UniValue& expected, const UniValue& actual)
 {
     if (field == "final_stack") return ParseStack(expected) == ParseStack(actual);
+    if (field == "unrolled") return ParseScript(expected) == ParseScript(actual);
     return expected.write() == actual.write();
 }
 
@@ -518,5 +617,6 @@ BOOST_AUTO_TEST_CASE(varops) { RunVectors("varops", json_tests::varops); }
 BOOST_AUTO_TEST_CASE(tapleaf_0xc2) { RunVectors("tapleaf_0xc2", json_tests::tapleaf_0xc2); }
 BOOST_AUTO_TEST_CASE(op_tx) { RunVectors("op_tx", json_tests::op_tx); }
 BOOST_AUTO_TEST_CASE(extended_primitives) { RunVectors("extended_primitives", json_tests::extended_primitives); }
+BOOST_AUTO_TEST_CASE(reusable_macros) { RunVectors("reusable_macros", json_tests::reusable_macros); }
 
 BOOST_AUTO_TEST_SUITE_END()
