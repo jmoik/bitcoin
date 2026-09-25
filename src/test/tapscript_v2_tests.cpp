@@ -62,6 +62,30 @@ static valtype LargerThanU64()
     return Bytes({0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01});
 }
 
+static void AppendCompactSize(CScript& script, uint64_t value)
+{
+    if (value < 253) {
+        script.push_back(value);
+        return;
+    }
+    const unsigned int width{value <= 0xffff ? 2U : value <= 0xffffffff ? 4U : 8U};
+    script.push_back(width == 2 ? 0xfd : width == 4 ? 0xfe : 0xff);
+    for (unsigned int i{0}; i < width; ++i) script.push_back(value >> (8 * i));
+}
+
+static void AppendDefinition(CScript& script, const CScript& body)
+{
+    script << OP_MACRO;
+    AppendCompactSize(script, body.size());
+    script.insert(script.end(), body.begin(), body.end());
+}
+
+static void AppendReference(CScript& script, uint64_t index)
+{
+    script << OP_CALLMACRO;
+    AppendCompactSize(script, index);
+}
+
 static uint64_t FinalSuccessCost(size_t size)
 {
     return varops::CompareZeroCost(size);
@@ -107,14 +131,39 @@ static uint64_t EncodedExecutionCost(const CScript& script)
 {
     uint64_t count{0};
     CScript::const_iterator pc{script.begin()};
+    while (pc < script.end() && *pc == OP_MACRO) {
+        ++pc;
+        uint64_t body_length{0};
+        if (pc == script.end()) return 0;
+        const uint8_t prefix{*pc++};
+        const unsigned int width{prefix < 253 ? 0U : prefix == 253 ? 2U : prefix == 254 ? 4U : 8U};
+        if (script.end() - pc < static_cast<CScript::difference_type>(width)) return 0;
+        if (width == 0) body_length = prefix;
+        else for (unsigned int i{0}; i < width; ++i) body_length |= uint64_t{*pc++} << (8 * i);
+        if (body_length > static_cast<uint64_t>(script.end() - pc)) return 0;
+        count += varops::FRAGMENT_DEFINE_COST + body_length * varops::FRAGMENT_BODY_PER_BYTE;
+        pc += static_cast<CScript::difference_type>(body_length);
+    }
     while (pc < script.end()) {
         opcodetype opcode;
         valtype data;
         if (!script.GetOp(pc, opcode, data)) return 0;
         count += varops::ExecutionCost(opcode);
         count += data.size() * varops::COST_COPYING;
+        if (opcode == OP_CALLMACRO) {
+            if (pc == script.end()) return 0;
+            const uint8_t prefix{*pc++};
+            const unsigned int width{prefix < 253 ? 0U : prefix == 253 ? 2U : prefix == 254 ? 4U : 8U};
+            if (script.end() - pc < static_cast<CScript::difference_type>(width)) return 0;
+            pc += width;
+        }
     }
     return count;
+}
+
+static uint64_t InvokedBodyCost(const CScript& body)
+{
+    return body.size() * varops::FRAGMENT_BODY_PER_BYTE + EncodedExecutionCost(body);
 }
 
 static void CheckEval(const CScript& script, const Stack& initial_stack, const Stack& expected_stack,
@@ -222,7 +271,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     });
     constexpr auto tapscript_v2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
-        187, 188, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        191, 192, 193, 194, 195, 196, 197, 198, 199,
         200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
@@ -242,6 +291,610 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
 
     check_all_opcodes(SigVersion::TAPSCRIPT, tapscript_op_success);
     check_all_opcodes(SigVersion::TAPSCRIPT_V2, tapscript_v2_op_success);
+}
+
+BOOST_AUTO_TEST_CASE(meta_opcodes_are_tapscript_v2_only_redefinitions)
+{
+    for (const opcodetype opcode : {OP_MACRO, OP_CALLMACRO}) {
+        CScript script{OneOp(opcode)};
+
+        BOOST_CHECK(IsOpSuccess(opcode, SigVersion::TAPSCRIPT));
+        BOOST_CHECK(!IsOpSuccess(opcode, SigVersion::TAPSCRIPT_V2));
+
+        ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+        const auto v2_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+        BOOST_REQUIRE(v2_result.has_value());
+        BOOST_CHECK(!*v2_result);
+        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
+
+        error = SCRIPT_ERR_UNKNOWN_ERROR;
+        const auto v1_result{CheckTapscriptOpSuccess(script, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT, &error)};
+        BOOST_REQUIRE(v1_result.has_value());
+        BOOST_CHECK(*v1_result);
+        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fragment_reference_executes_field_fragment)
+{
+    CScript body;
+    body << OP_MUL << Num(13) << OP_MOD;
+    CScript script;
+    AppendDefinition(script, body);
+    script << Num(7) << Num(11);
+    AppendReference(script, 0);
+
+    const uint64_t cost{varops::MulCost(1, 1) + varops::ModCost(1, 1) + InvokedBodyCost(body)};
+    CheckEval(script, {}, {Num(12)}, cost);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_unrolls_to_inline_sequence)
+{
+    const CScript inline_script{CScript{} << OP_1 << OP_2 << OP_ADD << OP_3 << OP_4 << OP_ADD
+                                          << OP_ADD << OP_10 << OP_EQUAL};
+
+    const CScript body{OneOp(OP_ADD)};
+    CScript fragment_script;
+    AppendDefinition(fragment_script, body);
+    fragment_script << OP_1 << OP_2;
+    AppendReference(fragment_script, 0);
+    fragment_script << OP_3 << OP_4;
+    AppendReference(fragment_script, 0);
+    fragment_script << OP_ADD << OP_10 << OP_EQUAL;
+
+    constexpr uint64_t budget{1'000'000};
+    const EvalOutcome inlined{EvalTapscriptV2(inline_script, {}, budget)};
+    const EvalOutcome fragmented{EvalTapscriptV2(fragment_script, {}, budget)};
+    BOOST_REQUIRE(inlined.ok);
+    BOOST_REQUIRE(fragmented.ok);
+    BOOST_CHECK(inlined.stack == Stack{Num(1)});
+    BOOST_CHECK(fragmented.stack == inlined.stack);
+
+    const uint64_t overhead{varops::FRAGMENT_DEFINE_COST +
+                            2 * varops::FRAGMENT_REF_COST +
+                            3 * body.size() * varops::FRAGMENT_BODY_PER_BYTE};
+    BOOST_CHECK_EQUAL(inlined.remaining_budget - fragmented.remaining_budget, overhead);
+}
+
+BOOST_AUTO_TEST_CASE(nested_fragment_unrolls_to_inline_sequence)
+{
+    const CScript inline_script{CScript{} << OP_3 << OP_DUP << OP_ADD << OP_6 << OP_EQUAL};
+    const CScript inner{OneOp(OP_ADD)};
+    CScript outer;
+    outer << OP_DUP;
+    AppendReference(outer, 0);
+
+    CScript nested_script;
+    AppendDefinition(nested_script, inner);
+    AppendDefinition(nested_script, outer);
+    nested_script << OP_3;
+    AppendReference(nested_script, 1);
+    nested_script << OP_6 << OP_EQUAL;
+
+    constexpr uint64_t budget{1'000'000};
+    const EvalOutcome inlined{EvalTapscriptV2(inline_script, {}, budget)};
+    const EvalOutcome nested{EvalTapscriptV2(nested_script, {}, budget)};
+    BOOST_REQUIRE(inlined.ok);
+    BOOST_REQUIRE(nested.ok);
+    BOOST_CHECK(inlined.stack == Stack{Num(1)});
+    BOOST_CHECK(nested.stack == inlined.stack);
+
+    const uint64_t overhead{2 * varops::FRAGMENT_DEFINE_COST +
+                            2 * varops::FRAGMENT_REF_COST +
+                            2 * (inner.size() + outer.size()) * varops::FRAGMENT_BODY_PER_BYTE};
+    BOOST_CHECK_EQUAL(inlined.remaining_budget - nested.remaining_budget, overhead);
+}
+
+BOOST_AUTO_TEST_CASE(literal_push_copying_budget)
+{
+    for (const size_t size : {0U, 1U, 520U, 65'536U, 4'000'000U}) {
+        const valtype value(size, 0x42);
+        const CScript body{CScript{} << value};
+        const uint64_t cost{varops::COST_PER_OPCODE + 3 * size};
+        const auto direct{EvalTapscriptV2(body, {}, cost)};
+        BOOST_CHECK(direct.ok);
+        BOOST_CHECK_EQUAL(direct.remaining_budget, 0);
+        BOOST_CHECK(direct.stack == Stack{value});
+        BOOST_CHECK_EQUAL(EvalTapscriptV2(body, {}, cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
+
+        if (size <= 65'536) {
+            CScript script;
+            AppendDefinition(script, body);
+            AppendReference(script, 0);
+            const uint64_t function_cost{varops::FRAGMENT_DEFINE_COST + body.size() * varops::FRAGMENT_BODY_PER_BYTE +
+                                         varops::ExecutionCost(OP_CALLMACRO) + InvokedBodyCost(body)};
+            const auto function{EvalTapscriptV2(script, {}, function_cost)};
+            BOOST_CHECK(function.ok);
+            BOOST_CHECK_EQUAL(function.remaining_budget, 0);
+            BOOST_CHECK(function.stack == direct.stack);
+            BOOST_CHECK_EQUAL(EvalTapscriptV2(script, {}, function_cost - 1).error, SCRIPT_ERR_VAROP_COUNT);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fragment_reference_shares_altstack)
+{
+    const CScript body{OneOp(OP_FROMALTSTACK)};
+    CScript script;
+    AppendDefinition(script, body);
+    script << Num(7) << OP_TOALTSTACK;
+    AppendReference(script, 0);
+
+    CheckEval(script, {}, {Num(7)}, InvokedBodyCost(body));
+}
+
+BOOST_AUTO_TEST_CASE(fragment_indices_and_compactsize_are_canonical)
+{
+    const CScript body{OneOp(OP_1)};
+    CScript script;
+    for (unsigned int i{0}; i < 253; ++i) AppendDefinition(script, CScript{});
+    AppendDefinition(script, body);
+    AppendReference(script, 253);
+    CheckEval(script, {}, {Num(1)}, InvokedBodyCost(body));
+
+    CScript immediate_is_not_opcode;
+    for (unsigned int i{0}; i <= 0x50; ++i) AppendDefinition(immediate_is_not_opcode, CScript{});
+    AppendReference(immediate_is_not_opcode, 0x50);
+    immediate_is_not_opcode << OP_RETURN;
+    CheckError(immediate_is_not_opcode, {}, 0, SCRIPT_ERR_OP_RETURN);
+
+    CScript noncanonical_index;
+    AppendDefinition(noncanonical_index, body);
+    noncanonical_index << OP_CALLMACRO;
+    for (unsigned char byte : {0xfd, 0x00, 0x00}) noncanonical_index.push_back(byte);
+    CheckError(noncanonical_index, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript out_of_range;
+    AppendDefinition(out_of_range, body);
+    AppendReference(out_of_range, 1);
+    CheckError(out_of_range, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(OneOp(OP_CALLMACRO), {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript noncanonical_length;
+    noncanonical_length << OP_MACRO;
+    for (unsigned char byte : {0xfd, 0x00, 0x00}) noncanonical_length.push_back(byte);
+    CheckError(noncanonical_length, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript truncated_body;
+    truncated_body << OP_MACRO;
+    truncated_body.push_back(0x02);
+    truncated_body.push_back(OP_1);
+    CheckError(truncated_body, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_bodies_are_validated_when_referenced)
+{
+    const CScript malformed_body{OneOp(OP_PUSHDATA1)};
+    CScript define_only;
+    AppendDefinition(define_only, malformed_body);
+    define_only << OP_1;
+    CheckEval(define_only, {}, {Num(1)}, 0);
+
+    CScript invoke_malformed;
+    AppendDefinition(invoke_malformed, malformed_body);
+    AppendReference(invoke_malformed, 0);
+    CheckError(invoke_malformed, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript conditional_body;
+    conditional_body << OP_IF << OP_2 << OP_ELSE << OP_3 << OP_ENDIF;
+    CScript conditional;
+    AppendDefinition(conditional, conditional_body);
+    conditional << OP_1;
+    AppendReference(conditional, 0);
+    CheckEval(conditional, {}, {Num(2)},
+              InvokedBodyCost(conditional_body) - varops::ExecutionCost(OP_3));
+
+    const CScript codeseparator_body{OneOp(OP_CODESEPARATOR)};
+    CScript codeseparator;
+    AppendDefinition(codeseparator, codeseparator_body);
+    AppendReference(codeseparator, 0);
+    CheckEval(codeseparator, {}, {}, InvokedBodyCost(codeseparator_body));
+
+    CScript nested_reference;
+    AppendDefinition(nested_reference, OneOp(OP_CALLMACRO));
+    AppendReference(nested_reference, 0);
+    CheckError(nested_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript self_body;
+    AppendReference(self_body, 0);
+    CScript self_reference;
+    AppendDefinition(self_reference, self_body);
+    AppendReference(self_reference, 0);
+    CheckError(self_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript forward_body;
+    AppendReference(forward_body, 1);
+    CScript forward_reference;
+    AppendDefinition(forward_reference, forward_body);
+    AppendDefinition(forward_reference, OneOp(OP_1));
+    AppendReference(forward_reference, 0);
+    CheckError(forward_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript unreferenced_forward;
+    AppendDefinition(unreferenced_forward, forward_body);
+    AppendDefinition(unreferenced_forward, OneOp(OP_1));
+    unreferenced_forward << OP_1;
+    CheckEval(unreferenced_forward, {}, {Num(1)}, 0);
+
+    CScript unbalanced;
+    AppendDefinition(unbalanced, OneOp(OP_IF));
+    unbalanced << OP_0 << OP_IF;
+    AppendReference(unbalanced, 0);
+    unbalanced << OP_ENDIF << OP_1;
+    CheckError(unbalanced, {}, 0, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_prescan_reuses_body_summary_and_preserves_order)
+{
+    // Re-decoding this body for every reference would process over 2 GB of
+    // pushed data before reaching the OP_SUCCESS in the main script.
+    CScript body;
+    body << valtype(256'000, 0x42) << OP_DROP;
+    CScript repeated;
+    AppendDefinition(repeated, body);
+    repeated << OP_0 << OP_IF;
+    for (int i{0}; i < 8'192; ++i) AppendReference(repeated, 0);
+    repeated << OP_ENDIF << OP_RESERVED;
+
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    const auto success{CheckTapscriptOpSuccess(repeated, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_REQUIRE(success.has_value());
+    BOOST_CHECK(*success);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+
+    CScript malformed_body;
+    malformed_body << OP_PUSHDATA4;
+    CScript failure_first;
+    AppendDefinition(failure_first, malformed_body);
+    AppendReference(failure_first, 0);
+    failure_first << OP_RESERVED;
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    BOOST_CHECK(!CheckTapscriptOpSuccess(failure_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error).has_value());
+    BOOST_CHECK_EQUAL(EvalTapscriptV2(failure_first, {}, 1'000'000).error, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript success_first;
+    AppendDefinition(success_first, malformed_body);
+    success_first << OP_RESERVED;
+    AppendReference(success_first, 0);
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    const auto earlier_success{CheckTapscriptOpSuccess(success_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_REQUIRE(earlier_success.has_value());
+    BOOST_CHECK(*earlier_success);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+
+    CScript success_before_malformed_body;
+    success_before_malformed_body << OP_RESERVED << OP_PUSHDATA4;
+    CScript success_inside_body;
+    AppendDefinition(success_inside_body, success_before_malformed_body);
+    AppendReference(success_inside_body, 0);
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    const auto body_success{CheckTapscriptOpSuccess(success_inside_body, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_REQUIRE(body_success.has_value());
+    BOOST_CHECK(*body_success);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+}
+
+BOOST_AUTO_TEST_CASE(nested_fragment_prescan_is_linear_and_preserves_order)
+{
+    CScript branching;
+    AppendDefinition(branching, OneOp(OP_NOP));
+    for (uint64_t i{1}; i < 24; ++i) {
+        CScript body;
+        AppendReference(body, i - 1);
+        AppendReference(body, i - 1);
+        AppendDefinition(branching, body);
+    }
+    AppendReference(branching, 23);
+    branching << OP_RESERVED;
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    const auto success{CheckTapscriptOpSuccess(branching, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_REQUIRE(success.has_value());
+    BOOST_CHECK(*success);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+
+    CScript inner_success;
+    inner_success << OP_RESERVED << OP_PUSHDATA4;
+    CScript outer_success;
+    AppendReference(outer_success, 0);
+    outer_success << OP_PUSHDATA4;
+    CScript nested_success;
+    AppendDefinition(nested_success, inner_success);
+    AppendDefinition(nested_success, outer_success);
+    AppendReference(nested_success, 1);
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    const auto first_success{CheckTapscriptOpSuccess(nested_success, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
+    BOOST_REQUIRE(first_success.has_value());
+    BOOST_CHECK(*first_success);
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+
+    CScript inner_failure;
+    inner_failure << OP_PUSHDATA4;
+    CScript outer_failure;
+    AppendReference(outer_failure, 0);
+    outer_failure << OP_RESERVED;
+    CScript nested_failure;
+    AppendDefinition(nested_failure, inner_failure);
+    AppendDefinition(nested_failure, outer_failure);
+    AppendReference(nested_failure, 1);
+    error = SCRIPT_ERR_UNKNOWN_ERROR;
+    BOOST_CHECK(!CheckTapscriptOpSuccess(nested_failure, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error).has_value());
+    BOOST_CHECK_EQUAL(EvalTapscriptV2(nested_failure, {}, 1'000'000).error, SCRIPT_ERR_BAD_OPCODE);
+}
+
+BOOST_AUTO_TEST_CASE(nested_fragment_depth_is_bounded_by_declarations)
+{
+    CScript script;
+    AppendDefinition(script, OneOp(OP_1));
+    for (uint64_t i{1}; i < 2'048; ++i) {
+        CScript body;
+        AppendReference(body, i - 1);
+        AppendDefinition(script, body);
+    }
+    AppendReference(script, 2'047);
+    const EvalOutcome outcome{EvalTapscriptV2(script, {}, 40'000'000)};
+    BOOST_REQUIRE(outcome.ok);
+    BOOST_CHECK(outcome.stack == Stack{Num(1)});
+}
+
+BOOST_AUTO_TEST_CASE(fragment_definitions_are_prefix_only)
+{
+    CScript script;
+    AppendDefinition(script, OneOp(OP_1));
+    script << OP_0 << OP_IF << OP_MACRO << OP_ENDIF << OP_1;
+    CheckError(script, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+
+    CScript body_with_definition;
+    body_with_definition << OP_MACRO << OP_0;
+    CScript referenced;
+    AppendDefinition(referenced, body_with_definition);
+    AppendReference(referenced, 0);
+    CheckError(referenced, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+}
+
+BOOST_AUTO_TEST_CASE(inactive_fragment_charges_reference_and_conditional_control)
+{
+    const CScript body{CScript{} << OP_0 << OP_IF << OP_1 << OP_ENDIF};
+    CScript script;
+    AppendDefinition(script, body);
+    script << OP_0 << OP_IF;
+    AppendReference(script, 0);
+    script << OP_ENDIF << OP_1;
+
+    const uint64_t body_control_cost{varops::ExecutionCost(OP_IF) + varops::ExecutionCost(OP_ENDIF)};
+    const uint64_t additional{body.size() * varops::FRAGMENT_BODY_PER_BYTE + body_control_cost};
+    CheckEval(script, {}, {Num(1)}, additional);
+    CheckError(script, {}, additional - 1, SCRIPT_ERR_VAROP_COUNT);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_conditionals_cross_boundaries)
+{
+    const CScript opening{CScript{} << OP_IF << OP_DUP};
+    CScript script;
+    AppendDefinition(script, opening);
+    script << Num(9) << OP_1;
+    AppendReference(script, 0);
+    script << OP_ENDIF;
+    CheckEval(script, {}, {Num(9), Num(9)}, InvokedBodyCost(opening) +
+              varops::COST_COPYING * Num(9).size());
+
+    const CScript flipping{CScript{} << OP_ELSE << OP_2};
+    CScript inactive;
+    AppendDefinition(inactive, flipping);
+    inactive << OP_0 << OP_IF;
+    AppendReference(inactive, 0);
+    inactive << OP_ENDIF;
+    CheckEval(inactive, {}, {Num(2)}, InvokedBodyCost(flipping));
+
+    CScript nested_flipping;
+    AppendReference(nested_flipping, 0);
+    CScript nested_inactive;
+    AppendDefinition(nested_inactive, flipping);
+    AppendDefinition(nested_inactive, nested_flipping);
+    nested_inactive << OP_0 << OP_IF;
+    AppendReference(nested_inactive, 1);
+    nested_inactive << OP_ENDIF;
+    CheckEval(nested_inactive, {}, {Num(2)}, InvokedBodyCost(nested_flipping) + InvokedBodyCost(flipping));
+}
+
+BOOST_AUTO_TEST_CASE(fragment_signature_uses_callers_codeseparator)
+{
+    const CScript body{OneOp(OP_CHECKSIG)};
+    CScript script;
+    AppendDefinition(script, body);
+    script << OP_CODESEPARATOR;
+    AppendReference(script, 0);
+
+    RecordingChecker checker;
+    const Stack stack{valtype(64, 0x01), valtype(32, 0x02)};
+    const uint64_t budget{EncodedExecutionCost(script) + InvokedBodyCost(body) +
+                          varops::SigcheckCost(OP_CHECKSIG)};
+    const EvalOutcome outcome{EvalTapscriptV2WithFlagsAndChecker(
+        script, stack, SCRIPT_VERIFY_NONE, checker, budget)};
+    BOOST_REQUIRE(outcome.ok);
+    BOOST_CHECK_EQUAL(checker.schnorr_calls, 1);
+    BOOST_CHECK_EQUAL(checker.last_codeseparator_pos, 0);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_codeseparator_uses_unrolled_position)
+{
+    const CScript body{OneOp(OP_CODESEPARATOR)};
+    CScript script;
+    AppendDefinition(script, body);
+    script << OP_NOP;
+    AppendReference(script, 0);
+    script << OP_CHECKSIG;
+
+    RecordingChecker checker;
+    const Stack stack{valtype(64, 0x01), valtype(32, 0x02)};
+    const uint64_t budget{EncodedExecutionCost(script) + InvokedBodyCost(body) +
+                          varops::SigcheckCost(OP_CHECKSIG)};
+    const EvalOutcome outcome{EvalTapscriptV2WithFlagsAndChecker(
+        script, stack, SCRIPT_VERIFY_NONE, checker, budget)};
+    BOOST_REQUIRE(outcome.ok);
+    BOOST_CHECK_EQUAL(outcome.remaining_budget, 0);
+    BOOST_CHECK_EQUAL(checker.last_codeseparator_pos, 1);
+
+    CScript nested_body;
+    nested_body << OP_NOP;
+    AppendReference(nested_body, 0);
+    CScript nested;
+    AppendDefinition(nested, body);
+    AppendDefinition(nested, nested_body);
+    nested << OP_NOP;
+    AppendReference(nested, 1);
+    nested << OP_CHECKSIG;
+    RecordingChecker nested_checker;
+    const uint64_t nested_budget{EncodedExecutionCost(nested) + InvokedBodyCost(nested_body) +
+                                 InvokedBodyCost(body) + varops::SigcheckCost(OP_CHECKSIG)};
+    const EvalOutcome nested_outcome{EvalTapscriptV2WithFlagsAndChecker(
+        nested, stack, SCRIPT_VERIFY_NONE, nested_checker, nested_budget)};
+    BOOST_REQUIRE(nested_outcome.ok);
+    BOOST_CHECK_EQUAL(nested_outcome.remaining_budget, 0);
+    BOOST_CHECK_EQUAL(nested_checker.last_codeseparator_pos, 2);
+
+    CScript skipped_body;
+    for (int i{0}; i < 128; ++i) skipped_body << OP_NOP;
+    CScript skipped;
+    AppendDefinition(skipped, skipped_body);
+    skipped << OP_0 << OP_IF;
+    AppendReference(skipped, 0);
+    skipped << OP_ENDIF << OP_CODESEPARATOR << OP_CHECKSIG;
+    RecordingChecker skipped_checker;
+    const uint64_t skipped_budget{EncodedExecutionCost(skipped) +
+                                  skipped_body.size() * varops::FRAGMENT_BODY_PER_BYTE +
+                                  varops::SigcheckCost(OP_CHECKSIG)};
+    const EvalOutcome skipped_outcome{EvalTapscriptV2WithFlagsAndChecker(
+        skipped, stack, SCRIPT_VERIFY_NONE, skipped_checker, skipped_budget)};
+    BOOST_REQUIRE(skipped_outcome.ok);
+    BOOST_CHECK_EQUAL(skipped_outcome.remaining_budget, 0);
+    BOOST_CHECK_EQUAL(skipped_checker.last_codeseparator_pos, 131);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_codeseparator_position_does_not_wrap)
+{
+    // 4096 references to 2^20 skipped opcodes place the next opcode beyond uint32.
+    CScript body;
+    body.insert(body.end(), 1 << 20, static_cast<unsigned char>(OP_NOP));
+    CScript script;
+    AppendDefinition(script, body);
+    script << OP_0 << OP_IF;
+    for (int i{0}; i < 4096; ++i) AppendReference(script, 0);
+    script << OP_ENDIF;
+
+    CScript without_separator{script};
+    without_separator << OP_1;
+    CheckEval(without_separator, {}, {Num(1)},
+              uint64_t{4096} * body.size() * varops::FRAGMENT_BODY_PER_BYTE);
+
+    script << OP_CODESEPARATOR << OP_1;
+    CheckError(script, {}, 0, SCRIPT_ERR_OP_CODESEPARATOR);
+}
+
+BOOST_AUTO_TEST_CASE(referenced_op_success_is_terminal)
+{
+    CScript body;
+    body << OP_1NEGATE;
+    body.push_back(static_cast<unsigned char>(OP_PUSHDATA4));
+
+    CScript script;
+    AppendDefinition(script, body);
+    AppendReference(script, 0);
+    script << OP_RETURN;
+
+    EvalOutcome outcome{VerifyTapscriptV2WithFlags(
+        script, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, 0)};
+    BOOST_CHECK(outcome.ok);
+    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_OK);
+
+    outcome = VerifyTapscriptV2WithFlags(
+        script, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS,
+        0);
+    BOOST_CHECK(!outcome.ok);
+    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+
+    CScript uninvoked;
+    AppendDefinition(uninvoked, body);
+    uninvoked << OP_1;
+    outcome = VerifyTapscriptV2(uninvoked, {}, FinalSuccessCost(1));
+    BOOST_CHECK(outcome.ok);
+
+    CScript inactive;
+    AppendDefinition(inactive, body);
+    inactive << OP_0 << OP_IF;
+    AppendReference(inactive, 0);
+    inactive << OP_ENDIF << OP_RETURN;
+    outcome = VerifyTapscriptV2WithFlags(
+        inactive, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, 0);
+    BOOST_CHECK(outcome.ok);
+}
+
+BOOST_AUTO_TEST_CASE(witness_data_cannot_define_fragment_body)
+{
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const XOnlyPubKey xonly_pubkey{key.GetPubKey()};
+    const valtype pubkey{xonly_pubkey.begin(), xonly_pubkey.end()};
+
+    CScript leaf_script;
+    AppendDefinition(leaf_script, OneOp(OP_DROP));
+    AppendReference(leaf_script, 0);
+    leaf_script << pubkey << OP_CHECKSIGVERIFY << OP_1;
+
+    const auto verify_body{[&](opcodetype body_opcode, script_verify_flags flags) {
+        // The first witness item is an empty signature; the second resembles a body opcode.
+        const FinalizedTapscriptV2Spend spend{BuildFinalizedTapscriptV2Spend(
+            leaf_script, {valtype{}, valtype{static_cast<unsigned char>(body_opcode)}})};
+        const CTransaction tx{spend.tx};
+        PrecomputedTransactionData txdata;
+        txdata.Init(tx, std::vector<CTxOut>{spend.spent_output});
+        const TransactionSignatureChecker checker{&tx, 0, spend.spent_output.nValue, txdata, MissingDataBehavior::ASSERT_FAIL};
+        varops::Budget budget{varops::TxBudget(GetTransactionWeight(tx))};
+        ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+        const bool ok{VerifyScript(CScript{}, spend.spent_output.scriptPubKey, &tx.vin[0].scriptWitness,
+                                   flags, checker, &error, budget)};
+        return std::pair{ok, error};
+    }};
+
+    const auto [ordinary_ok, ordinary_error]{verify_body(OP_NOP, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS)};
+    BOOST_CHECK(!ordinary_ok);
+    BOOST_CHECK_EQUAL(ordinary_error, SCRIPT_ERR_CHECKSIGVERIFY);
+
+    const auto [success_ok, success_error]{verify_body(OP_1NEGATE, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS)};
+    BOOST_CHECK(!success_ok);
+    BOOST_CHECK_EQUAL(success_error, SCRIPT_ERR_CHECKSIGVERIFY);
+
+    const auto [discouraged_ok, discouraged_error]{verify_body(
+        OP_1NEGATE, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS)};
+    BOOST_CHECK(!discouraged_ok);
+    BOOST_CHECK_EQUAL(discouraged_error, SCRIPT_ERR_CHECKSIGVERIFY);
+}
+
+BOOST_AUTO_TEST_CASE(fragment_declarations_do_not_use_stack_limits)
+{
+    const valtype maximum_body(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x00);
+    const valtype maximum_live_value(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
+    const Stack byte_limit_stack{maximum_live_value};
+    CScript define_maximum_body;
+    AppendDefinition(define_maximum_body, CScript{maximum_body.begin(), maximum_body.end()});
+    define_maximum_body << OP_1;
+    CheckEval(define_maximum_body, byte_limit_stack, {maximum_live_value, Num(1)}, 0);
+
+    CScript exceed_byte_limit{define_maximum_body};
+    exceed_byte_limit << OP_SWAP << OP_DUP;
+    CheckError(exceed_byte_limit, byte_limit_stack, 0, SCRIPT_ERR_TOTAL_STACK_SIZE);
+
+    Stack entry_limit_stack(MAX_TAPSCRIPT_V2_STACK_SIZE - 1, valtype{});
+    CScript exact_entry_limit;
+    AppendDefinition(exact_entry_limit, CScript{});
+    exact_entry_limit << OP_0;
+    const EvalOutcome exact_entries{EvalTapscriptV2(
+        exact_entry_limit, entry_limit_stack, EncodedExecutionCost(exact_entry_limit))};
+    BOOST_CHECK(exact_entries.ok);
+
+    CScript exceed_entry_limit;
+    AppendDefinition(exceed_entry_limit, CScript{});
+    exceed_entry_limit << OP_0 << OP_0;
+    CheckError(exceed_entry_limit, entry_limit_stack, 0, SCRIPT_ERR_STACK_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(base_evalscript_rejects_tapscript_v2)

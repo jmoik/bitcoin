@@ -358,6 +358,35 @@ BOOST_AUTO_TEST_CASE(undefined_selector_fails_closed)
     eval_script(CScript{} << selector << OP_TX << OP_1, SCRIPT_VERIFY_NONE, SCRIPT_ERR_TX_SELECTOR);
     eval_script(CScript{} << OP_0 << OP_IF << selector << OP_TX << OP_ENDIF << OP_1,
                 SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS, SCRIPT_ERR_OK);
+
+}
+
+BOOST_AUTO_TEST_CASE(codeseparator_position_inside_fragment)
+{
+    CMutableTransaction mutable_tx;
+    mutable_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    mutable_tx.vout.emplace_back(1, CScript{});
+    const CTransaction tx{mutable_tx};
+    const std::vector<CTxOut> spent_outputs{CTxOut{2, CScript{}}};
+    const OpTxChecker checker{tx, 0, spent_outputs};
+
+    CScript script;
+    script << OP_MACRO;
+    script.push_back(1);
+    script << OP_CODESEPARATOR;
+    script << OP_NOP << OP_CALLMACRO;
+    script.push_back(0);
+    script << valtype{0x00, 0x00, 0x80, 0x00, 0x00, 0x00} << OP_TX;
+
+    ScriptExecutionData execdata;
+    InitOpTxContext(execdata, script, TestControlBlock());
+    ValtypeStack stack;
+    varops::Budget budget{1'000'000};
+    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+    BOOST_REQUIRE(EvalTapscriptV2(stack, script, SCRIPT_VERIFY_NONE, checker, execdata, budget, &error));
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    BOOST_REQUIRE_EQUAL(stack.size(), 1);
+    BOOST_CHECK(stack.back() == valtype{0x01}); // OP_NOP is position 0; the substituted separator is 1.
 }
 
 BOOST_AUTO_TEST_CASE(future_selector_version_succeeds)
@@ -394,6 +423,14 @@ BOOST_AUTO_TEST_CASE(future_selector_version_succeeds)
                 SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
     eval_script(CScript{} << OP_0 << OP_IF << selector << OP_TX << OP_ENDIF << OP_1,
                 SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS, SCRIPT_ERR_OK);
+
+    CScript malformed_later;
+    malformed_later << OP_MACRO;
+    malformed_later.push_back(1);
+    malformed_later.push_back(OP_PUSHDATA1); // Truncated push in the referenced body.
+    malformed_later << selector << OP_TX << OP_CALLMACRO;
+    malformed_later.push_back(0);
+    eval_script(malformed_later, SCRIPT_VERIFY_NONE, SCRIPT_ERR_OK);
 }
 
 BOOST_AUTO_TEST_CASE(bip341_sighash_construction_csfs)

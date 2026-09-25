@@ -22,11 +22,14 @@
 #include <uint256.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <compare>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <vector>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -57,6 +60,267 @@ uint64_t SignatureExecutionCost(opcodetype opcode, const valtype& signature)
     return varops::ExecutionCost(opcode) +
            (signature.empty() ? 0 : varops::SigcheckCost(opcode));
 }
+
+using ScriptIterator = CScript::const_iterator;
+
+bool ReadFragmentCompactSize(ScriptIterator& pc, ScriptIterator end, uint64_t& value)
+{
+    if (pc == end) return false;
+    const uint8_t prefix{*pc++};
+    if (prefix < 253) {
+        value = prefix;
+        return true;
+    }
+    const unsigned int width{prefix == 253 ? 2U : prefix == 254 ? 4U : 8U};
+    if (static_cast<size_t>(end - pc) < width) return false;
+    value = 0;
+    for (unsigned int i{0}; i < width; ++i) value |= uint64_t{*pc++} << (8 * i);
+    return (prefix == 253 && value >= 253) ||
+           (prefix == 254 && value > std::numeric_limits<uint16_t>::max()) ||
+           (prefix == 255 && value > std::numeric_limits<uint32_t>::max());
+}
+
+struct FragmentScan {
+    enum class Outcome { END, SUCCESS, FAILURE } outcome{Outcome::END};
+    ScriptError error{SCRIPT_ERR_OK};
+    struct InactiveSpan {
+        ScriptIterator begin;
+        ScriptIterator end;
+        uint32_t instructions;
+    };
+    std::vector<InactiveSpan> inactive_spans;
+};
+
+struct StaticFragmentProgram {
+    struct Fragment {
+        ScriptIterator begin;
+        ScriptIterator end;
+        std::optional<FragmentScan> scan;
+    };
+
+    const CScript& script;
+    ScriptIterator main_begin;
+    std::vector<Fragment> fragments;
+
+    explicit StaticFragmentProgram(const CScript& script_in) : script{script_in}, main_begin{script_in.begin()} {}
+};
+
+bool ParseStaticFragments(StaticFragmentProgram& program, ScriptError* serror)
+{
+    ScriptIterator pc{program.script.begin()};
+    const ScriptIterator end{program.script.end()};
+    while (pc != end && *pc == OP_MACRO) {
+        ++pc;
+        uint64_t body_length;
+        if (!ReadFragmentCompactSize(pc, end, body_length) || body_length > static_cast<uint64_t>(end - pc)) {
+            return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+        }
+        const ScriptIterator body_end{pc + static_cast<CScript::difference_type>(body_length)};
+        program.fragments.push_back({pc, body_end, std::nullopt});
+        pc = body_end;
+    }
+    program.main_begin = pc;
+    return true;
+}
+
+void ScanFragment(StaticFragmentProgram& program, size_t root_index)
+{
+    struct Frame {
+        size_t index;
+        ScriptIterator pc;
+        ScriptIterator span_begin;
+        uint32_t span_count{0};
+        std::optional<size_t> pending_reference;
+        FragmentScan scan;
+
+        Frame(size_t index_in, ScriptIterator begin) : index{index_in}, pc{begin}, span_begin{begin} {}
+    };
+    const auto finish_span{[](Frame& frame, ScriptIterator end) {
+        // Short skipped runs are cheap to decode; storing only longer runs
+        // bounds the summary memory even for control-heavy bodies.
+        if (frame.span_count >= 4) frame.scan.inactive_spans.push_back({frame.span_begin, end, frame.span_count});
+        frame.span_count = 0;
+        frame.span_begin = frame.pc;
+    }};
+
+    const auto& root{program.fragments[root_index]};
+    std::vector<Frame> frames;
+    frames.emplace_back(root_index, root.begin);
+    while (!frames.empty()) {
+        Frame& frame{frames.back()};
+        const auto& fragment{program.fragments[frame.index]};
+        if (frame.pending_reference) {
+            const size_t child_index{*frame.pending_reference};
+            const auto& child{program.fragments[child_index]};
+            if (!child.scan) {
+                frames.emplace_back(child_index, child.begin);
+                continue;
+            }
+            frame.pending_reference.reset();
+            if (child.scan->outcome != FragmentScan::Outcome::END) {
+                program.fragments[frame.index].scan = FragmentScan{child.scan->outcome, child.scan->error, {}};
+                frames.pop_back();
+            }
+            continue;
+        }
+        if (frame.pc == fragment.end) {
+            finish_span(frame, frame.pc);
+            program.fragments[frame.index].scan = std::move(frame.scan);
+            frames.pop_back();
+            continue;
+        }
+
+        const ScriptIterator instruction_begin{frame.pc};
+        opcodetype opcode;
+        valtype data;
+        if (!GetScriptOp(frame.pc, fragment.end, opcode, &data)) {
+            program.fragments[frame.index].scan = FragmentScan{FragmentScan::Outcome::FAILURE, SCRIPT_ERR_BAD_OPCODE, {}};
+            frames.pop_back();
+            continue;
+        }
+        if (IsOpSuccess(opcode, SigVersion::TAPSCRIPT_V2)) {
+            program.fragments[frame.index].scan = FragmentScan{FragmentScan::Outcome::SUCCESS, SCRIPT_ERR_OK, {}};
+            frames.pop_back();
+            continue;
+        }
+        if (opcode == OP_MACRO) {
+            program.fragments[frame.index].scan = FragmentScan{FragmentScan::Outcome::FAILURE, SCRIPT_ERR_BAD_OPCODE, {}};
+            frames.pop_back();
+            continue;
+        }
+        if (opcode == OP_CALLMACRO) {
+            uint64_t child_index;
+            if (!ReadFragmentCompactSize(frame.pc, fragment.end, child_index) || child_index >= frame.index) {
+                program.fragments[frame.index].scan = FragmentScan{FragmentScan::Outcome::FAILURE, SCRIPT_ERR_BAD_OPCODE, {}};
+                frames.pop_back();
+                continue;
+            }
+            finish_span(frame, instruction_begin);
+            frame.pending_reference = static_cast<size_t>(child_index);
+            continue;
+        }
+        if ((OP_IF <= opcode && opcode <= OP_ENDIF) || data.size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+            finish_span(frame, instruction_begin);
+        } else {
+            ++frame.span_count;
+        }
+    }
+}
+
+std::optional<bool> ScanStaticFragmentSuccess(StaticFragmentProgram& program, script_verify_flags flags, ScriptError* serror)
+{
+    ScriptIterator pc{program.main_begin};
+    while (pc < program.script.end()) {
+        opcodetype opcode;
+        if (!GetScriptOp(pc, program.script.end(), opcode, nullptr)) {
+            // A runtime OP_TX success before this malformed instruction may still succeed.
+            return std::nullopt;
+        }
+        if (IsOpSuccess(opcode, SigVersion::TAPSCRIPT_V2)) {
+            if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+            }
+            return set_success(serror);
+        }
+        if (opcode == OP_MACRO) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+        if (opcode != OP_CALLMACRO) continue;
+
+        uint64_t index;
+        if (!ReadFragmentCompactSize(pc, program.script.end(), index) || index >= program.fragments.size()) {
+            return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+        }
+        auto& fragment{program.fragments[index]};
+        if (!fragment.scan) ScanFragment(program, static_cast<size_t>(index));
+        if (fragment.scan->outcome == FragmentScan::Outcome::FAILURE) {
+            // Like a malformed main instruction, this prevents reaching a later
+            // OP_SUCCESS but still permits an earlier runtime OP_TX success.
+            return std::nullopt;
+        }
+        if (fragment.scan->outcome == FragmentScan::Outcome::SUCCESS) {
+            if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
+                return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
+            }
+            return set_success(serror);
+        }
+    }
+    return std::nullopt;
+}
+
+// Definitions and references are storage syntax, not instructions in the expanded script.
+class FragmentInstructionCursor
+{
+    struct Frame {
+        ScriptIterator pc;
+        ScriptIterator end;
+        size_t body_index;
+        size_t span_index{0};
+    };
+
+    const StaticFragmentProgram& m_program;
+    std::vector<Frame> m_frames;
+    uint64_t m_position{0};
+
+public:
+    enum class Result { END, INSTRUCTION, ERROR };
+
+    explicit FragmentInstructionCursor(const StaticFragmentProgram& program)
+        : m_program{program}, m_frames{{program.main_begin, program.script.end(), program.fragments.size()}} {}
+
+    bool SkipInactiveSpan(Frame& frame)
+    {
+        if (frame.body_index == m_program.fragments.size()) return false;
+        const auto& body{m_program.fragments[frame.body_index]};
+        assert(body.scan);
+        const auto& spans{body.scan->inactive_spans};
+        while (frame.span_index < spans.size() && spans[frame.span_index].begin < frame.pc) ++frame.span_index;
+        if (frame.span_index == spans.size() || spans[frame.span_index].begin != frame.pc) return false;
+        const auto& span{spans[frame.span_index++]};
+        frame.pc = span.end;
+        m_position += span.instructions;
+        return true;
+    }
+
+    Result Next(opcodetype& opcode, valtype& data, uint64_t& position,
+                varops::Budget& budget, ScriptError* serror, bool inactive = false)
+    {
+        while (true) {
+            Frame& frame{m_frames.back()};
+            if (inactive && SkipInactiveSpan(frame)) continue;
+            if (frame.pc == frame.end) {
+                if (m_frames.size() == 1) return Result::END;
+                m_frames.pop_back();
+                continue;
+            }
+            if (!GetScriptOp(frame.pc, frame.end, opcode, &data)) {
+                set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                return Result::ERROR;
+            }
+            if (opcode == OP_MACRO) {
+                set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                return Result::ERROR;
+            }
+            if (opcode == OP_CALLMACRO) {
+                uint64_t index;
+                if (!ReadFragmentCompactSize(frame.pc, frame.end, index) || index >= m_program.fragments.size() ||
+                    (frame.body_index != m_program.fragments.size() && index >= frame.body_index)) {
+                    set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+                    return Result::ERROR;
+                }
+                const auto& body{m_program.fragments[index]};
+                const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
+                const uint64_t call_charge{varops::ExecutionCost(OP_CALLMACRO) + body_size * varops::FRAGMENT_BODY_PER_BYTE};
+                if (!budget.Spend(call_charge)) {
+                    set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    return Result::ERROR;
+                }
+                m_frames.push_back({body.begin, body.end, static_cast<size_t>(index)});
+                continue;
+            }
+            position = m_position++;
+            return Result::INSTRUCTION;
+        }
+    }
+};
 
 } // namespace
 
@@ -1319,30 +1583,40 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     return set_success(serror);
 }
 
-static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, bool& success_override, ScriptError* serror)
+static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram& program,
+                                script_verify_flags flags, const BaseSignatureChecker& checker,
+                                ScriptExecutionData& execdata, varops::Budget& varops_budget,
+                                ScriptError* serror, bool& immediate_success)
 {
     static const valtype vchFalse(0);
     static const valtype vchTrue(1, 1);
 
-    CScript::const_iterator pc = script.begin();
-    CScript::const_iterator pend = script.end();
+    ValtypeStack altstack;
+    set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+    const bool fRequireMinimal{(flags & SCRIPT_VERIFY_MINIMALDATA) != 0};
+    execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
+    execdata.m_codeseparator_pos_init = true;
+    execdata.m_tapscript = program.script;
+    execdata.m_tapscript_init = true;
+    for (const auto& body : program.fragments) {
+        const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
+        const uint64_t definition_charge{varops::FRAGMENT_DEFINE_COST + body_size * varops::FRAGMENT_BODY_PER_BYTE};
+        if (!varops_budget.Spend(definition_charge)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+    }
+
+    FragmentInstructionCursor cursor{program};
     opcodetype opcode;
     valtype vchPushValue;
     ConditionStack vfExec;
-    ValtypeStack altstack;
-    set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
-    bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
-    uint32_t opcode_pos = 0;
-    execdata.m_codeseparator_pos = 0xFFFFFFFFUL;
-    execdata.m_codeseparator_pos_init = true;
-    execdata.m_tapscript = script;
-    execdata.m_tapscript_init = true;
-    success_override = false;
+    uint64_t opcode_pos{0};
 
     try
     {
-        for (; pc < pend; ++opcode_pos) {
-            bool fExec = vfExec.all_true();
+        while (true) {
+            const bool fExec{vfExec.all_true()};
+            const auto next{cursor.Next(opcode, vchPushValue, opcode_pos, varops_budget, serror, !fExec)};
+            if (next == FragmentInstructionCursor::Result::END) break;
+            if (next == FragmentInstructionCursor::Result::ERROR) return false;
             uint64_t varcost = 0;
 
             // Linear operations accumulate varcost and spend it after stack/size
@@ -1350,11 +1624,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
             // as OP_MUL/OP_DIV/OP_MOD, and signature checks must spend before
             // doing the DoS-sensitive work.
 
-            //
-            // Read instruction
-            //
-            if (!script.GetOp(pc, opcode, vchPushValue))
-                return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             if (vchPushValue.size() > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
@@ -1970,6 +2239,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 case OP_CODESEPARATOR:
                 {
                     // Tapscript signatures commit to the executed OP_CODESEPARATOR position.
+                    if (opcode_pos > std::numeric_limits<uint32_t>::max()) {
+                        return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
+                    }
                     execdata.m_codeseparator_pos = opcode_pos;
                 }
                 break;
@@ -2038,6 +2310,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                 }
                 break;
 
+
                 case OP_TX: {
                     const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, serror)};
                     if (result == OpTxResult::ERROR) return false;
@@ -2045,7 +2318,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
                         if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
                             return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);
                         }
-                        success_override = true;
+                        immediate_success = true;
                         return set_success(serror);
                     }
                 } break;
@@ -2296,11 +2569,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
             }
 
             // Size limits
-            if (stack.size() + altstack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) {
+            const size_t stack_entries{stack.size() + altstack.size()};
+            if (stack_entries > MAX_TAPSCRIPT_V2_STACK_SIZE) {
                 return set_error(serror, SCRIPT_ERR_STACK_SIZE);
             }
 
-            if (stack.GetTotalSize() + altstack.GetTotalSize() > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
+            const size_t stack_bytes{stack.GetTotalSize() + altstack.GetTotalSize()};
+            if (stack_bytes > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
                 return set_error(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
             }
 
@@ -2330,12 +2605,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const CScript& script, scri
     return set_success(serror);
 }
 
-bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror)
-{
-    bool success_override{false};
-    return EvalTapscriptV2Impl(stack, script, flags, checker, execdata, varops_budget, success_override, serror);
-}
-
 uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxOut> spent_outputs)
 {
     assert(spent_outputs.size() == tx.vin.size());
@@ -2360,6 +2629,23 @@ uint64_t GetTransactionVaropsBudget(const CTransaction& tx, std::span<const CTxO
         }
     }
     return has_participant ? varops::TxBudget(weight) : 0;
+}
+
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* serror, bool* immediate_success)
+{
+    if (immediate_success) *immediate_success = false;
+    StaticFragmentProgram program{script};
+    if (!ParseStaticFragments(program, serror)) return false;
+    const auto scan_result{ScanStaticFragmentSuccess(program, flags, serror)};
+    if (scan_result.has_value()) {
+        if (immediate_success) *immediate_success = *scan_result;
+        return *scan_result;
+    }
+    bool local_immediate_success{false};
+    const bool success{EvalTapscriptV2Impl(stack, program, flags, checker, execdata, varops_budget,
+                                           serror, local_immediate_success)};
+    if (immediate_success) *immediate_success = local_immediate_success;
+    return success;
 }
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror)
@@ -2957,15 +3243,16 @@ template class GenericTransactionSignatureChecker<CMutableTransaction>;
 std::optional<bool> CheckTapscriptOpSuccess(const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, ScriptError* serror)
 {
     assert(IsTapscript(sigversion));
+    if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        StaticFragmentProgram program{exec_script};
+        if (!ParseStaticFragments(program, serror)) return false;
+        return ScanStaticFragmentSuccess(program, flags, serror);
+    }
     // OP_SUCCESSx processing overrides everything, including stack element size limits.
     CScript::const_iterator pc = exec_script.begin();
     while (pc < exec_script.end()) {
         opcodetype opcode;
         if (!exec_script.GetOp(pc, opcode)) {
-            // This condition is not reached when a valid OP_SUCCESSx is found first.
-            // Tapscript v2 may instead reach a runtime upgrade-success path before
-            // the malformed instruction, so defer this error to its evaluator.
-            if (sigversion == SigVersion::TAPSCRIPT_V2) return std::nullopt;
             return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
         }
         if (IsOpSuccess(opcode, sigversion)) {
@@ -2994,18 +3281,20 @@ bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_bu
 
 static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, const CScript& exec_script, script_verify_flags flags, SigVersion sigversion, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, ScriptError* serror, varops::Budget& varops_budget)
 {
-    if (IsTapscript(sigversion)) {
+    if (sigversion == SigVersion::TAPSCRIPT) {
         const auto result{CheckTapscriptOpSuccess(exec_script, flags, sigversion, serror)};
         if (result.has_value()) {
             return *result;
         }
         // Tapscript enforces initial stack size limits (altstack is empty here)
-        if (sigversion == SigVersion::TAPSCRIPT) {
-            if (stack_span.size() > MAX_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
-        }
+        if (stack_span.size() > MAX_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
     }
 
     if (sigversion == SigVersion::TAPSCRIPT_V2) {
+        StaticFragmentProgram program{exec_script};
+        if (!ParseStaticFragments(program, serror)) return false;
+        const auto scan_result{ScanStaticFragmentSuccess(program, flags, serror)};
+        if (scan_result.has_value()) return *scan_result;
         if (stack_span.size() > MAX_TAPSCRIPT_V2_STACK_SIZE) return set_error(serror, SCRIPT_ERR_STACK_SIZE);
 
         size_t total_size{0};
@@ -3021,9 +3310,12 @@ static bool ExecuteWitnessScript(const std::span<const valtype>& stack_span, con
 
         ValtypeStack valtype_stack{stack_span};
 
-        bool success_override{false};
-        if (!EvalTapscriptV2Impl(valtype_stack, exec_script, flags, checker, execdata, varops_budget, success_override, serror)) return false;
-        if (success_override) return set_success(serror);
+        bool immediate_success{false};
+        if (!EvalTapscriptV2Impl(valtype_stack, program, flags, checker, execdata,
+                                 varops_budget, serror, immediate_success)) {
+            return false;
+        }
+        if (immediate_success) return true;
         return CheckTapscriptV2ScriptResult(valtype_stack, varops_budget, serror);
     }
 

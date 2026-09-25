@@ -424,7 +424,7 @@ uint256 ComputeTapbranchHash(std::span<const unsigned char> a, std::span<const u
 uint256 ComputeTaprootMerkleRoot(std::span<const unsigned char> control, const uint256& tapleaf_hash);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* error = nullptr);
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* error = nullptr);
-bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr);
+bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_flags flags, const BaseSignatureChecker& checker, ScriptExecutionData& execdata, varops::Budget& varops_budget, ScriptError* error = nullptr, bool* immediate_success = nullptr);
 /** Check Tapscript v2 cleanstack and truthiness after execution. Consumes the final stack element. */
 bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_budget, ScriptError* error = nullptr);
 /** Use only when transaction-wide varops budget context is unavailable. */

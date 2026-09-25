@@ -108,14 +108,39 @@ opcodetype ConsumeUsefulOpcode(FuzzedDataProvider& provider)
         OP_MUL, OP_DIV, OP_MOD, OP_LSHIFT, OP_RSHIFT, OP_CAT, OP_SUBSTR, OP_LEFT,
         OP_RIGHT, OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256,
         OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_CHECKSIG,
-        OP_CHECKSIGVERIFY, OP_CHECKSIGADD, OP_CODESEPARATOR, OP_TX, OP_TWEAKADD,
-        static_cast<opcodetype>(0xcb), OP_CHECKSIGFROMSTACK,
-        static_cast<opcodetype>(0xce), OP_BYTEREV,
+        OP_CHECKSIGVERIFY, OP_CHECKSIGADD, OP_CODESEPARATOR,
+        OP_MACRO, OP_CALLMACRO, OP_TX, OP_TWEAKADD, static_cast<opcodetype>(0xcb),
+        OP_CHECKSIGFROMSTACK, static_cast<opcodetype>(0xce), OP_BYTEREV,
     });
 }
 
 CScript ConsumeTapscriptV2Script(FuzzedDataProvider& provider)
 {
+    if (provider.ConsumeIntegralInRange<uint8_t>(0, 3) == 0) {
+        CScript body;
+        const size_t ops{provider.ConsumeIntegralInRange<size_t>(0, 16)};
+        for (size_t i{0}; i < ops; ++i) {
+            if (provider.ConsumeBool()) {
+                body << ConsumeRandomLengthByteVector(provider, 8);
+            } else {
+                body << provider.PickValueInArray<opcodetype>({
+                    OP_0, OP_1, OP_1NEGATE, OP_IF, OP_ELSE, OP_ENDIF,
+                    OP_DUP, OP_DROP, OP_CODESEPARATOR, OP_CALLMACRO,
+                });
+            }
+        }
+        CScript script;
+        script << OP_MACRO;
+        script.push_back(body.size()); // At most 16 eight-byte pushes: canonical one-byte CompactSize.
+        script.insert(script.end(), body.begin(), body.end());
+        const bool inactive{provider.ConsumeBool()};
+        if (inactive) script << OP_0 << OP_IF;
+        script << OP_CALLMACRO;
+        script.push_back(provider.ConsumeIntegralInRange<uint8_t>(0, 3) == 0 ? 1 : 0);
+        if (inactive) script << OP_ENDIF;
+        script << OP_1;
+        return script;
+    }
     if (provider.ConsumeBool()) {
         const std::vector<unsigned char> bytes{ConsumeRandomLengthByteVector(provider, 1024)};
         return CScript{bytes.begin(), bytes.end()};

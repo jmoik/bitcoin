@@ -42,6 +42,7 @@ from test_framework.messages import (
     CTxOut,
     MAX_BLOCK_WEIGHT,
     SEQUENCE_FINAL,
+    ser_compact_size,
     ser_string,
     tx_from_hex,
 )
@@ -62,6 +63,7 @@ from test_framework.script import (
     OP_0,
     OP_1,
     OP_1NEGATE,
+    OP_ADD,
     OP_BYTEREV,
     OP_CAT,
     OP_CHECKLOCKTIMEVERIFY,
@@ -69,13 +71,16 @@ from test_framework.script import (
     OP_CHECKSIG,
     OP_CHECKSIGADD,
     OP_CHECKSIGFROMSTACK,
+    OP_MACRO,
     OP_DEPTH,
     OP_DROP,
+    OP_DUP,
     OP_ENDIF,
     OP_EQUAL,
     OP_EQUALVERIFY,
     OP_FROMALTSTACK,
     OP_IF,
+    OP_CALLMACRO,
     OP_LSHIFT,
     OP_MUL,
     OP_PICK,
@@ -513,6 +518,59 @@ def byterev_spenders():
     return spenders
 
 
+def fragment_spenders():
+    sec = generate_privkey()
+    pub = compute_xonly_pubkey(sec)[0]
+    body = CScript([OP_DUP, OP_ADD])
+    define = lambda body: bytes([OP_MACRO]) + ser_compact_size(len(body)) + bytes(body)
+    invoke = bytes([OP_CALLMACRO, 0])
+    script = CScript(define(body) + invoke + bytes(CScript([6, OP_EQUAL])))
+    nested_body = CScript(invoke)
+    nested_script = CScript(define(nested_body) + invoke)
+    nested_valid_body = CScript([OP_DUP, OP_ADD])
+    nested_valid_script = CScript(define(nested_valid_body) +
+                                  define(CScript([OP_CALLMACRO, 0])) +
+                                  bytes([OP_CALLMACRO, 1]) + bytes(CScript([6, OP_EQUAL])))
+    boundary_body = CScript([OP_IF, OP_DUP])
+    boundary_script = CScript(define(boundary_body) + bytes(CScript([OP_1])) + invoke +
+                              bytes(CScript([OP_ENDIF, OP_ADD, 6, OP_EQUAL])))
+    tap = taproot_construct(pub, [
+        ("function", script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("nested", nested_script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("nested_valid", nested_valid_script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("boundary", boundary_script, LEAF_VERSION_TAPSCRIPT_V2),
+    ])
+    spenders = []
+    add_spender(
+        spenders,
+        "v2/fragment",
+        tap=tap,
+        leaf="function",
+        inputs=[b"\x03"],
+        failure={"leaf": "nested"},
+        err_msg="Opcode missing or not understood",
+    )
+    add_spender(
+        spenders,
+        "v2/fragment-conditional-boundary",
+        tap=tap,
+        leaf="boundary",
+        inputs=[b"\x03"],
+        failure={"inputs": [b"\x04"]},
+        **ERR_EVAL_FALSE,
+    )
+    add_spender(
+        spenders,
+        "v2/fragment-nested",
+        tap=tap,
+        leaf="nested_valid",
+        inputs=[b"\x03"],
+        failure={"inputs": [b"\x04"]},
+        **ERR_EVAL_FALSE,
+    )
+    return spenders
+
+
 def tweakadd_spenders():
     sec = generate_privkey()
     pub = compute_xonly_pubkey(sec)[0]
@@ -854,6 +912,9 @@ class TapScriptV2Test(TaprootTest):
 
         self.log.info("Tapscript v2 OP_BYTEREV tests")
         self.test_spenders(self.nodes[0], byterev_spenders(), input_counts=[1])
+
+        self.log.info("Tapscript v2 static fragment tests")
+        self.test_spenders(self.nodes[0], fragment_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])

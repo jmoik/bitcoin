@@ -20,10 +20,15 @@ namespace varops {
 // unit, this caps fixed-cost opcode density at eight executions per weight unit.
 // Data-dependent costs are additional.
 static constexpr uint64_t COST_PER_OPCODE = 1'250;
+static constexpr uint64_t FRAGMENT_DEFINE_COST = COST_PER_OPCODE;
+static constexpr uint64_t FRAGMENT_REF_COST = 4'000;
+static constexpr uint64_t FRAGMENT_BODY_PER_BYTE = 3;
 
 constexpr uint64_t ExecutionCost(opcodetype opcode)
 {
     switch (opcode) {
+    case OP_CALLMACRO:
+        return FRAGMENT_REF_COST;
     case OP_MUL:
     case OP_DIV:
     case OP_MOD:
