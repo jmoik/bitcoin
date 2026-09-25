@@ -113,6 +113,7 @@ add_executable(test_bitcoin
   sync_tests.cpp
   system_ram_tests.cpp
   system_tests.cpp
+  tapleaf_0xc2_macro_tests.cpp
   tapleaf_0xc2_tests.cpp
   tapleaf_0xc2_vector_tests.cpp
   testnet4_miner_tests.cpp
@@ -158,6 +159,7 @@ target_json_data_sources(test_bitcoin
   data/key_io_invalid.json
   data/key_io_valid.json
   data/op_tx.json
+  data/reusable_macros.json
   data/script_tests.json
   data/sighash.json
   data/siphash.json

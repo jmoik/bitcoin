@@ -128,6 +128,7 @@ add_executable(fuzz
   strprintf.cpp
   system.cpp
   tapleaf_0xc2_eval.cpp
+  tapleaf_0xc2_macro_equivalence.cpp
   threadpool.cpp
   timeoffsets.cpp
   torcontrol.cpp
