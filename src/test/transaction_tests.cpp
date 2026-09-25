@@ -173,7 +173,7 @@ BOOST_FIXTURE_TEST_SUITE(transaction_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_budget_is_shared_across_inputs)
 {
-    constexpr size_t operand_size{7'000};
+    constexpr size_t operand_size{40'000};
     const valtype operand(operand_size, 0xff);
 
     CScript leaf_script;
@@ -191,7 +191,9 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_budget_is_shared_across_inputs)
     mutable_tx.vout.emplace_back(50'000, CScript{} << OP_TRUE);
 
     const CTransaction tx{mutable_tx};
-    const uint64_t per_input_cost{varops::MulCost(operand_size, operand_size)};
+    // This BIP441 multiply/accumulate core is a lower bound on each input's charge.
+    const uint64_t limbs{varops::detail::WordSize(operand_size) / 8};
+    const uint64_t per_input_cost{limbs * (varops::MulRowCost(limbs) + varops::ArithCost(8 * (limbs + 1)))};
     const uint64_t tx_budget{varops::TxBudget(GetTransactionWeight(tx))};
     BOOST_REQUIRE_LT(per_input_cost, tx_budget);
     BOOST_REQUIRE_LT(tx_budget, 2 * per_input_cost);

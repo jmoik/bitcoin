@@ -22,12 +22,8 @@
 #include <uint256.h>
 
 #include <algorithm>
-#include <array>
 #include <cassert>
-#include <compare>
 #include <cstring>
-#include <limits>
-#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -49,17 +45,6 @@ inline bool set_error(ScriptError* ret, const ScriptError serror)
     return false;
 }
 
-constexpr bool HasSignatureDependentExecutionCost(opcodetype opcode)
-{
-    return opcode == OP_CHECKSIG || opcode == OP_CHECKSIGVERIFY ||
-           opcode == OP_CHECKSIGADD || opcode == OP_CHECKSIGFROMSTACK;
-}
-
-uint64_t SignatureExecutionCost(opcodetype opcode, const valtype& signature)
-{
-    return varops::ExecutionCost(opcode) +
-           (signature.empty() ? 0 : varops::SigcheckCost(opcode));
-}
 
 using ScriptIterator = CScript::const_iterator;
 
@@ -308,10 +293,14 @@ public:
                 }
                 const auto& body{m_program.fragments[index]};
                 const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
-                const uint64_t call_charge{varops::ExecutionCost(OP_CALLMACRO) + body_size * varops::FRAGMENT_BODY_PER_BYTE};
+                const uint64_t call_charge{varops::FixedOpcodeCost() + varops::MacroDecodeCost(body_size)};
                 if (!budget.Spend(call_charge)) {
                     set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     return Result::ERROR;
+                }
+                if (varops::g_cost_audit) {
+                    varops::g_cost_audit->StandaloneCharge(OP_CALLMACRO, body_size,
+                                                                 call_charge);
                 }
                 m_frames.push_back({body.begin, body.end, static_cast<size_t>(index)});
                 continue;
@@ -321,6 +310,32 @@ public:
         }
     }
 };
+
+static void ChargePrepValue(varops::Meter& meter, size_t size)
+{
+    meter.Add(varops::PrepCost(size));
+}
+
+static void ChargeReadValue(varops::Meter& meter, size_t size)
+{
+    meter.Add(varops::ReadCost(size));
+}
+
+static void ChargeProducedValue(varops::Meter& meter, size_t size)
+{
+    meter.Add(varops::OutputCost(size));
+}
+
+static void ChargeReleaseValue(varops::Meter& meter, size_t size)
+{
+    meter.Add(varops::ReleaseCost(size));
+}
+
+static void ChargeMoveEntries(varops::Meter& meter, size_t entries)
+{
+    meter.Add(varops::MoveCost(entries));
+}
+
 
 } // namespace
 
@@ -357,9 +372,11 @@ static inline void popstack(ValtypeStack& stack)
     stack.pop_back();
 }
 
-static void PushCosted(ValtypeStack& stack, const valtype& value, uint64_t& varcost)
+static void PushCosted(ValtypeStack& stack, const valtype& value, uint64_t& varcost
+                       , varops::Meter* cost_meter
+)
 {
-    varcost += value.size() * varops::COST_COPYING;
+    cost_meter->Add(varops::CopyCost(value.size()));
     stack.push_back(value);
 }
 
@@ -1600,8 +1617,14 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
     execdata.m_tapscript_init = true;
     for (const auto& body : program.fragments) {
         const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
-        const uint64_t definition_charge{varops::FRAGMENT_DEFINE_COST + body_size * varops::FRAGMENT_BODY_PER_BYTE};
-        if (!varops_budget.Spend(definition_charge)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        const uint64_t definition_charge{varops::MacroDecodeCost(body_size)};
+        if (!varops_budget.Spend(definition_charge)) {
+            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        }
+        if (varops::g_cost_audit) {
+            varops::g_cost_audit->StandaloneCharge(OP_MACRO, body_size,
+                                                         definition_charge);
+        }
     }
 
     FragmentInstructionCursor cursor{program};
@@ -1618,6 +1641,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
             if (next == FragmentInstructionCursor::Result::END) break;
             if (next == FragmentInstructionCursor::Result::ERROR) return false;
             uint64_t varcost = 0;
+            varops::Meter cost_meter;
 
             // Linear operations accumulate varcost and spend it after stack/size
             // checks at the end of the iteration. Superlinear operations, such
@@ -1628,16 +1652,25 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 return set_error(serror, SCRIPT_ERR_PUSH_SIZE);
 
             const bool executes_opcode{fExec || (OP_IF <= opcode && opcode <= OP_ENDIF)};
-            if (executes_opcode && opcode != OP_TX && !HasSignatureDependentExecutionCost(opcode) &&
-                !varops_budget.Spend(varops::ExecutionCost(opcode))) {
-                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            // OP_TX handles upgrade success separately.
+            if (executes_opcode && opcode != OP_TX) {
+                if (varops::g_cost_audit) {
+                    varops::g_cost_audit->BeginOpcode(opcode, stack, altstack,
+                                                            OP_INVALIDOPCODE);
+                }
+                cost_meter.Add(varops::FixedOpcodeCost());
+                if (!cost_meter.Spend(varops_budget)) {
+                    return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                }
             }
 
             if (fExec && 0 <= opcode && opcode <= OP_PUSHDATA4) {
                 if (fRequireMinimal && !CheckMinimalPush(vchPushValue, opcode)) {
                     return set_error(serror, SCRIPT_ERR_MINIMALDATA);
                 }
-                varcost += vchPushValue.size() * varops::COST_COPYING;
+                // Literal materialization is the measured copy path. Even an
+                // empty literal creates a stack entry and therefore pays B.
+                cost_meter.Add(varops::CopyCost(vchPushValue.size()));
                 stack.push_back(std::move(vchPushValue));
             } else if (fExec || (OP_IF <= opcode && opcode <= OP_ENDIF))
             switch (opcode)
@@ -1664,6 +1697,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_16:
                 {
                     // ( -- value)
+                    cost_meter.Add(varops::ScalarOutputCost());
                     CScriptNum bn((int)opcode - (int)(OP_1 - 1));
                     stack.push_back(bn.getvch());
                     // The result of these opcodes should always be the minimal way to push the data
@@ -1685,6 +1719,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         break;
                     }
 
+                    if (stack.size() == 0) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v;
                     if (!stack.PopVal64(v)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1697,6 +1737,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
                     }
                     const CScriptNum lock_time{static_cast<int64_t>(nl)};
+                    ChargeProducedValue(cost_meter, v.size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     stack.push_back(v.MoveToValtype());
 
                     // Actually compare the specified lock time with the transaction.
@@ -1716,6 +1760,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // nSequence, like nLockTime, is a 32-bit unsigned integer
                     // field. See the comment in CHECKLOCKTIMEVERIFY regarding
                     // 5-byte numeric operands.
+                    if (stack.size() == 0) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v;
                     if (!stack.PopVal64(v)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1730,6 +1780,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         return set_error(serror, SCRIPT_ERR_UNSATISFIED_LOCKTIME);
                     }
                     const CScriptNum sequence{static_cast<int64_t>(ns)};
+                    ChargeProducedValue(cost_meter, v.size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     stack.push_back(v.MoveToValtype());
 
                     // To provide for future soft-fork extensibility, if the
@@ -1800,6 +1854,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (false -- false) and return
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
                     Val64 v;
                     if (!stack.PopVal64(v)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1823,6 +1879,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 {
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 1);
                     altstack.push_back(stack.PopBackValue());
                 }
                 break;
@@ -1831,6 +1888,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 {
                     if (altstack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_ALTSTACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 1);
                     stack.push_back(altstack.PopBackValue());
                 }
                 break;
@@ -1840,6 +1898,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 -- )
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeReleaseValue(cost_meter, stack.at(stack.size() - 2).size());
+                    ChargeReleaseValue(cost_meter, stack.back().size());
                     popstack(stack);
                     popstack(stack);
                 }
@@ -1854,8 +1914,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& vch1 = stacktop(-2);
                     const valtype& vch2 = stacktop(-1);
                     // BIP 440 cost: (length(A) + length(B)) * 3 (COPYING).
-                    PushCosted(stack, vch1, varcost);
-                    PushCosted(stack, vch2, varcost);
+                    PushCosted(stack, vch1, varcost
+                               , &cost_meter
+                    );
+                    PushCosted(stack, vch2, varcost
+                               , &cost_meter
+                    );
                 }
                 break;
 
@@ -1869,9 +1933,15 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& vch2 = stacktop(-2);
                     const valtype& vch3 = stacktop(-1);
                     // BIP 440 cost: (length(A) + length(B) + length(C)) * 3 (COPYING).
-                    PushCosted(stack, vch1, varcost);
-                    PushCosted(stack, vch2, varcost);
-                    PushCosted(stack, vch3, varcost);
+                    PushCosted(stack, vch1, varcost
+                               , &cost_meter
+                    );
+                    PushCosted(stack, vch2, varcost
+                               , &cost_meter
+                    );
+                    PushCosted(stack, vch3, varcost
+                               , &cost_meter
+                    );
                 }
                 break;
                 case OP_2OVER:
@@ -1883,8 +1953,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& vch1 = stacktop(-4);
                     const valtype& vch2 = stacktop(-3);
                     // BIP 440 cost: (length(C) + length(D)) * 3 (COPYING).
-                    PushCosted(stack, vch1, varcost);
-                    PushCosted(stack, vch2, varcost);
+                    PushCosted(stack, vch1, varcost
+                               , &cost_meter
+                    );
+                    PushCosted(stack, vch2, varcost
+                               , &cost_meter
+                    );
                 }
                 break;
 
@@ -1893,6 +1967,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 x3 x4 x5 x6 -- x3 x4 x5 x6 x1 x2)
                     if (stack.size() < 6)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 6);
                     stack.Rotate(-6, -4);
                 }
                 break;
@@ -1902,6 +1977,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 x3 x4 -- x3 x4 x1 x2)
                     if (stack.size() < 4)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 4);
                     stack.Swap(-4, -2);
                     stack.Swap(-3, -1);
                 }
@@ -1910,6 +1986,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_IFDUP:
                 {
                     // (x - 0 | x x)
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t input_size{stack.back().size()};
+                    ChargePrepValue(cost_meter, input_size);
+                    ChargeReadValue(cost_meter, input_size);
+                    ChargeProducedValue(cost_meter, input_size);
                     Val64 v64;
                     if (!stack.PopVal64(v64))
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1917,8 +1999,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     valtype vch{v64.MoveToValtype()};
                     // BIP 440 cost: W(length(A)) * 2 + length(A) * 3 (COMPARINGZERO + COPYING).
                     varcost += vch.size() * varops::COST_COPYING;
-                    if (result)
+                    if (result) {
+                        cost_meter.Add(varops::CopyCost(vch.size()));
                         stack.push_back(vch);
+                    }
                     stack.push_back(std::move(vch));
                 }
                 break;
@@ -1926,6 +2010,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_DEPTH:
                 {
                     // -- stacksize
+                    cost_meter.Add(varops::ScalarOutputCost());
                     Val64 v(stack.size());
                     valtype vch = v.MoveToValtype();
                     stack.push_back(std::move(vch));
@@ -1937,6 +2022,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x -- )
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeReleaseValue(cost_meter, stack.back().size());
                     popstack(stack);
                 }
                 break;
@@ -1949,7 +2035,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     stack.reserve(stack.size() + 1);
                     const valtype& vch = stacktop(-1);
                     // BIP 440 cost: length(A) * 3 (COPYING).
-                    PushCosted(stack, vch, varcost);
+                    PushCosted(stack, vch, varcost
+                               , &cost_meter
+                    );
                 }
                 break;
 
@@ -1958,6 +2046,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 -- x2)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeReleaseValue(cost_meter, stack.at(stack.size() - 2).size());
                     stack.erase(stack.size() - 2);
                 }
                 break;
@@ -1970,7 +2059,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     stack.reserve(stack.size() + 1);
                     const valtype& vch = stacktop(-2);
                     // BIP 440 cost: length(B) * 3 (COPYING).
-                    PushCosted(stack, vch, varcost);
+                    PushCosted(stack, vch, varcost
+                               , &cost_meter
+                    );
                 }
                 break;
 
@@ -1981,6 +2072,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (xn ... x2 x1 x0 n - ... x2 x1 x0 xn)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
                     Val64 v;
                     if (!stack.PopVal64(v)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -1993,12 +2086,15 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     if (depth >= stack.size())
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     if (opcode == OP_ROLL) {
+                        cost_meter.Add(varops::MoveCost(depth));
                         stack.Roll(depth);
                         varcost += depth * varops::COST_ROLL;
                     } else {
                         stack.reserve(stack.size() + 1);
                         const valtype& vch = stack.at(stack.size() - depth - 1);
-                        PushCosted(stack, vch, varcost);
+                        PushCosted(stack, vch, varcost
+                                   , &cost_meter
+                        );
                     }
                 }
                 break;
@@ -2008,6 +2104,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 x3 -- x2 x3 x1)
                     if (stack.size() < 3)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 3);
                     stack.Rotate(-3, -2);
                 }
                 break;
@@ -2017,6 +2114,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x1 x2 -- x2 x1)
                     if (stack.size() < 2)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeMoveEntries(cost_meter, 2);
                     stack.Swap(-2, -1);
                 }
                 break;
@@ -2029,7 +2127,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     stack.reserve(stack.size() + 1);
                     const valtype& vch = stacktop(-1);
                     // BIP 440 cost: length(A) * 3 (COPYING).
-                    PushCosted(stack, vch, varcost);
+                    PushCosted(stack, vch, varcost
+                               , &cost_meter
+                    );
                     stack.Swap(-2, -3);
                 }
                 break;
@@ -2040,6 +2140,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (in -- in size)
                     if (stack.size() < 1)
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    cost_meter.Add(varops::ScalarOutputCost());
                     Val64 v(stacktop(-1).size());
                     valtype vch = v.MoveToValtype();
                     stack.push_back(std::move(vch));
@@ -2059,6 +2160,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                     const valtype& vch1 = stacktop(-2);
                     const valtype& vch2 = stacktop(-1);
+                    if (vch1.size() == vch2.size()) ChargeReadValue(cost_meter, vch1.size());
+                    cost_meter.Add(varops::ScalarOutputCost());
                     bool fEqual = (vch1 == vch2);
                     // OP_NOTEQUAL is disabled because it would be too easy to say
                     // something like n != 1 and have some wiseguy pass in 1 with extra
@@ -2090,6 +2193,18 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_NOT:
                 case OP_0NOTEQUAL:
                 {
+                    if (stack.size() == 0) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t input_size{stack.back().size()};
+                    ChargePrepValue(cost_meter, input_size);
+                    if (opcode == OP_NOT || opcode == OP_0NOTEQUAL) {
+                        ChargeReadValue(cost_meter, input_size);
+                        cost_meter.Add(varops::ScalarOutputCost());
+                    } else {
+                        cost_meter.Add(varops::ArithCost(varops::detail::WordSize(input_size)));
+                    }
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v64;
                     if (!stack.PopVal64(v64))
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -2112,6 +2227,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         assert(!"invalid opcode");
                         break;
                     }
+                    if (opcode == OP_1ADD || opcode == OP_1SUB) {
+                        ChargeProducedValue(cost_meter, v64.size());
+                        if (!cost_meter.Spend(varops_budget)) {
+                            return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                        }
+                    }
                     stack.push_back(v64.MoveToValtype());
                 }
                 break;
@@ -2130,6 +2251,43 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_MIN:
                 case OP_MAX:
                 {
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t input1_size{stack.at(stack.size() - 2).size()};
+                    const size_t input2_size{stack.back().size()};
+                    ChargePrepValue(cost_meter, input1_size);
+                    ChargePrepValue(cost_meter, input2_size);
+                    const uint64_t max_words{std::max(varops::detail::WordSize(input1_size),
+                                                      varops::detail::WordSize(input2_size))};
+                    switch (opcode) {
+                    case OP_ADD:
+                    case OP_SUB:
+                        cost_meter.Add(varops::ArithCost(max_words));
+                        break;
+                    case OP_BOOLAND:
+                    case OP_BOOLOR:
+                        ChargeReadValue(cost_meter, input1_size);
+                        ChargeReadValue(cost_meter, input2_size);
+                        cost_meter.Add(varops::ScalarOutputCost());
+                        break;
+                    case OP_NUMEQUAL:
+                    case OP_NUMEQUALVERIFY:
+                    case OP_NUMNOTEQUAL:
+                    case OP_LESSTHAN:
+                    case OP_GREATERTHAN:
+                    case OP_LESSTHANOREQUAL:
+                    case OP_GREATERTHANOREQUAL:
+                        cost_meter.Add(varops::ReadCost(max_words));
+                        cost_meter.Add(varops::ScalarOutputCost());
+                        break;
+                    case OP_MIN:
+                    case OP_MAX:
+                        cost_meter.Add(varops::ReadCost(max_words));
+                        break;
+                    default: break;
+                    }
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v1, v2;
                     if (!stack.PopVal64(v2) || !stack.PopVal64(v1)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -2184,11 +2342,34 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         assert(!"invalid opcode"); break;
                     }
                     if (opcode != OP_NUMEQUALVERIFY) {
+                        if (opcode == OP_ADD || opcode == OP_SUB || opcode == OP_MIN || opcode == OP_MAX) {
+                            ChargeProducedValue(cost_meter, v1.size());
+                            if (opcode == OP_MIN || opcode == OP_MAX) {
+                                // Either operand may become the retained result.
+                                ChargeReleaseValue(cost_meter, std::max(input1_size, input2_size));
+                            }
+                            if (!cost_meter.Spend(varops_budget)) {
+                                return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                            }
+                        }
                         stack.push_back(v1.MoveToValtype());
                     }
                     break;
                 }
                 case OP_WITHIN: {
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t n1{stack.at(stack.size() - 3).size()};
+                    const size_t n2{stack.at(stack.size() - 2).size()};
+                    const size_t n3{stack.back().size()};
+                    ChargePrepValue(cost_meter, n1);
+                    ChargePrepValue(cost_meter, n2);
+                    ChargePrepValue(cost_meter, n3);
+                    cost_meter.Add(varops::ReadCost(std::max(varops::detail::WordSize(n1), varops::detail::WordSize(n2))));
+                    cost_meter.Add(varops::ReadCost(std::max(varops::detail::WordSize(n1), varops::detail::WordSize(n3))));
+                    cost_meter.Add(varops::ScalarOutputCost());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v1, v2, v3;
                     if (!stack.PopVal64(v3) ||
                         !stack.PopVal64(v2) ||
@@ -2219,7 +2400,17 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         vch.size() > MAX_SCRIPT_ELEMENT_SIZE) {
                         return set_error(serror, SCRIPT_ERR_HASH_OPERAND_SIZE);
                     }
-                    varcost += vch.size() * varops::COST_HASH;
+                    // Digest construction and stack insertion belong to this
+                    // opcode's accumulator.
+                    const size_t output_size{
+                        (opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20U : 32U};
+                    cost_meter.Add(varops::HashCost(opcode, vch.size()));
+                    cost_meter.Add(varops::CopyCost(output_size));
+                    // Hashing is expensive, so deduct the cumulative opcode
+                    // charge before entering the hash implementation.
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     valtype vchHash((opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160) ? 20 : 32);
                     if (opcode == OP_RIPEMD160)
                         CRIPEMD160().Write(vch.data(), vch.size()).Finalize(vchHash.data());
@@ -2239,9 +2430,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_CODESEPARATOR:
                 {
                     // Tapscript signatures commit to the executed OP_CODESEPARATOR position.
-                    if (opcode_pos > std::numeric_limits<uint32_t>::max()) {
-                        return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
-                    }
+                    if (opcode_pos >= 0xFFFFFFFFULL) return set_error(serror, SCRIPT_ERR_OP_CODESEPARATOR);
                     execdata.m_codeseparator_pos = opcode_pos;
                 }
                 break;
@@ -2256,7 +2445,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& vchSig    = stacktop(-2);
                     const valtype& vchPubKey = stacktop(-1);
 
-                    if (!varops_budget.Spend(SignatureExecutionCost(opcode, vchSig))) {
+                    if (!vchSig.empty()) {
+                        cost_meter.Add(varops::SighashCost());
+                        cost_meter.Add(varops::Sha256Cost(96));
+                        cost_meter.Add(varops::SignatureCost());
+                    }
+                    cost_meter.Add(varops::ScalarOutputCost());
+                    if (!cost_meter.Spend(varops_budget)) {
                         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
 
@@ -2284,10 +2479,16 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& sig = stacktop(-3);
                     const valtype& pubkey = stacktop(-1);
 
-                    const uint64_t checksigadd_cost{
-                        SignatureExecutionCost(OP_CHECKSIGADD, sig) +
-                        varops::ChecksigAddIncrementCost(stack.at(stack.size() - 2).size())};
-                    if (!varops_budget.Spend(checksigadd_cost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    ChargePrepValue(cost_meter, stack.at(stack.size() - 2).size());
+                    if (!sig.empty()) {
+                        cost_meter.Add(varops::SighashCost());
+                        cost_meter.Add(varops::Sha256Cost(96));
+                        cost_meter.Add(varops::SignatureCost());
+                        cost_meter.Add(varops::ArithCost(varops::detail::WordSize(stack.at(stack.size() - 2).size())));
+                    }
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
 
                     bool success = true;
                     if (!EvalChecksigTapscript(sig, pubkey, execdata, flags, checker, SigVersion::TAPSCRIPT_V2, serror, success)) return false;
@@ -2306,10 +2507,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     }
                     num.TrimTrailingZeros();
 
+                    ChargeProducedValue(cost_meter, num.size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     stack.push_back(num.MoveToValtype());
                 }
                 break;
-
 
                 case OP_TX: {
                     const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, serror)};
@@ -2331,7 +2535,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& msg = stacktop(-2);
                     const valtype& pubkey = stacktop(-1);
 
-                    if (!varops_budget.Spend(SignatureExecutionCost(opcode, sig))) {
+                    if (!sig.empty()) {
+                        cost_meter.Add(varops::Sha256Cost(msg.size()));
+                        cost_meter.Add(varops::Sha256Cost(96));
+                        cost_meter.Add(varops::SignatureCost());
+                    }
+                    cost_meter.Add(varops::ScalarOutputCost());
+                    if (!cost_meter.Spend(varops_budget)) {
                         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
 
@@ -2353,7 +2563,9 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     if (tweak.size() != XOnlyPubKey::size() || pubkey.size() != XOnlyPubKey::size()) {
                         return set_error(serror, SCRIPT_ERR_TWEAKADD);
                     }
-                    if (!varops_budget.Spend(varops::SigcheckCost(OP_TWEAKADD))) {
+                    cost_meter.Add(varops::TweakCost());
+                    cost_meter.Add(varops::CopyCost(XOnlyPubKey::size()));
+                    if (!cost_meter.Spend(varops_budget)) {
                         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
 
@@ -2369,7 +2581,8 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     // (x -- reverse(x))
                     if (stack.size() < 1) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
 
-                    if (!varops_budget.Spend(varops::ByteReverseCost(stack.back().size()))) {
+                    cost_meter.Add(varops::BitCost(stack.back().size()));
+                    if (!cost_meter.Spend(varops_budget)) {
                         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
                     valtype value{stack.PopBackValue()};
@@ -2393,6 +2606,11 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                     valtype vch2 = stack.PopBackValue();
                     valtype vch1 = stack.PopBackValue();
+                    // Cover a complete copied result without depending on vector capacity.
+                    cost_meter.Add(varops::CopyCost(vch1.size() + vch2.size()));
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     varcost += (vch1.size() + vch2.size()) * varops::COST_COPYING;
 
                     vch1.insert(vch1.end(), vch2.begin(), vch2.end());
@@ -2403,6 +2621,17 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_SUBSTR:
                 {
                     // A BEGIN LEN -- A[BEGIN:BEGIN+LEN]
+                    if (stack.size() < 3) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargeReleaseValue(cost_meter, stack.at(stack.size() - 3).size());
+                    ChargePrepValue(cost_meter, stack.at(stack.size() - 2).size());
+                    ChargeReadValue(cost_meter, stack.at(stack.size() - 2).size());
+                    ChargeReleaseValue(cost_meter, stack.at(stack.size() - 2).size());
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
+                    ChargeReleaseValue(cost_meter, stack.back().size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 begin_v64, len_v64;
                     if (!stack.PopVal64(len_v64) ||
                         !stack.PopVal64(begin_v64) ||
@@ -2418,6 +2647,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const uint64_t len{len_v64.ToU64Ceil(vch.size() - begin, varcost)};
 
                     // len is already capped to MIN(LEN, LEN(a) - BEGIN, 0) (COPYING)
+                    cost_meter.Add(varops::CopyCost(len));
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     varcost += len * varops::COST_COPYING;
 
                     valtype vch2(vch.begin() + begin, vch.begin() + begin + len);
@@ -2428,6 +2661,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_LEFT:
                 {
                     // A OFFSET -- A[:OFFSET]
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 offset_v64;
                     if (!stack.PopVal64(offset_v64) ||
                         stack.size() < 1) {
@@ -2436,6 +2675,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                     // BIP 441 cost: W(length(OFFSET)) * 2 (LENGTHCONV).
                     const uint64_t offset{offset_v64.ToU64Ceil(stack.back().size(), varcost)};
+                    cost_meter.Add(varops::DiscardCost(stack.back().size() - offset));
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     valtype vch = stack.PopBackValue();
                     vch.erase(vch.begin() + offset, vch.end());
                     stack.push_back(std::move(vch));
@@ -2445,6 +2688,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_RIGHT:
                 {
                     // A OFFSET -- A[-OFFSET:]
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    ChargePrepValue(cost_meter, stack.back().size());
+                    ChargeReadValue(cost_meter, stack.back().size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 offset_v64;
                     if (!stack.PopVal64(offset_v64) ||
                         stack.size() < 1) {
@@ -2456,10 +2705,18 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const uint64_t offset{offset_v64.ToU64Ceil(stack.back().size(), varcost)};
                     valtype vch = stack.PopBackValue();
 
+                    // The in-place splice moves bytes but creates no new entry.
+                    cost_meter.Add(varops::CopyCost(offset) - varops::CopyCost(0));
+                    cost_meter.Add(varops::DiscardCost(vch.size() - offset));
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     varcost += offset * varops::COST_COPYING;
                     if (offset < vch.size()) {
                         vch.erase(vch.begin(), vch.end() - offset);
                     }
+                    // As in OP_LEFT, the moved value retains capacity from the
+                    // original stack element; contraction cannot grow it.
                     stack.push_back(std::move(vch));
                 }
                 break;
@@ -2468,6 +2725,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_2MUL:
                 case OP_2DIV:
                 {
+                    if (stack.size() == 0) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t input_size{stack.back().size()};
+                    ChargePrepValue(cost_meter, input_size);
+                    cost_meter.Add(varops::BitCost(varops::detail::WordSize(input_size)));
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v64;
                     if (!stack.PopVal64(v64)) {
                         return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -2478,6 +2742,10 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     case OP_2MUL:   Val64::Op2Mul(v64, varcost); break;
                     case OP_2DIV:   Val64::Op2Div(v64, varcost); break;
                     default:        assert(!"invalid opcode");
+                    }
+                    ChargeProducedValue(cost_meter, v64.size());
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
                     stack.push_back(v64.MoveToValtype());
                 }
@@ -2492,6 +2760,36 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 case OP_LSHIFT:
                 case OP_RSHIFT:
                 {
+                    if (stack.size() < 2) return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                    const size_t left_size{stack.at(stack.size() - 2).size()};
+                    const size_t right_size{stack.back().size()};
+                    ChargePrepValue(cost_meter, left_size);
+                    ChargePrepValue(cost_meter, right_size);
+                    if (opcode == OP_LSHIFT || opcode == OP_RSHIFT) {
+                        ChargeReadValue(cost_meter, right_size);
+                        cost_meter.Add(varops::BitCost(varops::detail::WordSize(left_size)));
+                    } else if (opcode == OP_MUL) {
+                        const uint64_t left_limbs{varops::detail::WordSize(left_size) / 8};
+                        const uint64_t right_limbs{varops::detail::WordSize(right_size) / 8};
+                        const uint64_t rows{std::max(left_limbs, right_limbs)};
+                        const uint64_t row_limbs{std::min(left_limbs, right_limbs)};
+                        // Each row is multiplied and accumulated into the result.
+                        cost_meter.Add(rows * (varops::MulRowCost(row_limbs) +
+                                               varops::ArithCost((row_limbs + 1) * 8)));
+                    } else if (opcode == OP_DIV || opcode == OP_MOD) {
+                        const uint64_t left_limbs{varops::detail::WordSize(left_size) / 8};
+                        const uint64_t right_limbs{varops::detail::WordSize(right_size) / 8};
+                        const uint64_t steps{right_limbs == 1 ? left_limbs : (left_limbs > right_limbs ? left_limbs - right_limbs : 1)};
+                        // DIVCORE measures the complete prepared division kernel.
+                        // Do not also charge the independently fitted MUL kernel.
+                        cost_meter.Add(varops::DivCoreCost(steps, right_limbs));
+                    } else {
+                        cost_meter.Add(varops::BitCost(std::max(varops::detail::WordSize(left_size),
+                                                                 varops::detail::WordSize(right_size))));
+                    }
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     Val64 v64a, v64b;
                     if (!stack.PopVal64(v64b) ||
                         !stack.PopVal64(v64a)) {
@@ -2516,8 +2814,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     {
                         // BIP 441 cost: (length(A) + length(B)) * 3
                         // + W(length(A)) / 8 * W(length(B)) * 27.
-                        const uint64_t op_cost{varops::MulCost(v64a.size(), v64b.size())};
-                        if (!varops_budget.Spend(op_cost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         v64a = Val64::OpMul(v64a, v64b);
                         break;
                     }
@@ -2526,8 +2822,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     {
                         // BIP 441 cost: W(length(A)) * 18 + W(length(B)) * 4
                         // + W(length(A))^2 * 2 / 3.
-                        const uint64_t op_cost{varops::DivCost(v64a.size(), v64b.size())};
-                        if (!varops_budget.Spend(op_cost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::OpDiv(v64a, v64b))
                             return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
                         break;
@@ -2537,8 +2831,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     {
                         // BIP 441 cost: W(length(A)) * 18 + W(length(B)) * 4
                         // + W(length(A))^2 * 2 / 3.
-                        const uint64_t op_cost{varops::ModCost(v64a.size(), v64b.size())};
-                        if (!varops_budget.Spend(op_cost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                         if (!Val64::OpMod(v64a, v64b))
                             return set_error(serror, SCRIPT_ERR_DIVIDE_BY_ZERO);
                         break;
@@ -2560,6 +2852,14 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         assert(!"invalid opcode");
                     }
 
+                    ChargeProducedValue(cost_meter, v64a.size());
+                    if (opcode == OP_DIV || opcode == OP_MOD) {
+                        // The divisor is consumed; MOD can also replace the dividend buffer.
+                        ChargeReleaseValue(cost_meter, std::max(left_size, right_size));
+                    }
+                    if (!cost_meter.Spend(varops_budget)) {
+                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+                    }
                     stack.push_back(v64a.MoveToValtype());
                 }
                 break;
@@ -2587,7 +2887,13 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                 return set_error(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
             }
 
-            if (!varops_budget.Spend(varcost)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            if (!cost_meter.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+            if (executes_opcode && opcode != OP_TX &&
+                varops::g_cost_audit) {
+                varops::g_cost_audit->EndOpcode(opcode, stack, altstack,
+                                                      OP_INVALIDOPCODE,
+                                                      cost_meter.Total());
+            }
         }
     }
     catch (const scriptnum_error&)
@@ -2642,8 +2948,8 @@ bool EvalTapscriptV2(ValtypeStack& stack, const CScript& script, script_verify_f
         return *scan_result;
     }
     bool local_immediate_success{false};
-    const bool success{EvalTapscriptV2Impl(stack, program, flags, checker, execdata, varops_budget,
-                                           serror, local_immediate_success)};
+    const bool success{EvalTapscriptV2Impl(stack, program, flags, checker, execdata,
+                                           varops_budget, serror, local_immediate_success)};
     if (immediate_success) *immediate_success = local_immediate_success;
     return success;
 }
@@ -3270,8 +3576,15 @@ bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_bu
     if (stack.size() != 1) return set_error(serror, SCRIPT_ERR_CLEANSTACK);
 
     valtype back_val = stack.PopBackValue();
-    if (!varops_budget.Spend(varops::CompareZeroCost(back_val.size()))) {
+    varops::Meter final_meter;
+    final_meter.Add(varops::PrepCost(back_val.size()));
+    final_meter.Add(varops::ReadCost(back_val.size()));
+    final_meter.Add(varops::FinalCost());
+    if (!final_meter.Spend(varops_budget)) {
         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+    }
+    if (varops::g_cost_audit) {
+        varops::g_cost_audit->FinalCheck(back_val.size(), final_meter.Total());
     }
     if (Val64{std::move(back_val)}.IsZero()) {
         return set_error(serror, SCRIPT_ERR_EVAL_FALSE);

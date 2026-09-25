@@ -74,6 +74,20 @@ target_link_libraries(bench_varops
 
 add_windows_application_manifest(bench_varops)
 
+add_executable(bench_varops_primitives
+  bench_varops_primitives.cpp
+)
+
+target_link_libraries(bench_varops_primitives
+  core_interface
+  test_util
+  bitcoin_node
+  secp256k1
+  Boost::headers
+)
+
+add_windows_application_manifest(bench_varops_primitives)
+
 include(TargetDataSources)
 target_raw_data_sources(bench_bitcoin NAMESPACE benchmark::data
   data/block413567.raw

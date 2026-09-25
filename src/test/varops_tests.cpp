@@ -64,31 +64,41 @@ BOOST_AUTO_TEST_CASE(participating_input_funding)
 BOOST_AUTO_TEST_CASE(bip440_cost_constants)
 {
     BOOST_CHECK_EQUAL(varops::BUDGET_PER_WEIGHT_UNIT, 10'000);
-    BOOST_CHECK_EQUAL(varops::COST_PER_OPCODE, 1'250);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_ADD), 1'250);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_SHA256), 1'250);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_MUL), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_BOOLAND), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_SHA1), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_HASH256), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_0NOTEQUAL), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_RSHIFT), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_HASH160), 4'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_CALLMACRO), 4'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_DIV), 3'000);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_MOD), 3'000);
+    BOOST_CHECK_EQUAL(varops::COST_PER_OPCODE, varops::FixedOpcodeCost());
+    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_ADD), varops::FixedOpcodeCost());
+    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_HASH160), varops::FixedOpcodeCost());
     BOOST_CHECK_EQUAL(varops::TxBudget(4), 40'000);
     BOOST_CHECK_EQUAL(varops::COST_PER_SIGOP, 500'000);
-    BOOST_CHECK_EQUAL(varops::SigcheckCost(OP_CHECKSIG), 498'750);
-    BOOST_CHECK_EQUAL(varops::ExecutionCost(OP_CHECKSIG) + varops::SigcheckCost(OP_CHECKSIG),
-                      varops::COST_PER_SIGOP);
-    BOOST_CHECK_EQUAL(varops::COST_HASH, 50);
-    BOOST_CHECK_EQUAL(varops::COST_ROLL, 48);
-    BOOST_CHECK_EQUAL(varops::COST_FAST, 2);
-    BOOST_CHECK_EQUAL(varops::COST_COPYING, 3);
-    BOOST_CHECK_EQUAL(varops::COST_OTHER, 4);
-    BOOST_CHECK_EQUAL(varops::COST_ARITH, 6);
-    BOOST_CHECK_EQUAL(varops::COST_MUL_QUAD, 27);
+    BOOST_CHECK_EQUAL(varops::SigcheckCost(OP_CHECKSIG), varops::COST_PER_SIGOP);
+    BOOST_CHECK_EQUAL(varops::SignatureCost(), varops::COST_PER_SIGOP);
+    BOOST_CHECK_EQUAL(varops::CopyCost(0), 668);
+    BOOST_CHECK_EQUAL(varops::CopyCost(1), 670);
+    BOOST_CHECK_EQUAL(varops::ReleaseCost(0), 0);
+    BOOST_CHECK_EQUAL(varops::ReleaseCost(8), 987);
+}
+
+BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
+{
+    BOOST_CHECK_EQUAL(varops::FixedOpcodeCost(), 382);
+    BOOST_CHECK_EQUAL(varops::SignatureCost(), varops::COST_PER_SIGOP);
+    BOOST_CHECK_EQUAL(varops::Sha256Cost(1) - varops::Sha256Cost(0), 48);
+    BOOST_CHECK_EQUAL(varops::PrepCost(9), 249);
+    BOOST_CHECK_EQUAL(varops::HashCost(OP_SHA256, 32), 4479);
+    BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), 1241);
+
+    // Spending more than once deducts only newly added whole-varop costs.
+    varops::Meter meter;
+    varops::Budget budget{3};
+    meter.Add(1);
+    BOOST_CHECK(meter.Spend(budget));
+    BOOST_CHECK(meter.Spend(budget));
+    BOOST_CHECK_EQUAL(*budget.Remaining(), 2);
+    meter.Add(2);
+    BOOST_CHECK(meter.Spend(budget));
+    BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
+    meter.Add(1);
+    BOOST_CHECK(!meter.Spend(budget));
+    BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
 }
 
 static uint64_t ExpectedMulCost(size_t size_a, size_t size_b)

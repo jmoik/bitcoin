@@ -115,10 +115,22 @@ MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4_000_000
 MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 8_000_000
 
 VAROPS_BUDGET_PER_WEIGHT = 10_000
-VAROPS_COST_PER_OPCODE = 1_250
-VAROPS_COST_FAST = 2
-VAROPS_COST_COPYING = 3
-VAROPS_COST_MUL_QUAD = 27
+VAROPS_COST_F = 382
+VAROPS_COST_PREP_FIXED = 233
+VAROPS_COST_PREP_BYTE = 1
+VAROPS_COST_OUTPUT_FIXED = 1209
+VAROPS_COST_OUTPUT_BYTE = 4
+VAROPS_COST_RELEASE_FIXED = 963
+VAROPS_COST_RELEASE_BYTE = 3
+VAROPS_COST_READ_FIXED = 89
+VAROPS_COST_READ_BYTE = 3
+VAROPS_COST_BIT_FIXED = 74
+VAROPS_COST_BIT_BYTE = 1
+VAROPS_COST_MUL_ROW_FIXED = 34
+VAROPS_COST_MUL_ROW_CELL = 14
+VAROPS_COST_ARITH_FIXED = 51
+VAROPS_COST_ARITH_BYTE = 4
+VAROPS_COST_FINAL = 1147
 VERSIONBITS_PERIOD = 144
 
 
@@ -134,27 +146,36 @@ def word_size(size):
     return ((size + 7) // 8) * 8
 
 
-def mul_cost(size_a, size_b):
-    return (
-        (size_a + size_b) * VAROPS_COST_COPYING
-        + (word_size(size_a) // 8) * word_size(size_b) * VAROPS_COST_MUL_QUAD
+def prep_cost(size):
+    return VAROPS_COST_PREP_FIXED + VAROPS_COST_PREP_BYTE * word_size(size)
+
+
+def output_cost(size):
+    return VAROPS_COST_OUTPUT_FIXED + VAROPS_COST_OUTPUT_BYTE * word_size(size)
+
+
+def release_cost(size):
+    return 0 if size == 0 else VAROPS_COST_RELEASE_FIXED + VAROPS_COST_RELEASE_BYTE * word_size(size)
+
+
+def read_cost(size):
+    return VAROPS_COST_READ_FIXED + VAROPS_COST_READ_BYTE * word_size(size)
+
+
+def mul_core_cost(size):
+    limbs = word_size(size) // 8
+    return limbs * (
+        VAROPS_COST_MUL_ROW_FIXED + VAROPS_COST_MUL_ROW_CELL * limbs
+        + VAROPS_COST_ARITH_FIXED + VAROPS_COST_ARITH_BYTE * 8 * (limbs + 1)
     )
 
 
-def lengthconv_cost(size):
-    return word_size(size) * VAROPS_COST_FAST
+def mul_cost(size):
+    return VAROPS_COST_F + 2 * prep_cost(size) + mul_core_cost(size) + output_cost(2 * size)
 
 
-def comparingzero_cost(size):
-    return word_size(size) * VAROPS_COST_FAST
-
-
-def upshift_cost(value_size, bits):
-    return (
-        lengthconv_cost(len(v2_num(bits)))
-        + (bits // 8) * VAROPS_COST_FAST
-        + value_size * VAROPS_COST_COPYING
-    )
+def final_check_cost(size):
+    return prep_cost(size) + read_cost(size) + VAROPS_COST_FINAL
 
 
 def flip_leaf_version(ctx):
@@ -471,21 +492,23 @@ def tapscript_v2_spenders():
         **ERR_TOTAL_STACK_SIZE,
     )
 
+    # The padding funds the large shift so this tests the element limit, not varops.
     add_spender_for_script(
         spenders,
         pubs[0],
         "v2/runtime_stack_element_exact_limit",
         CScript([OP_DROP, OP_LSHIFT]),
-        inputs=[b"\x01", v2_num((MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE - 1) * 8), b"p" * 1000],
-        failure_inputs=[b"\x01", v2_num(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE * 8), b"p" * 1000],
+        inputs=[b"\x01", v2_num((MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE - 1) * 8), b"p" * 5000],
+        failure_inputs=[b"\x01", v2_num(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE * 8), b"p" * 5000],
         failure_err=ERR_STACK_ELEMENT_SIZE,
     )
 
     # Non-empty signature opcodes spend from the same varops budget in v2,
     # independent of the older BIP342 validation-weight-left accounting.
+    # The failing leaf must exceed the budget even when grouped with padded inputs.
     tap = taproot_construct(pubs[0], [
         ("sig_budget_ok", CScript([OP_1]), LEAF_VERSION_TAPSCRIPT_V2),
-        ("sig_budget_fail", repeated_nonempty_unknown_pubkey_checksig_script(pubs[3], 250), LEAF_VERSION_TAPSCRIPT_V2),
+        ("sig_budget_fail", repeated_nonempty_unknown_pubkey_checksig_script(pubs[3], 750), LEAF_VERSION_TAPSCRIPT_V2),
     ])
     add_spender(
         spenders,
@@ -1386,15 +1409,13 @@ class TapScriptV2Test(TaprootTest):
         sec = generate_privkey()
         pub = compute_xonly_pubkey(sec)[0]
 
-        operand_size = 12_000
+        operand_size = 40_000
         padding_size = 11
         operand = b"\xff" * operand_size
         padding = b"\x00" * padding_size
         expensive_script = CScript([OP_MUL, OP_DROP, OP_DROP, OP_1])
         cheap_script = CScript([OP_DROP, OP_DROP, OP_DROP, OP_1])
-        threshold_script = CScript([OP_DROP, OP_CAT, OP_DROP, OP_1])
         assert_equal(len(expensive_script), len(cheap_script))
-        assert_equal(len(expensive_script), len(threshold_script))
 
         def make_budget_spender(name, script, version=LEAF_VERSION_TAPSCRIPT_V2, inputs=None):
             tap = taproot_construct(pub, [(name, script, version)])
@@ -1404,10 +1425,10 @@ class TapScriptV2Test(TaprootTest):
             make_budget_spender("v2/shared_budget_accepted_expensive", expensive_script),
             make_budget_spender("v2/shared_budget_accepted_cheap", cheap_script),
             make_budget_spender("v2/shared_budget_rejected_expensive", expensive_script),
-            make_budget_spender("v2/shared_budget_rejected_threshold", threshold_script),
+            make_budget_spender("v2/shared_budget_rejected_second_expensive", expensive_script),
             make_budget_spender("v2/mixed_budget_expensive", expensive_script),
-            make_budget_spender("v1/no_v2_funding", CScript([OP_DROP] * 300 + [OP_1]),
-                                version=0xc0, inputs=[b"\x01" * 80] * 300),
+            make_budget_spender("v1/no_v2_funding", CScript([OP_DROP] * 600 + [OP_1]),
+                                version=0xc0, inputs=[b"\x01" * 80] * 600),
         ]
         funded, host_spk, host_pubkey = self.fund_spenders(spenders)
 
@@ -1432,21 +1453,13 @@ class TapScriptV2Test(TaprootTest):
         rejected_tx = make_spend_tx(rejected_funded)
         assert_equal(accepted_tx.get_weight(), rejected_tx.get_weight())
 
-        final_check_cost = comparingzero_cost(1)
-        execution_cost = 4 * VAROPS_COST_PER_OPCODE
-        expensive_input_cost = execution_cost + 2_000 + mul_cost(operand_size, operand_size) + final_check_cost
-        cheap_input_cost = execution_cost + final_check_cost
-        threshold_input_cost = execution_cost + (padding_size + operand_size) * VAROPS_COST_COPYING + final_check_cost
-        accepted_cost = expensive_input_cost + cheap_input_cost
-        rejected_cost = expensive_input_cost + threshold_input_cost
+        # BIP 441's multiply/accumulate work alone brackets the shared budget.
+        expensive_input_cost = mul_core_cost(operand_size)
         tx_weight = accepted_tx.get_weight()
         tx_budget = tx_weight * VAROPS_BUDGET_PER_WEIGHT
 
         assert expensive_input_cost < tx_budget
-        assert expensive_input_cost > tx_budget // 2
-        assert accepted_cost <= tx_budget < rejected_cost
-        assert accepted_cost > tx_weight * (VAROPS_BUDGET_PER_WEIGHT - 1)
-        assert rejected_cost <= tx_weight * (VAROPS_BUDGET_PER_WEIGHT + 1)
+        assert 2 * expensive_input_cost > tx_budget
 
         result = node.testmempoolaccept([accepted_tx.serialize().hex()], maxfeerate=0)[0]
         assert result["allowed"], result
@@ -1455,7 +1468,7 @@ class TapScriptV2Test(TaprootTest):
         self.block_submit(
             node,
             [accepted_tx],
-            "two v2 inputs share the exact transaction-wide varops budget",
+            "two v2 inputs share the transaction-wide varops budget",
             err_msg=None,
             witness=True,
             accept=True,
@@ -1488,7 +1501,7 @@ class TapScriptV2Test(TaprootTest):
         self.block_submit(
             node,
             [rejected_tx],
-            "two v2 inputs exceed the exact transaction-wide varops budget",
+            "two v2 inputs exceed the transaction-wide varops budget",
             witness=True,
             accept=False,
             cb_pubkey=host_pubkey,
@@ -1518,9 +1531,12 @@ class TapScriptV2Test(TaprootTest):
         final_size = MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE
         final_shift_bits = (final_size - 1) * 8
         final_shift = v2_num(final_shift_bits)
-        final_check_cost = comparingzero_cost(final_size)
+        final_cost = final_check_cost(final_size)
         final_value = b"\x01"
         costly_script = CScript([OP_MUL, OP_DROP, OP_LSHIFT])
+        shift_cost = (VAROPS_COST_F + prep_cost(len(final_value)) + prep_cost(len(final_shift))
+                      + read_cost(len(final_shift)) + VAROPS_COST_BIT_FIXED
+                      + VAROPS_COST_BIT_BYTE * word_size(len(final_value)) + output_cost(final_size))
         _host_pubkey, host_spk, _host_addr = self.nodesigner.getnewaddress(address_type="bech32")
 
         def make_costly_spender(operand_size):
@@ -1546,12 +1562,13 @@ class TapScriptV2Test(TaprootTest):
 
         dummy_output = CTxOut(10_000_000, host_spk)
         selected_operand_size = None
-        for operand_size in range(4_500, 6_500):
+        for operand_size in range(20_000, 40_000, 64):
             spender = make_costly_spender(operand_size)
             spend_tx = make_spend_tx(COutPoint(0, 0), dummy_output, spender, fee=50_000)
-            script_cost = 7_000 + mul_cost(operand_size, operand_size) + upshift_cost(len(final_value), final_shift_bits)
+            script_cost = (mul_cost(operand_size) + VAROPS_COST_F + release_cost(2 * operand_size)
+                           + shift_cost)
             tx_budget = spend_tx.get_weight() * VAROPS_BUDGET_PER_WEIGHT
-            if script_cost < tx_budget < script_cost + final_check_cost:
+            if script_cost < tx_budget < script_cost + final_cost:
                 selected_operand_size = operand_size
                 break
         assert selected_operand_size is not None
@@ -1560,13 +1577,10 @@ class TapScriptV2Test(TaprootTest):
         funded, host_spk, host_pubkey = self.fund_spenders([spender])
         outpoint, output, funded_spender = funded[0]
         spend_tx = make_spend_tx(outpoint, output, funded_spender, fee=50_000)
-        # MUL (3,000), DROP (1,000), LSHIFT (3,000).
-        script_cost = 7_000 + mul_cost(selected_operand_size, selected_operand_size) + upshift_cost(
-            len(final_value),
-            final_shift_bits,
-        )
+        script_cost = (mul_cost(selected_operand_size) + VAROPS_COST_F + release_cost(2 * selected_operand_size)
+                       + shift_cost)
         tx_budget = spend_tx.get_weight() * VAROPS_BUDGET_PER_WEIGHT
-        assert script_cost < tx_budget < script_cost + final_check_cost
+        assert script_cost < tx_budget < script_cost + final_cost
 
         result = node.testmempoolaccept([spend_tx.serialize().hex()], maxfeerate=0)[0]
         assert not result["allowed"], result

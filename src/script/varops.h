@@ -14,47 +14,63 @@
 #include <limits>
 #include <optional>
 
+class ValtypeStack;
+
 namespace varops {
 
-// Fixed cost of one logical opcode execution. At 10,000 budget units per weight
-// unit, this caps fixed-cost opcode density at eight executions per weight unit.
-// Data-dependent costs are additional.
-static constexpr uint64_t COST_PER_OPCODE = 1'250;
-static constexpr uint64_t FRAGMENT_DEFINE_COST = COST_PER_OPCODE;
-static constexpr uint64_t FRAGMENT_REF_COST = 4'000;
-static constexpr uint64_t FRAGMENT_BODY_PER_BYTE = 3;
+/** Whole-varop prices of the BIP 440 work classes. Byte arguments are logical sizes. */
+constexpr uint64_t WordSpan(size_t bytes) { return (static_cast<uint64_t>(bytes) + 7) / 8 * 8; }
+constexpr uint64_t FixedOpcodeCost() { return 382; }
+constexpr uint64_t PrepCost(size_t bytes) { return 233 + WordSpan(bytes); }
+constexpr uint64_t OutputCost(size_t bytes) { return 1209 + 4 * WordSpan(bytes); }
+constexpr uint64_t CopyCost(size_t bytes) { return 668 + 2 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t ReleaseCost(size_t bytes) { return bytes == 0 ? 0 : 963 + 3 * WordSpan(bytes); }
+// A shortened in-place value retains its allocation.
+constexpr uint64_t DiscardCost(size_t bytes) { return bytes; }
+constexpr uint64_t ReadCost(size_t bytes) { return 89 + 3 * WordSpan(bytes); }
+constexpr uint64_t ArithCost(size_t bytes) { return 51 + 4 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t BitCost(size_t bytes) { return 74 + static_cast<uint64_t>(bytes); }
+constexpr uint64_t MoveCost(size_t entries) { return 255 + 18 * static_cast<uint64_t>(entries); }
+constexpr uint64_t MulRowCost(size_t limbs) { return 34 + 14 * static_cast<uint64_t>(limbs); }
+constexpr uint64_t DivCoreCost(size_t steps, size_t divisor_limbs)
+{
+    return 296 + 303 * static_cast<uint64_t>(steps) * divisor_limbs;
+}
+constexpr uint64_t Sha256Cost(size_t bytes) { return 2943 + 48 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t Ripemd160Cost(size_t bytes) { return 2555 + 40 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t Sha1Cost(size_t bytes) { return 1516 + 25 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t SignatureCost() { return 500'000; }
+constexpr uint64_t TweakCost() { return 140839; }
+constexpr uint64_t SighashCost() { return 3173; }
+constexpr uint64_t TxSelectCost(size_t items) { return 3234 + 645 * static_cast<uint64_t>(items); }
+constexpr uint64_t MacroDecodeCost(size_t bytes) { return 2 + 55 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t FinalCost() { return 1147; }
+constexpr uint64_t ScalarOutputCost() { return OutputCost(8); }
 
-constexpr uint64_t ExecutionCost(opcodetype opcode)
+// The quadratic charge dominates. Both numeric operands are at most 4 MB.
+constexpr uint64_t MAX_V2_LIMBS{WordSpan(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) / 8};
+static_assert(MAX_V2_LIMBS <=
+              (std::numeric_limits<uint64_t>::max() - 296) / 303 / MAX_V2_LIMBS);
+
+/** Hash work only; result construction is charged separately. */
+constexpr uint64_t HashCost(opcodetype opcode, size_t input_bytes)
 {
     switch (opcode) {
-    case OP_CALLMACRO:
-        return FRAGMENT_REF_COST;
-    case OP_MUL:
-    case OP_DIV:
-    case OP_MOD:
-    case OP_RIPEMD160:
-    case OP_SHA1:
-    case OP_HASH256:
-    case OP_0NOTEQUAL:
-    case OP_NUMEQUAL:
-    case OP_NUMEQUALVERIFY:
-    case OP_NUMNOTEQUAL:
-    case OP_LESSTHAN:
-    case OP_GREATERTHAN:
-    case OP_LESSTHANOREQUAL:
-    case OP_GREATERTHANOREQUAL:
-    case OP_BOOLAND:
-    case OP_BOOLOR:
-    case OP_WITHIN:
-    case OP_EQUALVERIFY:
-    case OP_LSHIFT:
-    case OP_RSHIFT:
-        return 3'000;
-    case OP_HASH160:
-        return 4'000;
-    default:
-        return COST_PER_OPCODE;
+    case OP_SHA256: return Sha256Cost(input_bytes);
+    case OP_HASH160: return Sha256Cost(input_bytes) + Ripemd160Cost(32);
+    case OP_RIPEMD160: return Ripemd160Cost(input_bytes);
+    case OP_SHA1: return Sha1Cost(input_bytes);
+    case OP_HASH256: return Sha256Cost(input_bytes) + Sha256Cost(32);
+    default: return 0;
     }
+}
+
+// Every logical opcode pays F before data-dependent work.
+static constexpr uint64_t COST_PER_OPCODE = FixedOpcodeCost();
+
+constexpr uint64_t ExecutionCost(opcodetype)
+{
+    return FixedOpcodeCost();
 }
 
 /** Thread-safe varops budget shared by script checks for one transaction. */
@@ -95,6 +111,71 @@ public:
     }
 };
 
+/**
+ * Accumulate the whole-varop charges for one logical opcode. Spend() deducts
+ * only the amount added since its previous call.
+ */
+class Meter final
+{
+private:
+    uint64_t m_total{0};
+    uint64_t m_deducted{0};
+
+public:
+    void Add(uint64_t added)
+    {
+        m_total += added;
+    }
+
+    [[nodiscard]] bool Spend(Budget& budget)
+    {
+        const uint64_t deduction{m_total - m_deducted};
+        if (!budget.Spend(deduction)) return false;
+        m_deducted = m_total;
+        return true;
+    }
+
+    uint64_t Total() const { return m_total; }
+};
+
+/**
+ * Benchmark-only observation hook. Runtime code reports completed logical
+ * charges; the benchmark derives expected feature counts independently.
+ */
+class CostAudit
+{
+public:
+    virtual ~CostAudit() = default;
+    virtual void BeginOpcode(opcodetype opcode, const ValtypeStack& stack,
+                             const ValtypeStack& altstack, opcodetype target) = 0;
+    virtual void EndOpcode(opcodetype opcode, const ValtypeStack& stack,
+                           const ValtypeStack& altstack, opcodetype target,
+                           uint64_t actual_charge) = 0;
+    virtual void StandaloneCharge(opcodetype opcode, uint64_t feature_units,
+                                  uint64_t actual_charge) = 0;
+    virtual void FinalCheck(size_t value_size, uint64_t actual_charge) = 0;
+};
+
+inline thread_local CostAudit* g_cost_audit{nullptr};
+
+class ScopedCostAudit final
+{
+private:
+    CostAudit* m_previous;
+
+public:
+    explicit ScopedCostAudit(CostAudit* audit)
+        : m_previous{g_cost_audit}
+    {
+        g_cost_audit = audit;
+    }
+
+    ~ScopedCostAudit() { g_cost_audit = m_previous; }
+
+    ScopedCostAudit(const ScopedCostAudit&) = delete;
+    ScopedCostAudit& operator=(const ScopedCostAudit&) = delete;
+};
+
 // Varops cost categories per byte:
 // Fast operations: comparing bytes, comparing bytes against zero, and zeroing bytes
 static constexpr uint64_t COST_FAST = 2;
@@ -121,14 +202,13 @@ inline constexpr uint64_t TxBudget(int64_t weight)
     return static_cast<uint64_t>(weight) * BUDGET_PER_WEIGHT_UNIT;
 }
 
-// BIP 440: A nonempty signature attempt's fixed execution cost plus SIGCHECK
-// totals BUDGET_PER_WEIGHT_UNIT * VALIDATION_WEIGHT_PER_SIGOP_PASSED
-// (10,000 * 50 = 500,000 varops units).
-static constexpr uint64_t COST_PER_SIGOP = BUDGET_PER_WEIGHT_UNIT * VALIDATION_WEIGHT_PER_SIGOP_PASSED;
+// The signature charge is in addition to opcode dispatch and message hashing.
+static constexpr uint64_t COST_PER_SIGOP = SignatureCost();
+static_assert(COST_PER_SIGOP == BUDGET_PER_WEIGHT_UNIT * VALIDATION_WEIGHT_PER_SIGOP_PASSED);
 
-constexpr uint64_t SigcheckCost(opcodetype opcode)
+constexpr uint64_t SigcheckCost(opcodetype)
 {
-    return COST_PER_SIGOP - ExecutionCost(opcode);
+    return COST_PER_SIGOP;
 }
 
 namespace detail {
@@ -140,8 +220,7 @@ constexpr uint64_t ToCostSize(size_t size)
 
 constexpr uint64_t WordSize(size_t size)
 {
-    const uint64_t s{ToCostSize(size)};
-    return (s + 7) / 8 * 8;
+    return WordSpan(size);
 }
 
 constexpr uint64_t MaxWordSize(size_t size1, size_t size2)

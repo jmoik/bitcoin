@@ -4,11 +4,13 @@
 
 #include <bench/nanobench.h>
 #include <consensus/consensus.h>
+#include <consensus/validation.h>
 #include <crypto/sha256.h>
 #if defined(__linux__)
 #include <features.h> // IWYU pragma: keep
 #endif
 #include <key.h>
+#include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
 #include <script/script.h>
@@ -65,6 +67,49 @@
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
 
+// The audit counts coefficients separately from primitive composition. Derive
+// these views from the single consensus formulas rather than duplicating prices.
+namespace varops {
+constexpr uint64_t COST_F{FixedOpcodeCost()};
+constexpr uint64_t COST_PREP_FIXED{PrepCost(0)};
+constexpr uint64_t COST_PREP_BYTE{(PrepCost(8) - PrepCost(0)) / 8};
+constexpr uint64_t COST_OUTPUT_FIXED{OutputCost(0)};
+constexpr uint64_t COST_OUTPUT_BYTE{(OutputCost(8) - OutputCost(0)) / 8};
+constexpr uint64_t COST_COPY_FIXED{CopyCost(0)};
+constexpr uint64_t COST_COPY_BYTE{CopyCost(1) - CopyCost(0)};
+constexpr uint64_t COST_RELEASE_FIXED{2 * ReleaseCost(8) - ReleaseCost(16)};
+constexpr uint64_t COST_RELEASE_BYTE{(ReleaseCost(16) - ReleaseCost(8)) / 8};
+constexpr uint64_t COST_RELEASE_DISCARDED_BYTE{DiscardCost(1)};
+constexpr uint64_t COST_READ_FIXED{ReadCost(0)};
+constexpr uint64_t COST_READ{(ReadCost(8) - ReadCost(0)) / 8};
+constexpr uint64_t COST_ARITH_FIXED{ArithCost(0)};
+constexpr uint64_t COST_ARITH_BYTE{ArithCost(1) - ArithCost(0)};
+constexpr uint64_t COST_BIT_FIXED{BitCost(0)};
+constexpr uint64_t COST_BIT{BitCost(1) - BitCost(0)};
+constexpr uint64_t COST_MOVE_FIXED{MoveCost(0)};
+constexpr uint64_t COST_MOVE{MoveCost(1) - MoveCost(0)};
+constexpr uint64_t COST_MUL_ROW_FIXED{MulRowCost(0)};
+constexpr uint64_t COST_MUL_ROW{MulRowCost(1) - MulRowCost(0)};
+constexpr uint64_t COST_DIV_FIXED{DivCoreCost(0, 0)};
+constexpr uint64_t COST_DIV_STEP{DivCoreCost(1, 0) - DivCoreCost(0, 0)};
+constexpr uint64_t COST_DIV_CELL{DivCoreCost(1, 1) - DivCoreCost(1, 0)};
+constexpr uint64_t COST_H256_FIXED{Sha256Cost(0)};
+constexpr uint64_t COST_H256_BYTE{Sha256Cost(1) - Sha256Cost(0)};
+constexpr uint64_t COST_H160_FIXED{Ripemd160Cost(0)};
+constexpr uint64_t COST_H160_BYTE{Ripemd160Cost(1) - Ripemd160Cost(0)};
+constexpr uint64_t COST_H1_FIXED{Sha1Cost(0)};
+constexpr uint64_t COST_H1_BYTE{Sha1Cost(1) - Sha1Cost(0)};
+constexpr uint64_t COST_SIG{SignatureCost()};
+constexpr uint64_t COST_TWEAK{TweakCost()};
+constexpr uint64_t COST_SIGHASH{SighashCost()};
+constexpr uint64_t COST_SELECT_FIXED{TxSelectCost(0)};
+constexpr uint64_t COST_SELECT_ITEM{TxSelectCost(1) - TxSelectCost(0)};
+constexpr uint64_t COST_DECODE_FIXED{MacroDecodeCost(0)};
+constexpr uint64_t COST_DECODE{MacroDecodeCost(1) - MacroDecodeCost(0)};
+constexpr uint64_t COST_FINAL{FinalCost()};
+constexpr uint64_t COST_SCALAR_OUTPUT{ScalarOutputCost()};
+} // namespace varops
+
 namespace {
 
 constexpr size_t SCRIPT_BYTES{MAX_BLOCK_WEIGHT};
@@ -75,7 +120,6 @@ constexpr uint64_t MAX_FIXTURE_POOL_BYTES{512U * 1024U * 1024U};
 constexpr size_t MAX_THREE_WAY_ELEMENT_SIZE{(MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - 1) / 6};
 constexpr int SIGNATURES_PER_BLOCK{80'000};
 constexpr int SCHNORR_BASELINE_SAMPLES{7};
-constexpr double PROMOTION_THRESHOLD{0.40};
 constexpr uint64_t ROUND_SEED{0x475352};
 constexpr size_t CLI_PROGRESS_INTERVAL{50};
 constexpr script_verify_flags BENCH_SCRIPT_VERIFY_FLAGS{
@@ -107,7 +151,6 @@ enum class SaturationExpectation {
 
 enum class TimingStage {
     SCHNORR_BASELINE,
-    DISCOVERY,
     STABLE,
 };
 
@@ -122,9 +165,18 @@ using SaturationBoundaries = std::array<SaturationBoundary, 2>;
 struct Options {
     std::set<opcodetype> selected_opcodes;
     int stable_rounds{5};
+    uint32_t sample_budget_percent{100};
     bool silent{false}, list_opcodes{false};
+    bool verify_costs{false};
     std::string output_file;
+    std::string coverage_manifest;
+    std::string case_filter;
 };
+
+static uint64_t SampleBudget(const Options& options)
+{
+    return TOTAL_VAROPS_BUDGET * options.sample_budget_percent / 100;
+}
 
 struct CryptoFixture {
     ECC_Context ecc_context{};
@@ -151,10 +203,21 @@ struct CryptoFixture {
     }
 };
 
+struct TransactionFixture {
+    // Script-only OP_TX context; this benchmark does not verify UTXO commitments.
+    const CTransaction tx;
+    const std::vector<CTxOut> spent_outputs;
+    const valtype control_block;
+
+    TransactionFixture(const CMutableTransaction& mutable_tx, valtype control_block_in)
+        : tx{mutable_tx}, spent_outputs(tx.vin.size()), control_block{std::move(control_block_in)} {}
+};
+
 class BenchSignatureChecker final : public BaseSignatureChecker
 {
 public:
-    explicit BenchSignatureChecker(const CryptoFixture& fixture) : m_fixture{fixture} {}
+    explicit BenchSignatureChecker(const CryptoFixture& fixture, const TransactionFixture* transaction = nullptr)
+        : m_fixture{fixture}, m_transaction{transaction} {}
 
     bool CheckSchnorrSignature(std::span<const unsigned char> sig,
                                std::span<const unsigned char> pubkey, SigVersion,
@@ -170,8 +233,17 @@ public:
     bool CheckLockTime(const CScriptNum&) const override { return true; }
     bool CheckSequence(const CScriptNum&) const override { return true; }
 
+    std::optional<ScriptTransactionData> GetTransactionData() const override
+    {
+        if (!m_transaction) return std::nullopt;
+        const CTransaction& tx{m_transaction->tx};
+        return ScriptTransactionData{static_cast<uint32_t>(tx.version), tx.vin, tx.vout,
+                                     tx.nLockTime, 0, m_transaction->spent_outputs};
+    }
+
 private:
     const CryptoFixture& m_fixture;
+    const TransactionFixture* m_transaction;
 };
 
 using StackFactory = std::function<std::vector<valtype>(const CryptoFixture&)>;
@@ -185,6 +257,9 @@ struct CaseOptions {
     std::optional<uint64_t> expected_varops_per_repeat;
     std::optional<SaturationExpectation> expected_saturation;
     std::string sequence_label;
+    std::optional<size_t> empty_witness_items;
+    std::optional<bool> op_tx_collate;
+    std::optional<size_t> op_tx_result_values;
 };
 
 struct CaseSpec {
@@ -192,6 +267,8 @@ struct CaseSpec {
     opcodetype opcode{OP_INVALIDOPCODE};
     std::string opcode_name, sequence_opcodes, operand_shape, operand_pattern;
     HeadlineRole role{HeadlineRole::DIAGNOSTIC};
+    // A newly legal v2 workload, which need not use a newly introduced opcode.
+    bool new_in_v2{false};
     ScriptError expected_error{SCRIPT_ERR_OK};
     RepeatMode repeat_mode{RepeatMode::MAX_SUCCESS};
     uint64_t fixed_repetitions{0}, max_repetitions{std::numeric_limits<uint64_t>::max()};
@@ -201,6 +278,9 @@ struct CaseSpec {
     std::string saturation_hint;
     std::optional<uint64_t> expected_varops_per_repeat;
     std::optional<SaturationExpectation> expected_saturation;
+    std::optional<size_t> empty_witness_items;
+    std::optional<bool> op_tx_collate;
+    std::optional<size_t> op_tx_result_values;
 };
 
 struct MaterializedCase {
@@ -209,6 +289,7 @@ struct MaterializedCase {
     CScript script;
     uint64_t repetitions{0}, varops_per_repeat{0};
     std::string saturation;
+    std::shared_ptr<const TransactionFixture> transaction;
 };
 
 struct EvalOutcome {
@@ -217,12 +298,559 @@ struct EvalOutcome {
     uint64_t varops_consumed{0};
 };
 
+static uint64_t IndependentWordSize(size_t size)
+{
+    return (size + 7) / 8 * 8;
+}
+
+static uint64_t IndependentCharge(unsigned __int128 cost)
+{
+    if (cost > std::numeric_limits<uint64_t>::max()) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return static_cast<uint64_t>(cost);
+}
+
+static void IndependentAdd(unsigned __int128& q, uint64_t coefficient, uint64_t units = 1)
+{
+    q += static_cast<unsigned __int128>(coefficient) * units;
+}
+
+static void IndependentPrep(unsigned __int128& q, size_t size)
+{
+    IndependentAdd(q, varops::COST_PREP_FIXED);
+    IndependentAdd(q, varops::COST_PREP_BYTE, IndependentWordSize(size));
+}
+
+static void IndependentRead(unsigned __int128& q, size_t size)
+{
+    IndependentAdd(q, varops::COST_READ_FIXED);
+    IndependentAdd(q, varops::COST_READ, IndependentWordSize(size));
+}
+
+static void IndependentProduced(unsigned __int128& q, size_t size)
+{
+    IndependentAdd(q, varops::COST_OUTPUT_FIXED);
+    IndependentAdd(q, varops::COST_OUTPUT_BYTE, IndependentWordSize(size));
+}
+
+static uint64_t IndependentDecodeU64(const valtype& value, uint64_t maximum)
+{
+    uint64_t result{0};
+    const size_t limit{std::min<size_t>(value.size(), sizeof(result))};
+    for (size_t i{0}; i < limit; ++i) result |= uint64_t{value[i]} << (8 * i);
+    if (value.size() > sizeof(result) &&
+        std::ranges::any_of(value.begin() + sizeof(result), value.end(),
+                            [](unsigned char byte) { return byte != 0; })) {
+        return maximum;
+    }
+    return std::min(result, maximum);
+}
+
+static const valtype& IndependentTop(const ValtypeStack& stack, size_t depth = 0)
+{
+    return stack.at(stack.size() - depth - 1);
+}
+
+class IndependentCostAudit final : public varops::CostAudit
+{
+    enum class Deferred {
+        NONE,
+        PRODUCED,
+        B_COPY_OUTPUT,
+        SUBSTR_OUTPUT,
+        IFDUP,
+        OP_TX_OUTPUT,
+    };
+
+    struct Pending {
+        opcodetype opcode{OP_INVALIDOPCODE};
+        opcodetype target{OP_INVALIDOPCODE};
+        unsigned __int128 q{0};
+        Deferred deferred{Deferred::NONE};
+        size_t before_size{0};
+        size_t input_size{0};
+    };
+
+    const CaseSpec& m_spec;
+    std::optional<Pending> m_pending;
+    std::string m_mismatch;
+    uint64_t m_expected_total{0};
+    uint64_t m_actual_total{0};
+
+    void Compare(opcodetype opcode, uint64_t expected, uint64_t actual)
+    {
+        m_expected_total += expected;
+        m_actual_total += actual;
+        if (m_mismatch.empty() && expected != actual) {
+            m_mismatch = strprintf("%s: independent=%u runtime=%u",
+                                   GetOpName(opcode), expected, actual);
+        }
+    }
+
+    static void AddCopy(unsigned __int128& q, size_t size)
+    {
+        IndependentAdd(q, varops::COST_COPY_FIXED);
+        IndependentAdd(q, varops::COST_COPY_BYTE, size);
+    }
+
+    static void AddRelease(unsigned __int128& q, size_t size)
+    {
+        if (size == 0) return;
+        IndependentAdd(q, varops::COST_RELEASE_FIXED);
+        IndependentAdd(q, varops::COST_RELEASE_BYTE, IndependentWordSize(size));
+    }
+
+    static void AddMove(unsigned __int128& q, size_t entries)
+    {
+        IndependentAdd(q, varops::COST_MOVE_FIXED);
+        IndependentAdd(q, varops::COST_MOVE, entries);
+    }
+
+public:
+    explicit IndependentCostAudit(const CaseSpec& spec) : m_spec{spec} {}
+
+    void BeginOpcode(opcodetype opcode, const ValtypeStack& stack,
+                     const ValtypeStack& altstack, opcodetype target) override
+    {
+        if (m_pending && m_mismatch.empty()) {
+            m_mismatch = "nested candidate audit opcode";
+        }
+        Pending pending{opcode, target, 0, Deferred::NONE, stack.size(), 0};
+        IndependentAdd(pending.q, varops::COST_F);
+
+        if (opcode >= OP_0 && opcode <= OP_PUSHDATA4) {
+            pending.deferred = Deferred::B_COPY_OUTPUT;
+        } else if (opcode >= OP_1NEGATE && opcode <= OP_16) {
+            IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+        } else {
+            switch (opcode) {
+            case OP_NOP: case OP_IF: case OP_NOTIF: case OP_ELSE: case OP_ENDIF:
+            case OP_CODESEPARATOR:
+                break;
+            case OP_TOALTSTACK: case OP_FROMALTSTACK:
+                AddMove(pending.q, 1);
+                break;
+            case OP_SWAP:
+                AddMove(pending.q, 2);
+                break;
+            case OP_ROT:
+                AddMove(pending.q, 3);
+                break;
+            case OP_2SWAP:
+                AddMove(pending.q, 4);
+                break;
+            case OP_2ROT:
+                AddMove(pending.q, 6);
+                break;
+            case OP_DROP:
+                AddRelease(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_2DROP:
+                AddRelease(pending.q, IndependentTop(stack, 1).size());
+                AddRelease(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_NIP:
+                AddRelease(pending.q, IndependentTop(stack, 1).size());
+                break;
+            case OP_VERIFY:
+                IndependentPrep(pending.q, IndependentTop(stack).size());
+                IndependentRead(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_DUP:
+                AddCopy(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_2DUP:
+                AddCopy(pending.q, IndependentTop(stack, 1).size());
+                AddCopy(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_3DUP:
+                AddCopy(pending.q, IndependentTop(stack, 2).size());
+                AddCopy(pending.q, IndependentTop(stack, 1).size());
+                AddCopy(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_OVER:
+                AddCopy(pending.q, IndependentTop(stack, 1).size());
+                break;
+            case OP_2OVER:
+                AddCopy(pending.q, IndependentTop(stack, 3).size());
+                AddCopy(pending.q, IndependentTop(stack, 2).size());
+                break;
+            case OP_TUCK:
+                AddCopy(pending.q, IndependentTop(stack).size());
+                break;
+            case OP_IFDUP: {
+                const size_t size{IndependentTop(stack).size()};
+                IndependentPrep(pending.q, size);
+                IndependentRead(pending.q, size);
+                IndependentProduced(pending.q, size);
+                pending.input_size = size;
+                pending.deferred = Deferred::IFDUP;
+                break;
+            }
+            case OP_DEPTH: case OP_SIZE:
+                IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                break;
+            case OP_PICK: case OP_ROLL: {
+                const valtype& depth_value{IndependentTop(stack)};
+                IndependentPrep(pending.q, depth_value.size());
+                IndependentRead(pending.q, depth_value.size());
+                const uint64_t depth{IndependentDecodeU64(depth_value, stack.size() - 1)};
+                if (opcode == OP_ROLL) {
+                    IndependentAdd(pending.q, varops::COST_MOVE_FIXED);
+                    IndependentAdd(pending.q, varops::COST_MOVE, depth);
+                } else {
+                    pending.deferred = Deferred::B_COPY_OUTPUT;
+                }
+                break;
+            }
+            case OP_EQUAL: case OP_EQUALVERIFY: {
+                const size_t left{IndependentTop(stack, 1).size()};
+                const size_t right{IndependentTop(stack).size()};
+                if (left == right) IndependentRead(pending.q, left);
+                IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                break;
+            }
+            case OP_1ADD: case OP_1SUB: case OP_NOT: case OP_0NOTEQUAL: {
+                const size_t size{IndependentTop(stack).size()};
+                IndependentPrep(pending.q, size);
+                if (opcode == OP_NOT || opcode == OP_0NOTEQUAL) {
+                    IndependentRead(pending.q, size);
+                    IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                } else {
+                    IndependentAdd(pending.q, varops::COST_ARITH_FIXED);
+                    IndependentAdd(pending.q, varops::COST_ARITH_BYTE,
+                                   IndependentWordSize(size));
+                    pending.deferred = Deferred::PRODUCED;
+                }
+                break;
+            }
+            case OP_ADD: case OP_SUB: case OP_BOOLAND: case OP_BOOLOR:
+            case OP_NUMEQUAL: case OP_NUMEQUALVERIFY: case OP_NUMNOTEQUAL:
+            case OP_LESSTHAN: case OP_GREATERTHAN: case OP_LESSTHANOREQUAL:
+            case OP_GREATERTHANOREQUAL: case OP_MIN: case OP_MAX: {
+                const size_t left{IndependentTop(stack, 1).size()};
+                const size_t right{IndependentTop(stack).size()};
+                const uint64_t words{std::max(IndependentWordSize(left),
+                                              IndependentWordSize(right))};
+                IndependentPrep(pending.q, left);
+                IndependentPrep(pending.q, right);
+                if (opcode == OP_ADD || opcode == OP_SUB) {
+                    IndependentAdd(pending.q, varops::COST_ARITH_FIXED);
+                    IndependentAdd(pending.q, varops::COST_ARITH_BYTE, words);
+                    pending.deferred = Deferred::PRODUCED;
+                } else if (opcode == OP_BOOLAND || opcode == OP_BOOLOR) {
+                    IndependentRead(pending.q, left);
+                    IndependentRead(pending.q, right);
+                    IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                } else if (opcode == OP_MIN || opcode == OP_MAX) {
+                    IndependentAdd(pending.q, varops::COST_READ_FIXED);
+                    IndependentAdd(pending.q, varops::COST_READ, words);
+                    AddRelease(pending.q, std::max(left, right));
+                    pending.deferred = Deferred::PRODUCED;
+                } else {
+                    IndependentAdd(pending.q, varops::COST_READ_FIXED);
+                    IndependentAdd(pending.q, varops::COST_READ, words);
+                    IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                }
+                break;
+            }
+            case OP_WITHIN: {
+                const size_t value{IndependentTop(stack, 2).size()};
+                const size_t minimum{IndependentTop(stack, 1).size()};
+                const size_t maximum{IndependentTop(stack).size()};
+                IndependentPrep(pending.q, value);
+                IndependentPrep(pending.q, minimum);
+                IndependentPrep(pending.q, maximum);
+                IndependentAdd(pending.q, varops::COST_READ_FIXED, 2);
+                IndependentAdd(pending.q, varops::COST_READ,
+                               std::max(IndependentWordSize(value), IndependentWordSize(minimum)) +
+                                   std::max(IndependentWordSize(value), IndependentWordSize(maximum)));
+                IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                break;
+            }
+            case OP_RIPEMD160: case OP_SHA1: case OP_SHA256:
+            case OP_HASH160: case OP_HASH256: {
+                const size_t input{IndependentTop(stack).size()};
+                const size_t output{opcode == OP_SHA256 || opcode == OP_HASH256 ? 32U : 20U};
+                if (opcode == OP_SHA1) {
+                    IndependentAdd(pending.q, varops::COST_H1_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H1_BYTE, input);
+                } else if (opcode == OP_RIPEMD160) {
+                    IndependentAdd(pending.q, varops::COST_H160_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H160_BYTE, input);
+                } else if (opcode == OP_SHA256) {
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input);
+                } else if (opcode == OP_HASH160) {
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input);
+                    IndependentAdd(pending.q, varops::COST_H160_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H160_BYTE, 32);
+                } else {
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED, 2);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input + 32);
+                }
+                IndependentAdd(pending.q, varops::COST_COPY_FIXED);
+                IndependentAdd(pending.q, varops::COST_COPY_BYTE, output);
+                break;
+            }
+            case OP_CHECKSIG: case OP_CHECKSIGVERIFY: {
+                const valtype& signature{IndependentTop(stack, 1)};
+                if (!signature.empty()) {
+                    IndependentAdd(pending.q, varops::COST_SIGHASH);
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
+                    IndependentAdd(pending.q, varops::COST_SIG);
+                }
+                IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                break;
+            }
+            case OP_CHECKSIGADD: {
+                const valtype& signature{IndependentTop(stack, 2)};
+                const size_t number_size{IndependentTop(stack, 1).size()};
+                IndependentPrep(pending.q, number_size);
+                if (!signature.empty()) {
+                    IndependentAdd(pending.q, varops::COST_SIGHASH);
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
+                    IndependentAdd(pending.q, varops::COST_SIG);
+                    IndependentAdd(pending.q, varops::COST_ARITH_FIXED);
+                    IndependentAdd(pending.q, varops::COST_ARITH_BYTE,
+                                   IndependentWordSize(number_size));
+                }
+                pending.deferred = Deferred::PRODUCED;
+                break;
+            }
+            case OP_CHECKSIGFROMSTACK: {
+                const valtype& signature{IndependentTop(stack, 2)};
+                if (!signature.empty()) {
+                    IndependentAdd(pending.q, varops::COST_H256_FIXED, 2);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE,
+                                   IndependentTop(stack, 1).size() + 96);
+                    IndependentAdd(pending.q, varops::COST_SIG);
+                }
+                IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
+                break;
+            }
+            case OP_TWEAKADD:
+                IndependentAdd(pending.q, varops::COST_TWEAK);
+                AddCopy(pending.q, 32);
+                break;
+            case OP_CHECKLOCKTIMEVERIFY: case OP_CHECKSEQUENCEVERIFY: {
+                const size_t size{IndependentTop(stack).size()};
+                IndependentPrep(pending.q, size);
+                IndependentRead(pending.q, size);
+                IndependentProduced(pending.q, size);
+                break;
+            }
+            case OP_BYTEREV:
+                IndependentAdd(pending.q, varops::COST_BIT_FIXED);
+                IndependentAdd(pending.q, varops::COST_BIT,
+                               IndependentTop(stack).size());
+                break;
+            case OP_CAT: {
+                const valtype& left{IndependentTop(stack, 1)};
+                const valtype& right{IndependentTop(stack)};
+                IndependentAdd(pending.q, varops::COST_COPY_FIXED);
+                IndependentAdd(pending.q, varops::COST_COPY_BYTE,
+                               left.size() + right.size());
+                break;
+            }
+            case OP_SUBSTR:
+                AddRelease(pending.q, IndependentTop(stack, 2).size());
+                IndependentPrep(pending.q, IndependentTop(stack, 1).size());
+                IndependentRead(pending.q, IndependentTop(stack, 1).size());
+                AddRelease(pending.q, IndependentTop(stack, 1).size());
+                IndependentPrep(pending.q, IndependentTop(stack).size());
+                IndependentRead(pending.q, IndependentTop(stack).size());
+                AddRelease(pending.q, IndependentTop(stack).size());
+                pending.deferred = Deferred::SUBSTR_OUTPUT;
+                break;
+            case OP_LEFT: {
+                const size_t data_size{IndependentTop(stack, 1).size()};
+                const valtype& offset_value{IndependentTop(stack)};
+                IndependentPrep(pending.q, offset_value.size());
+                IndependentRead(pending.q, offset_value.size());
+                IndependentAdd(pending.q, varops::COST_RELEASE_DISCARDED_BYTE,
+                               data_size - IndependentDecodeU64(offset_value, data_size));
+                break;
+            }
+            case OP_RIGHT: {
+                const size_t data_size{IndependentTop(stack, 1).size()};
+                const valtype& offset_value{IndependentTop(stack)};
+                const uint64_t offset{IndependentDecodeU64(offset_value, data_size)};
+                IndependentPrep(pending.q, offset_value.size());
+                IndependentRead(pending.q, offset_value.size());
+                IndependentAdd(pending.q, varops::COST_COPY_BYTE, offset);
+                IndependentAdd(pending.q, varops::COST_RELEASE_DISCARDED_BYTE,
+                               data_size - offset);
+                break;
+            }
+            case OP_INVERT: case OP_2MUL: case OP_2DIV: {
+                const size_t size{IndependentTop(stack).size()};
+                IndependentPrep(pending.q, size);
+                IndependentAdd(pending.q, varops::COST_BIT_FIXED);
+                IndependentAdd(pending.q, varops::COST_BIT,
+                               IndependentWordSize(size));
+                pending.deferred = Deferred::PRODUCED;
+                break;
+            }
+            case OP_AND: case OP_OR: case OP_XOR: case OP_MUL: case OP_DIV:
+            case OP_MOD: case OP_LSHIFT: case OP_RSHIFT: {
+                const size_t left{IndependentTop(stack, 1).size()};
+                const size_t right{IndependentTop(stack).size()};
+                const uint64_t left_words{IndependentWordSize(left)};
+                const uint64_t right_words{IndependentWordSize(right)};
+                IndependentPrep(pending.q, left);
+                IndependentPrep(pending.q, right);
+                if (opcode == OP_LSHIFT || opcode == OP_RSHIFT) {
+                    IndependentRead(pending.q, right);
+                    IndependentAdd(pending.q, varops::COST_BIT_FIXED);
+                    IndependentAdd(pending.q, varops::COST_BIT, left_words);
+                } else if (opcode == OP_MUL) {
+                    const uint64_t rows{std::max(left_words, right_words) / 8};
+                    const uint64_t row_limbs{std::min(left_words, right_words) / 8};
+                    IndependentAdd(pending.q, varops::COST_MUL_ROW_FIXED, rows);
+                    IndependentAdd(pending.q, varops::COST_MUL_ROW, rows * row_limbs);
+                    IndependentAdd(pending.q, varops::COST_ARITH_FIXED, rows);
+                    IndependentAdd(pending.q, varops::COST_ARITH_BYTE,
+                                   rows * (row_limbs + 1) * 8);
+                } else if (opcode == OP_DIV || opcode == OP_MOD) {
+                    const uint64_t left_limbs{left_words / 8};
+                    const uint64_t right_limbs{right_words / 8};
+                    const uint64_t steps{right_limbs == 1 ? left_limbs : (left_limbs > right_limbs ? left_limbs - right_limbs : 1)};
+                    IndependentAdd(pending.q, varops::COST_DIV_FIXED);
+                    IndependentAdd(pending.q, varops::COST_DIV_STEP, steps);
+                    IndependentAdd(pending.q, varops::COST_DIV_CELL,
+                                   steps * right_limbs);
+                    AddRelease(pending.q, std::max(left, right));
+                } else {
+                    IndependentAdd(pending.q, varops::COST_BIT_FIXED);
+                    IndependentAdd(pending.q, varops::COST_BIT,
+                                   std::max(left_words, right_words));
+                }
+                pending.deferred = Deferred::PRODUCED;
+                break;
+            }
+            case OP_TX:
+                if (!m_spec.empty_witness_items) {
+                    if (m_mismatch.empty()) m_mismatch = "OP_TX case lacks independent fixture metadata";
+                } else {
+                    IndependentAdd(pending.q, varops::COST_SELECT_FIXED);
+                    const uint64_t selected_items{*m_spec.empty_witness_items + 3};
+                    IndependentAdd(pending.q, varops::COST_SELECT_ITEM, selected_items);
+                    pending.deferred = Deferred::OP_TX_OUTPUT;
+                }
+                break;
+            default:
+                if (m_mismatch.empty()) {
+                    m_mismatch = "no independent formula for " + GetOpName(opcode);
+                }
+                break;
+            }
+        }
+        m_pending = std::move(pending);
+        (void)altstack;
+    }
+
+    void EndOpcode(opcodetype opcode, const ValtypeStack& stack,
+                   const ValtypeStack& altstack, opcodetype target,
+                   uint64_t actual_charge) override
+    {
+        if (!m_pending || m_pending->opcode != opcode || m_pending->target != target) {
+            if (m_mismatch.empty()) m_mismatch = "candidate audit begin/end mismatch";
+            return;
+        }
+        Pending pending{std::move(*m_pending)};
+        m_pending.reset();
+        switch (pending.deferred) {
+        case Deferred::NONE:
+            break;
+        case Deferred::PRODUCED:
+            IndependentProduced(pending.q, IndependentTop(stack).size());
+            break;
+        case Deferred::B_COPY_OUTPUT:
+            AddCopy(pending.q, IndependentTop(stack).size());
+            break;
+        case Deferred::SUBSTR_OUTPUT: {
+            const size_t output_size{IndependentTop(stack).size()};
+            AddCopy(pending.q, output_size);
+            break;
+        }
+        case Deferred::IFDUP:
+            if (stack.size() > pending.before_size) AddCopy(pending.q, pending.input_size);
+            break;
+        case Deferred::OP_TX_OUTPUT: {
+            const size_t outputs{m_spec.op_tx_collate.value_or(true) ? 1 :
+                m_spec.op_tx_result_values.value_or(*m_spec.empty_witness_items + 2)};
+            for (size_t i{0}; i < outputs; ++i) {
+                IndependentAdd(pending.q, varops::COST_COPY_BYTE, IndependentTop(stack, i).size());
+            }
+            break;
+        }
+        }
+        Compare(opcode, IndependentCharge(pending.q), actual_charge);
+        (void)altstack;
+    }
+
+    void StandaloneCharge(opcodetype opcode, uint64_t feature_units,
+                          uint64_t actual_charge) override
+    {
+        unsigned __int128 q{0};
+        if (opcode == OP_CALLMACRO) IndependentAdd(q, varops::COST_F);
+        IndependentAdd(q, varops::COST_DECODE_FIXED);
+        IndependentAdd(q, varops::COST_DECODE, feature_units);
+        Compare(opcode, IndependentCharge(q), actual_charge);
+    }
+
+    void FinalCheck(size_t value_size, uint64_t actual_charge) override
+    {
+        unsigned __int128 q{0};
+        IndependentPrep(q, value_size);
+        IndependentRead(q, value_size);
+        IndependentAdd(q, varops::COST_FINAL);
+        Compare(OP_INVALIDOPCODE, IndependentCharge(q), actual_charge);
+    }
+
+    bool Passed() const { return m_mismatch.empty() && !m_pending; }
+    const std::string& Mismatch() const { return m_mismatch; }
+    uint64_t ExpectedTotal() const { return m_expected_total; }
+    uint64_t ActualTotal() const { return m_actual_total; }
+};
+
+class ExecutedOpcodeCounter final : public varops::CostAudit
+{
+public:
+    uint64_t count{0};
+
+    void BeginOpcode(opcodetype, const ValtypeStack&,
+                     const ValtypeStack&, opcodetype) override
+    {
+        ++count;
+    }
+    void EndOpcode(opcodetype, const ValtypeStack&, const ValtypeStack&, opcodetype, uint64_t) override {}
+    void StandaloneCharge(opcodetype opcode, uint64_t, uint64_t) override
+    {
+        // A fragment call expands into body instructions but is itself charged
+        // before the cursor returns an opcode to the interpreter.
+        if (opcode == OP_CALLMACRO) ++count;
+    }
+    void FinalCheck(size_t, uint64_t) override {}
+};
+
 struct TimingSample {
     MeasurementMode mode{MeasurementMode::REALISTIC};
-    TimingStage stage{TimingStage::DISCOVERY};
+    TimingStage stage{TimingStage::STABLE};
     int round{0};
     size_t order{0};
     double wall_sec{0};
+};
+
+struct CaseSample {
+    EvalOutcome outcome;
+    TimingSample timing;
+    std::optional<uint64_t> executed_opcodes;
 };
 
 struct SampleStats {
@@ -234,7 +862,6 @@ struct FullVaropsResult {
     uint64_t script_bytes{0}, script_executions{0}, measured_varops{0};
     double scale{0}, median_sec{0}, mdape{0};
     std::optional<TimingStage> aggregate_stage;
-    std::optional<double> discovery_wall_sec;
     double wall_min_sec{0}, wall_max_sec{0};
 };
 
@@ -245,6 +872,7 @@ struct BenchResult {
     uint64_t varops_consumed{0};
     ExecutionDomain domain{ExecutionDomain::GSR_TAPSCRIPT_V2};
     HeadlineRole role{HeadlineRole::DIAGNOSTIC};
+    bool new_in_v2{false};
     std::string opcode_name;
     std::string sequence_opcodes;
     std::string operand_shape;
@@ -257,23 +885,16 @@ struct BenchResult {
     std::string saturation;
     uint64_t repetitions{0};
     uint64_t varops_per_repeat{0};
+    std::optional<uint64_t> executed_opcodes;
     std::optional<TimingStage> aggregate_stage;
-    std::optional<double> discovery_wall_sec;
     double wall_min_sec{0};
     double wall_max_sec{0};
-    bool promoted{false};
-    std::vector<std::string> promotion_reasons;
     std::vector<TimingSample> samples;
     FullVaropsResult full_varops;
 };
 
 struct CorpusCounts {
     size_t requested_opcodes{0}, generated_cases{0}, completed_cases{0};
-};
-
-struct PromotionSummary {
-    double promotion_cutoff_seconds{0};
-    size_t promoted_cases{0};
 };
 
 using ItemFactory = std::function<valtype()>;
@@ -344,6 +965,62 @@ static std::string SequenceOpcodeNames(const CScript& sequence)
     return names;
 }
 
+static uint64_t CandidateHashOpcodeCost(opcodetype opcode, size_t input_size)
+{
+    const size_t output_size{
+        opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160 ? 20U : 32U};
+    unsigned __int128 q{0};
+    IndependentAdd(q, varops::COST_F);
+    switch (opcode) {
+    case OP_SHA1:
+        IndependentAdd(q, varops::COST_H1_FIXED);
+        IndependentAdd(q, varops::COST_H1_BYTE, input_size);
+        break;
+    case OP_RIPEMD160:
+        IndependentAdd(q, varops::COST_H160_FIXED);
+        IndependentAdd(q, varops::COST_H160_BYTE, input_size);
+        break;
+    case OP_SHA256:
+        IndependentAdd(q, varops::COST_H256_FIXED);
+        IndependentAdd(q, varops::COST_H256_BYTE, input_size);
+        break;
+    case OP_HASH160:
+        IndependentAdd(q, varops::COST_H256_FIXED);
+        IndependentAdd(q, varops::COST_H256_BYTE, input_size);
+        IndependentAdd(q, varops::COST_H160_FIXED);
+        IndependentAdd(q, varops::COST_H160_BYTE, 32);
+        break;
+    case OP_HASH256:
+        IndependentAdd(q, varops::COST_H256_FIXED, 2);
+        IndependentAdd(q, varops::COST_H256_BYTE, input_size + 32);
+        break;
+    default:
+        throw std::runtime_error("not a hash opcode");
+    }
+    IndependentAdd(q, varops::COST_COPY_FIXED);
+    IndependentAdd(q, varops::COST_COPY_BYTE, output_size);
+    return IndependentCharge(q);
+}
+
+static uint64_t CandidateDropCost(size_t value_size)
+{
+    if (value_size == 0) {
+        return varops::COST_F;
+    }
+    return varops::COST_F + varops::COST_RELEASE_FIXED +
+           varops::COST_RELEASE_BYTE * varops::detail::WordSize(value_size);
+}
+
+static uint64_t CandidateCleanupCost(std::span<const valtype> stack, size_t cleanup_items)
+{
+    if (cleanup_items > stack.size()) throw std::runtime_error("cleanup exceeds initial stack");
+    uint64_t cost{0};
+    for (size_t i{0}; i < cleanup_items; ++i) {
+        cost += CandidateDropCost(stack[stack.size() - 1 - i].size());
+    }
+    return cost;
+}
+
 static uint64_t SequenceExecutionCost(const CScript& sequence)
 {
     uint64_t cost{0};
@@ -353,6 +1030,12 @@ static uint64_t SequenceExecutionCost(const CScript& sequence)
         valtype data;
         if (!sequence.GetOp(pc, opcode, data)) throw std::runtime_error("invalid benchmark sequence");
         cost += varops::ExecutionCost(opcode);
+        if (opcode >= OP_RIPEMD160 && opcode <= OP_HASH256) {
+            // Hash input size is unknown at static-model time; the candidate
+            // hash+insert charge is asserted per-case instead, so skip the
+            // flat byte charge here to avoid double-counting.
+            continue;
+        }
         cost += data.size() * varops::COST_COPYING;
     }
     return cost;
@@ -449,7 +1132,12 @@ static SaturationBoundaries FindCrossoverPair(size_t sequence_bytes, size_t clea
         return cost == 0 || available_budget / cost >= script_limit;
     };
     if (!script_limited(1) || script_limited(maximum)) {
-        throw std::runtime_error("crossover search does not bracket a transition");
+        // A new candidate can move the crossover outside the legal size range.
+        // Retain endpoint probes without inventing a transition.
+        const auto bound = [&](size_t size) {
+            return script_limited(size) ? SaturationExpectation::SCRIPT_BYTES : SaturationExpectation::VAROPS_BUDGET;
+        };
+        return {{{1, bound(1)}, {maximum, bound(maximum)}}};
     }
 
     size_t low{1};
@@ -497,6 +1185,17 @@ static void RunBoundarySelfChecks()
     Check(6 * MAX_THREE_WAY_ELEMENT_SIZE + 1 <= MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE &&
               6 * (MAX_THREE_WAY_ELEMENT_SIZE + 1) + 1 > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE,
           "internal three-way stack boundary classification failed");
+    // Multiple precharge sites in one logical opcode must deduct only new cost.
+    varops::Budget rounding_budget{10};
+    varops::Meter rounding_meter;
+    rounding_meter.Add(1);
+    Check(rounding_meter.Spend(rounding_budget) && *rounding_budget.Remaining() == 9,
+          "candidate first deduction failed");
+    Check(rounding_meter.Spend(rounding_budget) && *rounding_budget.Remaining() == 9,
+          "candidate unchanged charge was deducted twice");
+    rounding_meter.Add(2);
+    Check(rounding_meter.Spend(rounding_budget) && *rounding_budget.Remaining() == 7,
+          "candidate second deduction was not applied");
 }
 
 struct PreparedExecution {
@@ -504,9 +1203,11 @@ struct PreparedExecution {
     std::optional<ValtypeStack> v2_stack;
     ScriptExecutionData execdata;
     std::unique_ptr<varops::Budget> budget;
+    uint64_t initial_budget{0};
 };
 
-static PreparedExecution PrepareExecution(const MaterializedCase& test_case, bool timed = false)
+static PreparedExecution PrepareExecution(const MaterializedCase& test_case, bool timed = false,
+                                          uint64_t budget = TOTAL_VAROPS_BUDGET)
 {
     PreparedExecution execution;
     const bool legacy{DomainFor(test_case.spec->role) == ExecutionDomain::PRE_GSR_TAPSCRIPT};
@@ -518,7 +1219,23 @@ static PreparedExecution PrepareExecution(const MaterializedCase& test_case, boo
         execution.legacy_stack = test_case.initial_stack;
     } else {
         execution.v2_stack.emplace(test_case.initial_stack);
-        execution.budget = std::make_unique<varops::Budget>(TOTAL_VAROPS_BUDGET);
+        execution.budget = std::make_unique<varops::Budget>(budget);
+        execution.initial_budget = budget;
+        if (const auto& transaction{test_case.transaction}) {
+            execution.execdata.m_annex_init = true;
+            execution.execdata.m_annex_present = false;
+            execution.execdata.m_tapscript_init = true;
+            execution.execdata.m_tapscript = test_case.script;
+            execution.execdata.m_tapleaf_hash_init = true;
+            execution.execdata.m_tapleaf_hash = ComputeTapleafHash(TAPROOT_LEAF_TAPSCRIPT_V2, test_case.script);
+            execution.execdata.m_control_block_init = true;
+            execution.execdata.m_control_block = transaction->control_block;
+            execution.execdata.m_taptree_root_init = true;
+            execution.execdata.m_taptree_root = ComputeTaprootMerkleRoot(transaction->control_block,
+                                                                         execution.execdata.m_tapleaf_hash);
+            execution.execdata.m_codeseparator_pos_init = true;
+            execution.execdata.m_codeseparator_pos = 0xffffffff;
+        }
     }
     return execution;
 }
@@ -548,13 +1265,14 @@ static EvalOutcome ExecutePrepared(const MaterializedCase& test_case, const Benc
     if (success) success = CheckTapscriptV2ScriptResult(*execution.v2_stack, *execution.budget, &error);
     outcome.success = success;
     outcome.error = error;
-    outcome.varops_consumed = TOTAL_VAROPS_BUDGET - *execution.budget->Remaining();
+    outcome.varops_consumed = execution.initial_budget - *execution.budget->Remaining();
     return outcome;
 }
 
-static EvalOutcome Evaluate(const MaterializedCase& test_case, const BenchSignatureChecker& checker)
+static EvalOutcome Evaluate(const MaterializedCase& test_case, const BenchSignatureChecker& checker,
+                            uint64_t budget = TOTAL_VAROPS_BUDGET)
 {
-    PreparedExecution execution{PrepareExecution(test_case)};
+    PreparedExecution execution{PrepareExecution(test_case, false, budget)};
     return ExecutePrepared(test_case, checker, execution);
 }
 
@@ -574,7 +1292,9 @@ static CScript BuildScript(const CScript& sequence, uint64_t repetitions,
     for (uint64_t i{0}; i < repetitions; ++i) {
         script.insert(script.end(), sequence.begin(), sequence.end());
     }
-    script.insert(script.end(), cleanup_items, static_cast<unsigned char>(OP_DROP));
+    if (cleanup_items != 0) {
+        script.insert(script.end(), cleanup_items, static_cast<unsigned char>(OP_DROP));
+    }
     script << OP_1;
     if (script.size() > SCRIPT_BYTES) {
         throw std::runtime_error("script construction exceeded size limit");
@@ -582,8 +1302,48 @@ static CScript BuildScript(const CScript& sequence, uint64_t repetitions,
     return script;
 }
 
+static valtype V2ControlBlock()
+{
+    valtype control_block(TAPROOT_CONTROL_BASE_SIZE, 0);
+    control_block[0] = TAPROOT_LEAF_TAPSCRIPT_V2;
+    return control_block;
+}
+
+static CMutableTransaction EmptyWitnessTransaction(size_t empty_items, const CScript& script)
+{
+    CMutableTransaction tx;
+    tx.vin.resize(2);
+    const valtype control_block{V2ControlBlock()};
+    const valtype selector{0, 1, 0, 0x30, 0x80, 0}; // Collate input 1's witness items.
+    tx.vin[0].scriptWitness.stack = {valtype{1}, selector,
+                                    valtype{script.begin(), script.end()}, control_block};
+    auto& source_witness{tx.vin[1].scriptWitness.stack};
+    source_witness.assign(empty_items, valtype{});
+    // An immediate-success leaf makes the large source witness plausible.
+    source_witness.push_back(valtype{static_cast<unsigned char>(OP_1NEGATE)});
+    source_witness.push_back(control_block);
+    tx.vout.emplace_back(0, CScript{} << OP_RETURN);
+    return tx;
+}
+
+static std::shared_ptr<const TransactionFixture> MakeOpTxContext(size_t empty_items, const CScript& script)
+{
+    CMutableTransaction tx{EmptyWitnessTransaction(empty_items, script)};
+    constexpr int32_t TARGET_WEIGHT{MAX_BLOCK_WEIGHT - 10'000};
+    const int32_t initial_weight{GetTransactionWeight(CTransaction{tx})};
+    if (initial_weight >= TARGET_WEIGHT) throw std::runtime_error("OP_TX fixture exceeds weight target");
+    tx.vout[0].scriptPubKey.resize(1 + (TARGET_WEIGHT - initial_weight) / 4);
+    while (GetTransactionWeight(CTransaction{tx}) > TARGET_WEIGHT) {
+        tx.vout[0].scriptPubKey.pop_back();
+    }
+    if (GetTransactionWeight(CTransaction{tx}) < TARGET_WEIGHT - 3) {
+        throw std::runtime_error("OP_TX fixture did not reach weight target");
+    }
+    return std::make_shared<TransactionFixture>(tx, V2ControlBlock());
+}
+
 static uint64_t CalibrateRepeatVarops(const CaseSpec& spec, const std::vector<valtype>& stack,
-                                      const BenchSignatureChecker& checker)
+                                      const CryptoFixture& fixture)
 {
     if (DomainFor(spec.role) != ExecutionDomain::GSR_TAPSCRIPT_V2 || spec.sequence.empty()) return 0;
     MaterializedCase calibration;
@@ -592,22 +1352,32 @@ static uint64_t CalibrateRepeatVarops(const CaseSpec& spec, const std::vector<va
     calibration.repetitions = 1;
     calibration.script = spec.sequence;
     const size_t cleanup_items{spec.cleanup_items.value_or(stack.size())};
-    calibration.script.insert(calibration.script.end(), cleanup_items, static_cast<unsigned char>(OP_DROP));
+    if (cleanup_items != 0) {
+        calibration.script.insert(calibration.script.end(), cleanup_items, static_cast<unsigned char>(OP_DROP));
+    }
     calibration.script << OP_1;
+    if (spec.empty_witness_items) {
+        calibration.transaction = MakeOpTxContext(*spec.empty_witness_items, calibration.script);
+    }
+    BenchSignatureChecker checker{fixture, calibration.transaction.get()};
     const EvalOutcome outcome{Evaluate(calibration, checker)};
     if (!outcome.success || outcome.error != SCRIPT_ERR_OK) {
         throw std::runtime_error(strprintf("one-sequence calibration failed for %s: %s",
                                            spec.name, ScriptErrorString(outcome.error)));
     }
     const uint64_t suffix_cost{
-        (cleanup_items + 1) * varops::COST_PER_OPCODE + varops::CompareZeroCost(1)};
+        CandidateCleanupCost(stack, cleanup_items) +
+        varops::COST_F + varops::COST_SCALAR_OUTPUT +
+        varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
+        varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
     if (outcome.varops_consumed < suffix_cost) {
         throw std::runtime_error("calibration consumed less than the cleanup and final-result cost");
     }
     return outcome.varops_consumed - suffix_cost;
 }
 
-static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& fixture)
+static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& fixture,
+                                    uint64_t budget_ceiling = TOTAL_VAROPS_BUDGET)
 {
     MaterializedCase materialized;
     materialized.spec = &spec;
@@ -620,14 +1390,14 @@ static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& f
     const size_t cleanup_items{spec.cleanup_items.value_or(materialized.initial_stack.size())};
     const size_t suffix_size{cleanup_items + 1};
     const uint64_t script_limit{spec.sequence.empty() ? 0 : (SCRIPT_BYTES - suffix_size) / spec.sequence.size()};
-    BenchSignatureChecker checker{fixture};
     if (spec.expected_error == SCRIPT_ERR_OK || spec.repeat_mode == RepeatMode::VAROP_REJECTION) {
-        materialized.varops_per_repeat = CalibrateRepeatVarops(spec, materialized.initial_stack, checker);
+        materialized.varops_per_repeat = CalibrateRepeatVarops(spec, materialized.initial_stack, fixture);
     }
     if (spec.expected_varops_per_repeat && materialized.varops_per_repeat != *spec.expected_varops_per_repeat) {
         throw std::runtime_error(strprintf("sequence varops mismatch for %s: expected %u, got %u",
                                            spec.name, *spec.expected_varops_per_repeat,
-                                           materialized.varops_per_repeat));
+                                           materialized.varops_per_repeat))
+            ;
     }
 
     if (spec.repeat_mode == RepeatMode::FIXED) {
@@ -643,13 +1413,15 @@ static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& f
         uint64_t budget_limit{std::numeric_limits<uint64_t>::max()};
         if (DomainFor(spec.role) == ExecutionDomain::GSR_TAPSCRIPT_V2 && materialized.varops_per_repeat != 0) {
             const uint64_t suffix_cost{
-                (cleanup_items + 1) * varops::COST_PER_OPCODE + varops::CompareZeroCost(1)};
-            budget_limit = (TOTAL_VAROPS_BUDGET - suffix_cost) /
-                           materialized.varops_per_repeat;
-            budget_limit = std::min(budget_limit, script_limit);
+                CandidateCleanupCost(materialized.initial_stack, cleanup_items) +
+                varops::COST_F + varops::COST_SCALAR_OUTPUT +
+                varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
+                varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
+            budget_limit = suffix_cost <= budget_ceiling ?
+                (budget_ceiling - suffix_cost) / materialized.varops_per_repeat : 0;
         }
         materialized.repetitions = std::min({script_limit, budget_limit, spec.max_repetitions});
-        if (materialized.repetitions == budget_limit && budget_limit < script_limit) {
+        if (budget_limit < script_limit && materialized.repetitions == budget_limit) {
             materialized.saturation = "varops-budget";
         } else if (materialized.repetitions == spec.max_repetitions && spec.max_repetitions < script_limit) {
             materialized.saturation = spec.saturation_hint.empty() ? "explicit-limit" : spec.saturation_hint;
@@ -658,36 +1430,25 @@ static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& f
         }
     }
 
-    if (spec.expected_saturation && materialized.saturation != SaturationName(*spec.expected_saturation)) {
+    if (budget_ceiling == TOTAL_VAROPS_BUDGET && spec.expected_saturation &&
+        materialized.saturation != SaturationName(*spec.expected_saturation)) {
         throw std::runtime_error(strprintf("saturation mismatch for %s: expected %s, got %s",
                                            spec.name, SaturationName(*spec.expected_saturation),
                                            materialized.saturation));
     }
 
     if (!spec.sequence.empty() && materialized.repetitions == 0) {
+        if (budget_ceiling != TOTAL_VAROPS_BUDGET) return materialized; // Cannot sample even one sequence.
         throw std::runtime_error(strprintf("%s cannot execute its target sequence", spec.name));
     }
     if (!spec.sequence.empty() && materialized.repetitions > script_limit) {
         throw std::runtime_error(strprintf("%s cannot reach its requested termination inside 4MB", spec.name));
     }
     materialized.script = BuildScript(spec.sequence, materialized.repetitions, cleanup_items);
-    return materialized;
-}
-
-static bool IsResourceError(ScriptError error)
-{
-    switch (error) {
-    case SCRIPT_ERR_STACK_SIZE:
-    case SCRIPT_ERR_PUSH_SIZE:
-    case SCRIPT_ERR_TAPSCRIPT_VALIDATION_WEIGHT:
-    case SCRIPT_ERR_VAROP_COUNT:
-    case SCRIPT_ERR_TOTAL_STACK_SIZE:
-    case SCRIPT_ERR_STACK_ELEMENT_SIZE:
-    case SCRIPT_ERR_HASH_OPERAND_SIZE:
-        return true;
-    default:
-        return false;
+    if (spec.empty_witness_items) {
+        materialized.transaction = MakeOpTxContext(*spec.empty_witness_items, materialized.script);
     }
+    return materialized;
 }
 
 static CScript Ops(std::initializer_list<opcodetype> opcodes)
@@ -709,10 +1470,12 @@ static void AddCase(std::vector<CaseSpec>& specs, opcodetype opcode, HeadlineRol
     const std::string name{strprintf("%s/%s/%s/%s/%s/%s/%s", DomainName(DomainFor(role)), opcode_name,
                                      sequence_opcodes, case_label, shape, pattern, ScriptErrorString(options.expected_error))};
     specs.push_back({name, opcode, opcode_name, sequence_opcodes, std::move(shape), std::move(pattern),
-                     role, options.expected_error, options.repeat_mode,
+                     role, role == HeadlineRole::NEW_GSR, options.expected_error, options.repeat_mode,
                      options.fixed_repetitions, options.max_repetitions, std::move(sequence),
                      std::move(stack_factory), options.cleanup_items, std::move(options.saturation_hint),
-                     options.expected_varops_per_repeat, options.expected_saturation});
+                     options.expected_varops_per_repeat, options.expected_saturation,
+                     options.empty_witness_items, options.op_tx_collate,
+                     options.op_tx_result_values});
 }
 
 static CaseOptions FixedCase(ScriptError error, uint64_t repetitions, std::optional<size_t> cleanup_items,
@@ -811,9 +1574,11 @@ static void AddCostCase(std::vector<CaseSpec>& specs, opcodetype opcode, Headlin
                         std::optional<SaturationExpectation> expected_saturation = std::nullopt)
 {
     CaseOptions options{};
-    options.expected_varops_per_repeat =
-        expected_varops_per_repeat + SequenceExecutionCost(sequence);
-    options.expected_saturation = expected_saturation;
+    // Candidate static formulas are attached by the family-specific builders.
+    // Legacy-sized crossover probes remain useful corpus cases, but must not
+    // claim candidate parity or a candidate saturation boundary.
+    (void)expected_varops_per_repeat;
+    (void)expected_saturation;
     AddCase(specs, opcode, role, std::move(case_label), std::move(shape), std::move(pattern),
             sequence, std::move(factory), std::move(options));
 }
@@ -854,9 +1619,88 @@ static uint64_t OneToOneTargetCost(opcodetype opcode, size_t size)
     }
 }
 
-static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_way)
+static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_way,
+                                     std::string_view pattern = {})
 {
     const uint64_t transforms{three_way ? 3U : 1U};
+    // Independently count complete logical-opcode formulas from whole-varop terms.
+    const uint64_t copy_opcode{varops::COST_F + transforms *
+        (varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * size)};
+    switch (opcode) {
+    case OP_NOT:
+    case OP_0NOTEQUAL: {
+        const bool input_nonzero{pattern != "zero"};
+        const size_t output_size{(opcode == OP_NOT ? !input_nonzero : input_nonzero) ? 1U : 0U};
+        const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
+            varops::COST_PREP_BYTE * varops::detail::WordSize(size) +
+            varops::COST_READ_FIXED + varops::COST_READ * varops::detail::WordSize(size) +
+            varops::COST_SCALAR_OUTPUT};
+        return copy_opcode + transforms * (target + CandidateDropCost(output_size));
+    }
+    case OP_1ADD:
+    case OP_1SUB: {
+        const uint64_t words{varops::detail::WordSize(size)};
+        const bool low{pattern == "padded-low" || pattern == "one-low"};
+        const size_t output_size{low ? (opcode == OP_1SUB ? 0U : 1U) :
+                                      (opcode == OP_1SUB && pattern == "late-nonzero" && size != 0 ? size - 1 : size)};
+        const uint64_t output_words{varops::detail::WordSize(output_size)};
+        const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
+            varops::COST_PREP_BYTE * words + varops::COST_ARITH_FIXED +
+            varops::COST_ARITH_BYTE * words + varops::COST_OUTPUT_FIXED +
+            varops::COST_OUTPUT_BYTE * output_words};
+        return copy_opcode + transforms * (target + CandidateDropCost(output_size));
+    }
+    case OP_INVERT:
+    case OP_2MUL:
+    case OP_2DIV: {
+        const uint64_t words{varops::detail::WordSize(size)};
+        const bool low{pattern == "padded-low" || pattern == "one-low"};
+        const size_t output_size{
+            low && opcode == OP_2DIV ? 0U :
+            low && opcode == OP_2MUL ? 1U :
+            opcode == OP_2DIV && pattern == "late-nonzero" && size != 0 ? size - 1 : size};
+        const uint64_t output_words{varops::detail::WordSize(output_size)};
+        const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
+            varops::COST_PREP_BYTE * words + varops::COST_BIT_FIXED +
+            varops::COST_BIT * words + varops::COST_OUTPUT_FIXED +
+            varops::COST_OUTPUT_BYTE * output_words};
+        return copy_opcode + transforms * (target + CandidateDropCost(output_size));
+    }
+    case OP_RIPEMD160:
+    case OP_SHA1:
+    case OP_SHA256:
+    case OP_HASH160:
+    case OP_HASH256: {
+        const size_t output_size{
+            opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160 ? 20U : 32U};
+        unsigned __int128 hash_q{0};
+        IndependentAdd(hash_q, varops::COST_F);
+        if (opcode == OP_SHA1) {
+            IndependentAdd(hash_q, varops::COST_H1_FIXED);
+            IndependentAdd(hash_q, varops::COST_H1_BYTE, size);
+        } else if (opcode == OP_RIPEMD160) {
+            IndependentAdd(hash_q, varops::COST_H160_FIXED);
+            IndependentAdd(hash_q, varops::COST_H160_BYTE, size);
+        } else if (opcode == OP_SHA256) {
+            IndependentAdd(hash_q, varops::COST_H256_FIXED);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, size);
+        } else if (opcode == OP_HASH160) {
+            IndependentAdd(hash_q, varops::COST_H256_FIXED);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, size);
+            IndependentAdd(hash_q, varops::COST_H160_FIXED);
+            IndependentAdd(hash_q, varops::COST_H160_BYTE, 32);
+        } else {
+            IndependentAdd(hash_q, varops::COST_H256_FIXED, 2);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, size + 32);
+        }
+        IndependentAdd(hash_q, varops::COST_COPY_FIXED);
+        IndependentAdd(hash_q, varops::COST_COPY_BYTE, output_size);
+        const uint64_t hash_opcode{IndependentCharge(hash_q)};
+        return copy_opcode + transforms * (hash_opcode + CandidateDropCost(output_size));
+    }
+    default:
+        break;
+    }
     return transforms * size * varops::COST_COPYING +
            transforms * OneToOneTargetCost(opcode, size);
 }
@@ -872,13 +1716,12 @@ static void AddOneToOneSpec(std::vector<CaseSpec>& specs, opcodetype opcode, Hea
     const std::string case_label{strprintf("%s-%s", family, three_way ? "3way" : "single")};
     const std::optional<uint64_t> expected_varops_per_repeat{
         DomainFor(role) == ExecutionDomain::GSR_TAPSCRIPT_V2 ?
-            std::optional<uint64_t>{SequenceExecutionCost(sequence) +
-                                    OneToOneSequenceCost(opcode, size, three_way)} :
-            std::nullopt};
+            std::optional<uint64_t>{
+                OneToOneSequenceCost(opcode, size, three_way, pattern)
+            } : std::nullopt};
     StackFactory factory{OneToOneStack(size, pattern, three_way)};
     CaseOptions options{};
     options.expected_varops_per_repeat = expected_varops_per_repeat;
-    options.expected_saturation = expected_saturation;
     AddCase(specs, opcode, role, case_label, FormatBytes(size), std::move(pattern), sequence,
             std::move(factory), std::move(options));
 }
@@ -890,7 +1733,7 @@ static void AddOneToOneCrossovers(std::vector<CaseSpec>& specs, opcodetype opcod
 {
     const CScript sequence{OneToOneSequence(opcode, three_way)};
     const auto cost{[=](size_t size) {
-        return SequenceExecutionCost(sequence) + OneToOneSequenceCost(opcode, size, three_way);
+        return OneToOneSequenceCost(opcode, size, three_way, pattern);
     }};
     for (const auto& [size, saturation] :
          FindCrossoverPair(sequence.size(), three_way ? 3 : 1, maximum, cost)) {
@@ -946,6 +1789,21 @@ static void AddBinaryDataCases(std::vector<CaseSpec>& specs, opcodetype opcode,
     const bool verify_opcode{opcode == OP_EQUALVERIFY || opcode == OP_NUMEQUALVERIFY};
     const bool byte_compare{opcode == OP_EQUAL || opcode == OP_EQUALVERIFY};
     const CScript sequence{verify_opcode ? Ops({OP_2DUP, opcode}) : Ops({OP_2DUP, opcode, OP_DROP})};
+    if (opcode == OP_ADD) {
+        valtype right{PatternBytes(17, "alternating")};
+        right.back() &= 0x7f;
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                "arithmetic-pilot", "1Bx17B", "short-long", sequence,
+                FixedStack({valtype{1}, std::move(right)}));
+        for (size_t size : {8U, 16U}) {
+            // 2DUP reserves input word padding, but ff...ff + 1 still
+            // needs another word for its result on every repetition.
+            AddCostCase(specs, opcode, HeadlineRole::NEW_GSR,
+                        "carry-boundary", strprintf("1Bx%uB", size), "all-ff-plus-one",
+                        sequence, FixedStack({valtype{1}, valtype(size, 0xff)}),
+                        varops::AddCost(1, size) + (1 + size) * varops::COST_COPYING);
+        }
+    }
     if (!restored) {
         const size_t size{byte_compare ? MAX_SCRIPT_ELEMENT_SIZE : 4};
         const std::string pattern{byte_compare ? "equal" : "padded-low"};
@@ -974,6 +1832,16 @@ static void AddBinaryDataCases(std::vector<CaseSpec>& specs, opcodetype opcode,
         AddCase(specs, opcode, HeadlineRole::NEW_GSR,
                 "binary-preserve", FormatBytes(maximum) + "x" + FormatBytes(maximum), "equal-padded-low",
                 sequence, FixedStack({PaddedNumber(1, maximum), PaddedNumber(1, maximum)}));
+        // Leave weight for the script and transaction; outputs can fund the remaining budget.
+        constexpr size_t FUNDED_SIZE{1'950'000};
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                "binary-preserve", FormatBytes(FUNDED_SIZE) + "x" + FormatBytes(FUNDED_SIZE),
+                "equal-padded-low-funded", sequence,
+                FixedStack({PaddedNumber(1, FUNDED_SIZE), PaddedNumber(1, FUNDED_SIZE)}));
+        const valtype dense{PatternBytes(FUNDED_SIZE, "alternating")};
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                "binary-preserve", FormatBytes(FUNDED_SIZE) + "x" + FormatBytes(FUNDED_SIZE),
+                "equal-dense-funded", sequence, FixedStack({dense, dense}));
     }
     if (maximum >= 65536 && opcode != OP_EQUALVERIFY) {
         const bool numeric_verify{opcode == OP_NUMEQUALVERIFY};
@@ -1055,7 +1923,7 @@ static void AddStackOpcodeCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         roll_one << OP_1 << OP_ROLL << OP_SWAP;
         add_shared_case("roll-depth-1-neutral", roll_one, {PatternBytes(32, "dense"), PatternBytes(32, "alternating")});
         CaseOptions deep_stack_options{};
-        deep_stack_options.expected_saturation = SaturationExpectation::VAROPS_BUDGET;
+        deep_stack_options.expected_saturation = SaturationExpectation::SCRIPT_BYTES;
         AddCase(specs, opcode, HeadlineRole::NEW_GSR, "deep-stack", "1000x4B", "dense",
                 Ops({OP_DEPTH, OP_1SUB, OP_ROLL}),
                 FixedStack(std::vector<valtype>(1000, PatternBytes(4, "dense"))),
@@ -1084,6 +1952,14 @@ static void AddStackOpcodeCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 
 static void AddHashCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
+    for (size_t size : {0U, 1U, 32U, 33U, 55U, 56U, 64U, 65U, 520U}) {
+        const CScript sequence{OneToOneSequence(opcode, false)};
+        CaseOptions options{FixedCase(SCRIPT_ERR_OK, 1, 1, "cost-parity-boundary")};
+        options.expected_varops_per_repeat = OneToOneSequenceCost(opcode, size, false, "late-nonzero");
+        AddCase(specs, opcode, HeadlineRole::DIAGNOSTIC, "hash-padding-boundary",
+                FormatBytes(size), "late-nonzero", sequence,
+                OneToOneStack(size, "late-nonzero", false), std::move(options));
+    }
     for (size_t size : {1U, MAX_SCRIPT_ELEMENT_SIZE}) {
         AddOneToOneSpec(specs, opcode, HeadlineRole::PRE_BASELINE,
                         "hash-preserve", size, "late-nonzero", true);
@@ -1097,6 +1973,33 @@ static void AddHashCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                     MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, "late-nonzero", false);
     AddOneToOneCrossovers(specs, opcode, HeadlineRole::COMMON_V2, "hash-crossover",
                           "late-nonzero", MAX_SCRIPT_ELEMENT_SIZE, true);
+}
+
+static void AddOpTxCases(std::vector<CaseSpec>& specs, opcodetype opcode)
+{
+    // A second input supplies the witness data, so its contents do not change
+    // when the benchmark script is repeated to reach the varops boundary.
+    const valtype selector{0, 1, 0, 0x30, 0x80, 0}; // Collate input 1's witness items.
+    const CScript sequence{Ops({OP_2DUP, OP_TX, OP_DROP})};
+    for (size_t empty_items : {256U, 8192U, 30000U}) {
+        constexpr int32_t TARGET_WEIGHT{MAX_BLOCK_WEIGHT - 10'000};
+        const int32_t base_weight{GetTransactionWeight(CTransaction{EmptyWitnessTransaction(empty_items, {})})};
+        if (base_weight + 11 >= TARGET_WEIGHT) throw std::runtime_error("OP_TX fixture exceeds weight target");
+
+        CaseOptions options{};
+        options.cleanup_items = 2;
+        options.empty_witness_items = empty_items;
+        options.op_tx_collate = true;
+        options.op_tx_result_values = empty_items + 2; // source witness also carries OP_1 and its control block
+        // Include the script in the transaction's witness weight. Leave eight
+        // weight units for the script-length CompactSize growth and rounding.
+        options.max_repetitions = (TARGET_WEIGHT - base_weight - 8 - 3) / sequence.size();
+        options.saturation_hint = "transaction-weight";
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                "collated-empty-witness", strprintf("%u-empty-items", empty_items),
+                "other-input", sequence,
+                FixedStack({valtype{1}, selector}), std::move(options));
+    }
 }
 
 static void AddSpliceCases(std::vector<CaseSpec>& specs, opcodetype opcode)
@@ -1135,14 +2038,16 @@ static void AddSpliceCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         return;
     }
 
+    // Leave room for the script and transaction overhead in a 4 MWU block.
+    constexpr size_t funded_data_size{3'950'000};
     const CScript sequence{Ops({OP_2DUP, opcode, OP_DROP})};
     for (const auto& [offset, label] : std::vector<std::pair<uint64_t, std::string>>{
-             {0, "zero"}, {1, "one"}, {data_size / 2, "mid"}, {data_size, "end"}, {data_size + 1, "past-end"}}) {
+             {0, "zero"}, {1, "one"}, {funded_data_size / 2, "mid"}, {funded_data_size, "end"}, {funded_data_size + 1, "past-end"}}) {
         const size_t numeric_size{label == "past-end" ? 521U : 8U};
         AddCase(specs, opcode, HeadlineRole::NEW_GSR,
-                "splice-preserve", FormatBytes(data_size) + ":" + label,
+                "splice-preserve", FormatBytes(funded_data_size) + ":" + label,
                 numeric_size > 8 ? "padded-offset" : "minimal-offset", sequence,
-                FixedStack({PatternBytes(data_size, "alternating"), PaddedNumber(offset, numeric_size)}));
+                FixedStack({PatternBytes(funded_data_size, "alternating"), PaddedNumber(offset, numeric_size)}));
     }
 }
 
@@ -1161,14 +2066,29 @@ static size_t LargestAffordable(const std::function<uint64_t(size_t)>& cost, siz
     return low;
 }
 
-static uint64_t MulSequenceCost(size_t left, size_t right) { return (left + right) * varops::COST_COPYING + varops::MulCost(left, right); }
+static uint64_t MulSequenceCost(size_t left, size_t right)
+{
+    const uint64_t left_words{varops::detail::WordSize(left)};
+    const uint64_t right_words{varops::detail::WordSize(right)};
+    const uint64_t rows{std::max(left_words, right_words) / 8};
+    const uint64_t row_limbs{std::min(left_words, right_words) / 8};
+    const size_t output_size{left + right};
+    return 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
+           varops::COST_COPY_BYTE * (left + right) +
+           2 * varops::COST_PREP_FIXED +
+           varops::COST_PREP_BYTE * (left_words + right_words) +
+           rows * (varops::COST_MUL_ROW_FIXED + varops::COST_MUL_ROW * row_limbs +
+                   varops::COST_ARITH_FIXED + varops::COST_ARITH_BYTE * (row_limbs + 1) * 8) +
+           varops::COST_OUTPUT_FIXED +
+           varops::COST_OUTPUT_BYTE * varops::detail::WordSize(output_size);
+}
 
 static void AddMulCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
     const CScript sequence{Ops({OP_2DUP, opcode, OP_DROP})};
     std::vector<std::pair<size_t, size_t>> shapes{{1, 1}, {109, 109}};
-    const size_t largest{LargestAffordable([](size_t size) { return varops::MulCost(size, size); }, 2'000'000)};
-    shapes.insert(shapes.end(), {{108, 108}, {110, 110}, {65536, 1}, {1, 65536}, {largest > 1 ? largest - 1 : largest, largest}, {largest, largest}, {largest + 1, largest + 1}});
+    const size_t largest{LargestAffordable([](size_t size) { return MulSequenceCost(size, size); }, 2'000'000)};
+    shapes.insert(shapes.end(), {{108, 108}, {110, 110}, {65536, 1}, {1, 65536}, {largest > 1 ? largest - 1 : largest, largest}, {largest, largest}});
     for (const auto& [left, right] : shapes) {
         AddCase(specs, opcode, HeadlineRole::NEW_GSR,
                 "mul-preserve", FormatBytes(left) + "x" + FormatBytes(right), "dense", sequence,
@@ -1194,7 +2114,7 @@ static void AddMulCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 sequence, FixedStack({PatternBytes(tail_left, "alternating"), PatternBytes(tail_right, "late-nonzero")}),
                 MulSequenceCost(tail_left, tail_right));
 
-    const size_t rejected{LargestAffordable([](size_t size) { return varops::MulCost(size, size); }, 2'000'000)};
+    const size_t rejected{largest + 1};
     AddCase(specs, opcode, HeadlineRole::NEW_GSR,
             "mul-varops-reject", FormatBytes(rejected), "dense", sequence,
             FixedStack({PatternBytes(rejected, "alternating"), PatternBytes(rejected, "late-nonzero")}),
@@ -1215,8 +2135,20 @@ static valtype DivisorTopLimbOne(size_t size)
 
 static uint64_t DivModSequenceCost(opcodetype opcode, size_t dividend, size_t divisor)
 {
-    const uint64_t operation_cost{opcode == OP_DIV ? varops::DivCost(dividend, divisor) : varops::ModCost(dividend, divisor)};
-    return (dividend + divisor) * varops::COST_COPYING + operation_cost;
+    const uint64_t dividend_words{varops::detail::WordSize(dividend)};
+    const uint64_t divisor_words{varops::detail::WordSize(divisor)};
+    const uint64_t dividend_limbs{dividend_words / 8};
+    const uint64_t divisor_limbs{divisor_words / 8};
+    const uint64_t steps{divisor_limbs == 1 ? dividend_limbs : (dividend_limbs > divisor_limbs ? dividend_limbs - divisor_limbs : 1)};
+    // OP_2DUP, target, OP_DROP.  The output is at most the dividend size;
+    // the dense benchmark fixtures used here retain that padded width.
+    return 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
+           varops::COST_COPY_BYTE * (dividend + divisor) +
+           2 * varops::COST_PREP_FIXED +
+           varops::COST_PREP_BYTE * (dividend_words + divisor_words) +
+           varops::COST_DIV_FIXED + varops::COST_DIV_STEP * steps +
+           varops::COST_DIV_CELL * steps * divisor_limbs +
+           varops::COST_OUTPUT_FIXED + varops::COST_OUTPUT_BYTE * dividend_words;
 }
 
 static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
@@ -1459,7 +2391,9 @@ static CScript FunctionCalls(const CScript& body, size_t calls)
         sequence.push_back(body.size() >> 8);
     } else if (body.size() <= 0xffffffffULL) {
         sequence.push_back(0xfe);
-        for (unsigned int shift : {0U, 8U, 16U, 24U}) sequence.push_back(body.size() >> shift);
+        for (unsigned int shift : {0U, 8U, 16U, 24U}) {
+            sequence.push_back(body.size() >> shift);
+        }
     } else {
         throw std::runtime_error("function benchmark body exceeds CompactSize 32-bit range");
     }
@@ -1478,7 +2412,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                                     std::string saturation) {
         CScript sequence{FunctionCalls(body, calls)};
         CaseOptions options{FixedCase(SCRIPT_ERR_OK, 1, stack.size(), std::move(saturation))};
-        options.sequence_label = strprintf("MACRO_%uB+%u_CALLS", body.size(), calls);
+        options.sequence_label = strprintf("DEFINE_%uB+%u_CALLS", body.size(), calls);
         AddCase(specs, opcode, HeadlineRole::NEW_GSR, std::move(case_label),
                 strprintf("%uB-body/%u-calls/%s", body.size(), calls, std::move(shape)),
                 std::move(pattern), std::move(sequence), FixedStack(std::move(stack)), std::move(options));
@@ -1517,17 +2451,19 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         constexpr size_t stack_items{3};
         const CScript hash_sequence{Ops({OP_3DUP, target, OP_DROP, target, OP_DROP, target, OP_DROP})};
         const CScript body{RepeatedSequenceBody(hash_sequence, hash_body_size)};
-        const uint64_t hash_sequence_cost{
-            SequenceExecutionCost(hash_sequence) + stack_items * item_size * varops::COST_COPYING +
-            stack_items * item_size * varops::COST_HASH};
+        const uint64_t hash_sequence_cost{OneToOneSequenceCost(target, item_size, true, "late-nonzero")};
         const uint64_t body_cost{body.size() / hash_sequence.size() * hash_sequence_cost};
-        // Definition, cleanup, and final truth checks are outside the calls.
+        // Cleanup and final truth checks are outside the calls.
         const uint64_t fixed_cost{
-            varops::FRAGMENT_DEFINE_COST + body.size() * varops::FRAGMENT_BODY_PER_BYTE +
-            (3 + stack_items + 1) * varops::COST_PER_OPCODE + varops::CompareZeroCost(1)};
+            (3 + stack_items + 1) * varops::COST_F +
+            varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
+            varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
         const uint64_t call_cost{
-            varops::ExecutionCost(OP_CALLMACRO) + body.size() * varops::FRAGMENT_BODY_PER_BYTE + body_cost};
-        const size_t calls{static_cast<size_t>((TOTAL_VAROPS_BUDGET - fixed_cost) / call_cost)};
+            varops::COST_F + varops::COST_DECODE_FIXED +
+            varops::COST_DECODE * hash_body_size + body_cost};
+        const uint64_t definition_cost{
+            varops::COST_DECODE_FIXED + varops::COST_DECODE * hash_body_size};
+        const size_t calls{static_cast<size_t>((TOTAL_VAROPS_BUDGET - fixed_cost - definition_cost) / call_cost)};
         add_with_stack(body, calls,
                        std::vector<valtype>(stack_items, PatternBytes(item_size, "late-nonzero")),
                        "function-slow-" + OpcodeName(target), "3x519B", "late-nonzero",
@@ -1542,9 +2478,23 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     // Cheap sustaining sequences found by the per-opcode calibration probes.
     // Preserve the initial values without unnecessary per-iteration copies.
     const auto add_probe = [&](std::string label, const CScript& sequence,
-                               std::vector<valtype> stack, std::string shape) {
+                               std::vector<valtype> stack, std::string shape,
+                               opcodetype target = OP_INVALIDOPCODE) {
         const CScript body{RepeatedSequenceBody(sequence, (256 / sequence.size()) * sequence.size())};
-        add_with_stack(body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size(),
+        size_t calls{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size()};
+        if (target == OP_SHA1 || target == OP_RIPEMD160 || target == OP_SHA256 ||
+            target == OP_HASH160 || target == OP_HASH256) {
+            const size_t digest_size{target == OP_SHA1 || target == OP_RIPEMD160 || target == OP_HASH160 ? 20U : 32U};
+            const uint64_t sequence_cost{
+                sequence.size() == 1 ? CandidateHashOpcodeCost(target, digest_size) :
+                OneToOneSequenceCost(target, digest_size, false, "dense")};
+            const uint64_t body_cost{body.size() / sequence.size() * sequence_cost};
+            const uint64_t call_cost{
+                varops::COST_F + varops::COST_DECODE_FIXED +
+                varops::COST_DECODE * body.size() + body_cost};
+            calls = std::min(calls, static_cast<size_t>(TOTAL_VAROPS_BUDGET / call_cost));
+        }
+        add_with_stack(body, calls,
                        std::move(stack), "function-probe-" + label, std::move(shape),
                        "calibration-worst-pattern", "function-body-bytes");
     };
@@ -1557,9 +2507,9 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     for (const auto target : {OP_SHA256, OP_SHA1, OP_RIPEMD160, OP_HASH160, OP_HASH256}) {
         const size_t digest_size{target == OP_SHA256 || target == OP_HASH256 ? 32U : 20U};
         add_probe("chain-" + OpcodeName(target), Ops({target}),
-                  {PatternBytes(digest_size, "dense")}, FormatBytes(digest_size));
+                  {PatternBytes(digest_size, "dense")}, FormatBytes(digest_size), target);
         add_probe("tiny-" + OpcodeName(target), Ops({OP_DUP, target, OP_DROP}),
-                  {valtype{1}}, "1B");
+                  {valtype{1}}, "1B", target);
     }
     for (const auto target : {OP_NUMEQUALVERIFY, OP_EQUALVERIFY}) {
         add_probe(OpcodeName(target), Ops({OP_2DUP, target}),
@@ -1747,6 +2697,7 @@ static const std::vector<OpcodeEntry>& OpcodeRegistry()
                             OP_LESSTHANOREQUAL, OP_GREATERTHANOREQUAL, OP_MIN, OP_MAX});
         add(binary_restored, {OP_AND, OP_OR, OP_XOR});
         add(AddHashCases, {OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256});
+        add(AddOpTxCases, {OP_TX});
         add(AddSpliceCases, {OP_CAT, OP_SUBSTR, OP_LEFT, OP_RIGHT});
         add(AddMulCases, {OP_MUL});
         add(AddDivModCases, {OP_DIV, OP_MOD});
@@ -1766,6 +2717,118 @@ static std::map<std::string, opcodetype> SupportedOpcodeMap()
     for (const OpcodeEntry& entry : OpcodeRegistry())
         out.emplace(OpcodeName(entry.opcode), entry.opcode);
     return out;
+}
+
+static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
+{
+    if (opcode >= OP_0 && opcode <= OP_PUSHDATA4) return {"F + COPY(n)", "F,COPY.fixed,COPY.byte"};
+    switch (opcode) {
+    case OP_NOP: case OP_IF: case OP_CODESEPARATOR:
+        return {"F", "F"};
+    case OP_TOALTSTACK: case OP_FROMALTSTACK:
+        return {"F + MOVE(1)", "F,MOVE.fixed,MOVE.entry"};
+    case OP_SWAP:
+        return {"F + MOVE(2)", "F,MOVE.fixed,MOVE.entry"};
+    case OP_ROT:
+        return {"F + MOVE(3)", "F,MOVE.fixed,MOVE.entry"};
+    case OP_2SWAP:
+        return {"F + MOVE(4)", "F,MOVE.fixed,MOVE.entry"};
+    case OP_2ROT:
+        return {"F + MOVE(6)", "F,MOVE.fixed,MOVE.entry"};
+    case OP_DROP: return {"F + RELEASE(W(x))", "F,RELEASE.fixed,RELEASE.byte"};
+    case OP_2DROP: return {"F + RELEASE(W(x1)) + RELEASE(W(x2))", "F,RELEASE.fixed,RELEASE.byte"};
+    case OP_NIP: return {"F + RELEASE(W(x1))", "F,RELEASE.fixed,RELEASE.byte"};
+    case OP_VERIFY: return {"F + PREP(n) + READ(W(n))", "F,PREP.fixed,PREP.byte,READ"};
+    case OP_DUP: case OP_2DUP: case OP_3DUP: case OP_OVER: case OP_2OVER: case OP_TUCK:
+        return {"F + sum(COPY(n_i))", "F,COPY.fixed,COPY.byte"};
+    case OP_IFDUP:
+        return {"F + PREP(n) + READ(W(n)) + OUTPUT(n) + optional COPY(n)",
+            "F,PREP.fixed,PREP.byte,READ,OUTPUT.fixed,OUTPUT.byte,COPY.fixed,COPY.byte"};
+    case OP_DEPTH: case OP_SIZE: return {"F + OUTPUT(8)", "F,OUTPUT(8)"};
+    case OP_PICK: return {"F + PREP(depth) + READ(W(depth)) + COPY(n)", "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte"};
+    case OP_ROLL: return {"F + PREP(depth) + READ(W(depth)) + MOVE(entries)", "F,PREP.fixed,PREP.byte,READ,MOVE"};
+    case OP_EQUAL: case OP_EQUALVERIFY:
+        return {"F + conditional READ(W(n)) + OUTPUT(8)", "F,READ,OUTPUT(8)"};
+    case OP_NOT: case OP_0NOTEQUAL:
+        return {"F + PREP(n) + READ(W(n)) + OUTPUT(8)", "F,PREP.fixed,PREP.byte,READ,OUTPUT(8)"};
+    case OP_1ADD: case OP_1SUB: case OP_ADD: case OP_SUB:
+        return {"F + PREP(operands) + ARITH(W) + OUTPUT(out)",
+            "F,PREP.fixed,PREP.byte,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte"};
+    case OP_BOOLAND: case OP_BOOLOR: case OP_NUMEQUAL: case OP_NUMEQUALVERIFY:
+    case OP_NUMNOTEQUAL: case OP_LESSTHAN: case OP_GREATERTHAN:
+    case OP_LESSTHANOREQUAL: case OP_GREATERTHANOREQUAL: case OP_WITHIN:
+        return {"F + PREP(operands) + READ(comparisons) + OUTPUT(8)", "F,PREP.fixed,PREP.byte,READ,OUTPUT(8)"};
+    case OP_MIN: case OP_MAX:
+        return {"F + PREP(operands) + READ(W) + OUTPUT(out) + RELEASE(max input)",
+            "F,PREP.fixed,PREP.byte,READ,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
+    case OP_INVERT: case OP_2MUL: case OP_2DIV: case OP_AND: case OP_OR: case OP_XOR:
+    case OP_LSHIFT: case OP_RSHIFT: case OP_BYTEREV:
+        return {"F + PREP(operands) + BIT(bytes) + OUTPUT(out)",
+            "F,PREP.fixed,PREP.byte,READ,BIT,OUTPUT.fixed,OUTPUT.byte"};
+        case OP_MUL: return {"F + PREP(a,b) + u*(MULROW(v) + ARITH(8*(v+1))) + OUTPUT(out)", "F,PREP.fixed,PREP.byte,MULROW,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte"};
+        case OP_DIV: case OP_MOD: return {"F + PREP(a,b) + DIVCORE(s,v) + OUTPUT(out) + RELEASE(max input)", "F,PREP.fixed,PREP.byte,DIVCORE.step,DIVCORE.cell,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
+    case OP_CAT: return {"F + COPY(a+b)", "F,COPY.fixed,COPY.byte"};
+    case OP_SUBSTR:
+        return {"F + PREP(indices) + READ(indices) + COPY(out) + RELEASE(W(source), W(indices))",
+                "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte,RELEASE.fixed,RELEASE.byte"};
+    case OP_LEFT: return {"F + PREP(index) + READ(W(index)) + RELEASE.discarded*(input-offset)", "F,PREP.fixed,PREP.byte,READ,RELEASE.discarded"};
+    case OP_RIGHT: return {"F + PREP(index) + READ(W(index)) + COPY.byte*offset + RELEASE.discarded*(input-offset)", "F,PREP.fixed,PREP.byte,READ,COPY.byte,RELEASE.discarded"};
+    case OP_SHA1:
+        return {"F + H1(n) + COPY(digest)", "F,H1.fixed,H1.byte,COPY.fixed,COPY.byte"};
+    case OP_RIPEMD160:
+        return {"F + H160(n) + COPY(digest)", "F,H160.fixed,H160.byte,COPY.fixed,COPY.byte"};
+    case OP_SHA256:
+        return {"F + H256(n) + COPY(digest)", "F,H256.fixed,H256.byte,COPY.fixed,COPY.byte"};
+    case OP_HASH160:
+        return {"F + H256(n) + H160(32) + COPY(digest)", "F,H256.fixed,H256.byte,H160.fixed,H160.byte,COPY.fixed,COPY.byte"};
+    case OP_HASH256:
+        return {"F + H256(n) + H256(32) + COPY(digest)", "F,H256.fixed,H256.byte (n),H256.fixed,H256.byte (32),COPY.fixed,COPY.byte"};
+    case OP_CHECKSIG: case OP_CHECKSIGVERIFY: case OP_CHECKSIGADD:
+        return {"F + optional SIGHASH + H256 + SIG + result work", "F,SIGHASH,H256.fixed,H256.byte,SIG,OUTPUT(8),PREP.fixed,PREP.byte,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte,COPY.fixed,COPY.byte"};
+    case OP_CHECKLOCKTIMEVERIFY: case OP_CHECKSEQUENCEVERIFY:
+        return {"F + PREP(n) + READ(W(n)) + OUTPUT(n)", "F,PREP.fixed,PREP.byte,READ,OUTPUT.fixed,OUTPUT.byte"};
+    case OP_TX:
+        return {"F + SELECT(selected records/items) + COPY.byte*returned_bytes",
+                "F,SELECT.fixed,SELECT.item,COPY.byte"};
+    case OP_MACRO: return {"DECODE(body bytes) once; CALLMACRO: F + DECODE(body bytes)", "F,DECODE"};
+    default: return {"unwired", ""};
+    }
+}
+
+struct ParityCoverage {
+    size_t successful_cases{0};
+    size_t static_formula_cases{0};
+};
+
+static void WriteCoverageManifest(
+    const std::string& path,
+    const std::map<opcodetype, ParityCoverage>& parity)
+{
+    std::ofstream out{path};
+    if (!out) throw std::runtime_error("cannot open coverage manifest: " + path);
+    const auto quote = [](std::string_view value) {
+        std::string escaped{"\""};
+        for (const char c : value) {
+            if (c == '"') escaped += '"';
+            escaped += c;
+        }
+        return escaped + '"';
+    };
+    out << "opcode,candidate formula,coefficients used,parity-test status\n";
+    for (const OpcodeEntry& entry : OpcodeRegistry()) {
+        const auto [formula, coefficients]{CandidateFormula(entry.opcode)};
+        const auto found{parity.find(entry.opcode)};
+        const ParityCoverage coverage{found == parity.end() ? ParityCoverage{} : found->second};
+        const std::string status{
+            formula == "unwired" ? "unwired" :
+            coverage.successful_cases != 0 && coverage.static_formula_cases == coverage.successful_cases ?
+                strprintf("independent formula parity exact (%u/%u successful cases)",
+                          coverage.static_formula_cases, coverage.successful_cases) :
+                strprintf("independent formula parity incomplete (%u/%u successful cases)",
+                          coverage.static_formula_cases, coverage.successful_cases)};
+        out << quote(OpcodeName(entry.opcode)) << ',' << quote(formula) << ',' << quote(coefficients) << ','
+            << quote(status) << '\n';
+    }
 }
 
 static std::vector<CaseSpec> GenerateCaseSpecs(const Options& options)
@@ -1791,6 +2854,26 @@ static std::vector<CaseSpec> GenerateCaseSpecs(const Options& options)
                 FixedCase(SCRIPT_ERR_TOTAL_STACK_SIZE, 1, 0, "total-stack-limit"));
     }
 
+    // A short successful run can be extrapolated; a one-shot boundary or a
+    // rejection path cannot. Keep those cases in the full-budget protocol.
+    if (options.sample_budget_percent != 100) {
+        std::erase_if(specs, [](const CaseSpec& spec) {
+            return spec.expected_error != SCRIPT_ERR_OK || spec.repeat_mode != RepeatMode::MAX_SUCCESS;
+        });
+    }
+
+    if (!options.case_filter.empty()) {
+        if (std::ranges::none_of(specs, [&](const CaseSpec& spec) {
+                return spec.role != HeadlineRole::PRE_BASELINE &&
+                       spec.name.find(options.case_filter) != std::string::npos;
+            })) {
+            throw std::runtime_error("case filter matched no non-baseline case");
+        }
+        std::erase_if(specs, [&](const CaseSpec& spec) {
+            return spec.role != HeadlineRole::PRE_BASELINE &&
+                   spec.name.find(options.case_filter) == std::string::npos;
+        });
+    }
     std::sort(specs.begin(), specs.end(), [](const CaseSpec& left, const CaseSpec& right) { return left.name < right.name; });
     const std::vector<CaseSpec>::iterator duplicate{std::adjacent_find(specs.begin(), specs.end(), [](const CaseSpec& left, const CaseSpec& right) {
         return left.name == right.name;
@@ -1810,7 +2893,6 @@ static std::string_view TimingStageName(TimingStage stage)
 {
     switch (stage) {
     case TimingStage::SCHNORR_BASELINE: return "schnorr-baseline";
-    case TimingStage::DISCOVERY: return "discovery";
     case TimingStage::STABLE: return "stable";
     }
     return "unknown";
@@ -1889,6 +2971,7 @@ static BenchResult ResultMetadata(const MaterializedCase& test_case)
     result.name = spec.name;
     result.domain = DomainFor(spec.role);
     result.role = spec.role;
+    result.new_in_v2 = spec.new_in_v2;
     result.opcode_name = spec.opcode_name;
     result.sequence_opcodes = spec.sequence_opcodes;
     result.operand_shape = spec.operand_shape;
@@ -1935,7 +3018,7 @@ static TimingSample MeasurePrepared(const MaterializedCase& test_case, const Cry
                                     PreparedExecution& execution, const EvalOutcome& expected,
                                     TimingStage stage, int round, size_t order)
 {
-    BenchSignatureChecker checker{fixture};
+    BenchSignatureChecker checker{fixture, test_case.transaction.get()};
     ankerl::nanobench::Bench bench{SetupBenchmark()};
     EvalOutcome outcome;
     size_t executions{0};
@@ -1951,35 +3034,6 @@ static TimingSample MeasurePrepared(const MaterializedCase& test_case, const Cry
             bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed)};
 }
 
-static TimingSample RunTimedCaseSample(const MaterializedCase& test_case, const CryptoFixture& fixture,
-                                       const EvalOutcome& expected, TimingStage stage, int round,
-                                       size_t order, bool warmup)
-{
-    const uint64_t fixture_bytes{StackFixtureBytes(test_case.initial_stack)};
-    const uint64_t copies{warmup ? 2U : 1U};
-    if (fixture_bytes > MAX_FIXTURE_POOL_BYTES / copies) {
-        throw std::runtime_error(strprintf("%s sample fixtures would require %u bytes (limit %u)",
-                                           test_case.spec->name, fixture_bytes * copies,
-                                           MAX_FIXTURE_POOL_BYTES));
-    }
-
-    if (warmup) ReleaseAllocatorCaches();
-    TimingSample sample;
-    {
-        std::optional<PreparedExecution> warmup_execution;
-        if (warmup) warmup_execution.emplace(PrepareExecution(test_case, true));
-        PreparedExecution measured_execution{PrepareExecution(test_case, true)};
-        BenchSignatureChecker checker{fixture};
-        if (warmup_execution) {
-            const EvalOutcome warmup_outcome{ExecutePrepared(test_case, checker, *warmup_execution)};
-            CheckMeasuredOutcome(test_case, expected, warmup_outcome, "warmup");
-        }
-        sample = MeasurePrepared(test_case, fixture, measured_execution, expected, stage, round, order);
-    }
-    if (warmup) ReleaseAllocatorCaches();
-    return sample;
-}
-
 static bool ConfigureFullVaropsExtrapolation(const MaterializedCase& test_case,
                                              const EvalOutcome& expected,
                                              FullVaropsResult& result)
@@ -1990,6 +3044,10 @@ static bool ConfigureFullVaropsExtrapolation(const MaterializedCase& test_case,
     }
     if (!expected.success) {
         result.status = "non-success";
+        return false;
+    }
+    if (test_case.saturation == "transaction-weight") {
+        result.status = "transaction-weight-limited";
         return false;
     }
     if (expected.varops_consumed == 0) {
@@ -2017,6 +3075,41 @@ static TimingSample ExtrapolateFullVaropsSample(const TimingSample& realistic,
     }
     return {MeasurementMode::FULL_VAROPS, realistic.stage, realistic.round,
             realistic.order, realistic.wall_sec * plan.scale};
+}
+
+static CaseSample RunTimedCaseSample(const MaterializedCase& test_case, const CryptoFixture& fixture,
+                                     const std::optional<EvalOutcome>& expected, int round,
+                                     size_t order, uint64_t budget_ceiling)
+{
+    CheckScriptSize(test_case);
+    const uint64_t fixture_bytes{StackFixtureBytes(test_case.initial_stack)};
+    if (fixture_bytes > MAX_FIXTURE_POOL_BYTES / 2) {
+        throw std::runtime_error(strprintf("%s sample fixtures would require %u bytes (limit %u)",
+                                           test_case.spec->name, fixture_bytes * 2,
+                                           MAX_FIXTURE_POOL_BYTES));
+    }
+
+    ReleaseAllocatorCaches();
+    PreparedExecution warmup_execution{PrepareExecution(test_case, true, budget_ceiling)};
+    PreparedExecution measured_execution{PrepareExecution(test_case, true, budget_ceiling)};
+    BenchSignatureChecker checker{fixture, test_case.transaction.get()};
+    std::optional<uint64_t> executed_opcodes;
+    EvalOutcome warmup_outcome;
+    if (budget_ceiling != TOTAL_VAROPS_BUDGET &&
+        DomainFor(test_case.spec->role) == ExecutionDomain::GSR_TAPSCRIPT_V2 && !expected) {
+        ExecutedOpcodeCounter counter;
+        varops::ScopedCostAudit audit_scope{&counter};
+        warmup_outcome = ExecutePrepared(test_case, checker, warmup_execution);
+        executed_opcodes = counter.count;
+    } else {
+        warmup_outcome = ExecutePrepared(test_case, checker, warmup_execution);
+    }
+    CheckDeclaredOutcome(test_case, warmup_outcome, "warmup");
+    if (expected) CheckMeasuredOutcome(test_case, *expected, warmup_outcome, "warmup");
+    TimingSample sample{MeasurePrepared(test_case, fixture, measured_execution, warmup_outcome,
+                                        TimingStage::STABLE, round, order)};
+    ReleaseAllocatorCaches();
+    return {warmup_outcome, std::move(sample), executed_opcodes};
 }
 
 static TimingSample MeasureSchnorrBatch(const CryptoFixture& fixture, TimingStage stage,
@@ -2066,137 +3159,25 @@ static BenchResult RunRawSchnorr(const CryptoFixture& fixture)
     return result;
 }
 
-static BenchResult RunDiscoveryCase(const MaterializedCase& test_case, const CryptoFixture& fixture,
-                                    size_t order)
+static double WorstCaseSeconds(const BenchResult& result)
 {
-    CheckScriptSize(test_case);
-    const uint64_t fixture_bytes{StackFixtureBytes(test_case.initial_stack)};
-    if (fixture_bytes > MAX_FIXTURE_POOL_BYTES / 2) {
-        throw std::runtime_error(strprintf("%s discovery fixtures would require %u bytes (limit %u)",
-                                           test_case.spec->name, fixture_bytes * 2,
-                                           MAX_FIXTURE_POOL_BYTES));
-    }
-
-    ReleaseAllocatorCaches();
-    EvalOutcome preflight;
-    TimingSample realistic_sample;
-    {
-        PreparedExecution preflight_execution{PrepareExecution(test_case, true)};
-        PreparedExecution measured_execution{PrepareExecution(test_case, true)};
-        BenchSignatureChecker checker{fixture};
-        preflight = ExecutePrepared(test_case, checker, preflight_execution);
-        CheckDeclaredOutcome(test_case, preflight, "discovery preflight/warmup");
-        realistic_sample = MeasurePrepared(test_case, fixture, measured_execution, preflight,
-                                           TimingStage::DISCOVERY, 0, order);
-    }
-
-    BenchResult result{ResultMetadata(test_case)};
-    result.actual_error = preflight.error;
-    result.varops_consumed = preflight.varops_consumed;
-    result.discovery_wall_sec = realistic_sample.wall_sec;
-    result.samples.push_back(realistic_sample);
-    AggregateSamples(result, TimingStage::DISCOVERY, MeasurementMode::REALISTIC);
-
-    if (ConfigureFullVaropsExtrapolation(test_case, preflight,
-                                         result.full_varops)) {
-        TimingSample full_varops_sample{
-            ExtrapolateFullVaropsSample(realistic_sample, result.full_varops)};
-        result.full_varops.discovery_wall_sec = full_varops_sample.wall_sec;
-        result.samples.push_back(std::move(full_varops_sample));
-        AggregateSamples(result, TimingStage::DISCOVERY,
-                         MeasurementMode::FULL_VAROPS);
-    }
-    ReleaseAllocatorCaches();
-    return result;
+    return std::max(result.median_sec, result.full_varops.median_sec);
 }
 
-static void AddPromotionReason(BenchResult& result, std::string reason)
+static std::vector<const BenchResult*> TopWorstNewV2Cases(const std::vector<BenchResult>& results)
 {
-    if (std::ranges::find(result.promotion_reasons, reason) == result.promotion_reasons.end()) {
-        result.promotion_reasons.push_back(std::move(reason));
+    std::vector<const BenchResult*> ranked;
+    for (const BenchResult& result : results) {
+        if (result.new_in_v2) ranked.push_back(&result);
     }
-    result.promoted = true;
-}
-
-static double DiscoveryWall(const BenchResult& result)
-{
-    return std::max(*result.discovery_wall_sec,
-                    result.full_varops.discovery_wall_sec.value_or(0));
-}
-
-static void PromoteLeader(std::vector<BenchResult>& results,
-                          const std::function<bool(const BenchResult&)>& predicate)
-{
-    BenchResult* leader{nullptr};
-    for (BenchResult& result : results) {
-        if (result.domain == ExecutionDomain::RAW_SCHNORR || !predicate(result)) continue;
-        if (!leader || DiscoveryWall(result) > DiscoveryWall(*leader)) leader = &result;
-    }
-    if (leader) AddPromotionReason(*leader, "category-leader");
-}
-
-static void PromoteFullVaropsLeader(std::vector<BenchResult>& results)
-{
-    BenchResult* leader{nullptr};
-    for (BenchResult& result : results) {
-        if (result.domain != ExecutionDomain::GSR_TAPSCRIPT_V2 ||
-            !result.full_varops.discovery_wall_sec) {
-            continue;
+    std::sort(ranked.begin(), ranked.end(), [](const BenchResult* left, const BenchResult* right) {
+        if (WorstCaseSeconds(*left) != WorstCaseSeconds(*right)) {
+            return WorstCaseSeconds(*left) > WorstCaseSeconds(*right);
         }
-        if (!leader || *result.full_varops.discovery_wall_sec >
-                           *leader->full_varops.discovery_wall_sec) {
-            leader = &result;
-        }
-    }
-    if (leader) AddPromotionReason(*leader, "full-varops-leader");
-}
-
-static PromotionSummary PromoteDiscoveryResults(std::vector<BenchResult>& results,
-                                                const BenchResult& schnorr)
-{
-    PromotionSummary summary{schnorr.median_sec * PROMOTION_THRESHOLD, 0};
-    for (BenchResult& result : results) {
-        if (result.domain == ExecutionDomain::RAW_SCHNORR) continue;
-        if (*result.discovery_wall_sec >= summary.promotion_cutoff_seconds) {
-            AddPromotionReason(result, "wall-cutoff");
-        }
-        if (result.full_varops.discovery_wall_sec.value_or(0) >= summary.promotion_cutoff_seconds) {
-            AddPromotionReason(result, "full-varops-cutoff");
-        }
-    }
-
-    const std::array<std::function<bool(const BenchResult&)>, 7> categories{
-        [](const BenchResult& result) { return result.domain == ExecutionDomain::PRE_GSR_TAPSCRIPT; },
-        [](const BenchResult& result) { return result.role == HeadlineRole::NEW_GSR; },
-        [](const BenchResult& result) { return result.role == HeadlineRole::NEW_GSR && result.actual_error == SCRIPT_ERR_OK; },
-        [](const BenchResult& result) { return result.role == HeadlineRole::NEW_GSR && IsResourceError(result.actual_error); },
-        [](const BenchResult& result) { return result.domain == ExecutionDomain::GSR_TAPSCRIPT_V2; },
-        [](const BenchResult& result) {
-            return result.domain == ExecutionDomain::PRE_GSR_TAPSCRIPT ||
-                   result.domain == ExecutionDomain::GSR_TAPSCRIPT_V2;
-        },
-        [](const BenchResult& result) { return result.role == HeadlineRole::COMMON_V2; },
-    };
-    for (const auto& category : categories)
-        PromoteLeader(results, category);
-    PromoteFullVaropsLeader(results);
-    summary.promoted_cases = std::ranges::count_if(results, [](const BenchResult& result) {
-        return result.promoted;
+        return left->name < right->name;
     });
-    return summary;
-}
-
-static std::vector<std::vector<size_t>> BuildRoundSchedules(const std::vector<size_t>& indices,
-                                                            int rounds)
-{
-    std::mt19937_64 generator{ROUND_SEED};
-    std::vector<std::vector<size_t>> schedules;
-    schedules.reserve(rounds);
-    for (int round{0}; round < rounds; ++round) {
-        schedules.push_back(indices);
-        std::shuffle(schedules.back().begin(), schedules.back().end(), generator);
-    }
-    return schedules;
+    ranked.resize(std::min<size_t>(5, ranked.size()));
+    return ranked;
 }
 
 static void RunTimingSelfChecks()
@@ -2206,37 +3187,23 @@ static void RunTimingSelfChecks()
               std::abs(stats.mdape - 0.3125) <= 1e-12,
           "internal timing aggregation failed");
 
-    const std::vector<size_t> indices{0, 1, 2, 3};
-    const auto first{BuildRoundSchedules(indices, 7)};
-    Check(first == BuildRoundSchedules(indices, 7) && first.size() == 7,
-          "internal round schedule determinism failed");
-    for (const auto& round : first) {
-        std::vector<size_t> sorted{round};
-        std::sort(sorted.begin(), sorted.end());
-        Check(sorted == indices, "internal round schedule coverage failed");
-    }
-
     BenchResult lower;
-    lower.domain = ExecutionDomain::PRE_GSR_TAPSCRIPT;
-    lower.discovery_wall_sec = 1;
+    lower.new_in_v2 = true;
     BenchResult higher;
-    higher.domain = ExecutionDomain::PRE_GSR_TAPSCRIPT;
-    higher.discovery_wall_sec = 2;
-    std::vector<BenchResult> category_results{lower, higher};
-    PromoteLeader(category_results, [](const BenchResult&) { return true; });
-    Check(!category_results[0].promoted && category_results[1].promoted,
-          "internal category leader promotion failed");
-
-    BenchResult lower_full_varops;
-    lower_full_varops.domain = ExecutionDomain::GSR_TAPSCRIPT_V2;
-    lower_full_varops.full_varops.discovery_wall_sec = 1;
-    BenchResult higher_full_varops;
-    higher_full_varops.domain = ExecutionDomain::GSR_TAPSCRIPT_V2;
-    higher_full_varops.full_varops.discovery_wall_sec = 2;
-    std::vector<BenchResult> full_varops_results{lower_full_varops, higher_full_varops};
-    PromoteFullVaropsLeader(full_varops_results);
-    Check(!full_varops_results[0].promoted && full_varops_results[1].promoted,
-          "internal full-varops leader promotion failed");
+    higher.new_in_v2 = true;
+    lower.name = "measured";
+    lower.median_sec = 1;
+    higher.name = "projected";
+    higher.median_sec = 2;
+    higher.full_varops.median_sec = 3;
+    BenchResult common;
+    common.domain = ExecutionDomain::GSR_TAPSCRIPT_V2;
+    common.median_sec = 4;
+    common.full_varops.median_sec = 5;
+    const std::vector<BenchResult> ranking_results{lower, higher, common};
+    const auto top{TopWorstNewV2Cases(ranking_results)};
+    Check(top.size() == 2 && top[0]->name == "projected" && top[1]->name == "measured",
+          "internal worst-case ranking failed");
 }
 
 static const BenchResult* Slowest(const std::vector<BenchResult>& results,
@@ -2264,29 +3231,17 @@ static const BenchResult* SlowestFullVarops(
     return slowest;
 }
 
-static bool IsRankable(const BenchResult& result)
+static std::vector<std::vector<size_t>> BuildRoundSchedules(const std::vector<size_t>& indices,
+                                                            int rounds)
 {
-    return result.domain == ExecutionDomain::RAW_SCHNORR || result.promoted;
-}
-
-static std::optional<SampleStats> PairedRatioStats(const BenchResult& numerator,
-                                                   const BenchResult& denominator)
-{
-    std::map<int, double> denominator_by_round;
-    for (const TimingSample& sample : denominator.samples) {
-        if (sample.stage == TimingStage::STABLE && sample.mode == MeasurementMode::REALISTIC)
-            denominator_by_round.emplace(sample.round, sample.wall_sec);
+    std::mt19937_64 generator{ROUND_SEED};
+    std::vector<std::vector<size_t>> schedules;
+    schedules.reserve(rounds);
+    for (int round{0}; round < rounds; ++round) {
+        schedules.push_back(indices);
+        std::shuffle(schedules.back().begin(), schedules.back().end(), generator);
     }
-    std::vector<double> ratios;
-    for (const TimingSample& sample : numerator.samples) {
-        if (sample.stage != TimingStage::STABLE || sample.mode != MeasurementMode::REALISTIC)
-            continue;
-        const auto denominator_value{denominator_by_round.find(sample.round)};
-        if (denominator_value != denominator_by_round.end() && denominator_value->second > 0) {
-            ratios.push_back(sample.wall_sec / denominator_value->second);
-        }
-    }
-    return ratios.empty() ? std::nullopt : std::optional<SampleStats>{CalculateStats(std::move(ratios))};
+    return schedules;
 }
 
 static std::string CompactResultName(const BenchResult& result)
@@ -2296,52 +3251,82 @@ static std::string CompactResultName(const BenchResult& result)
 }
 
 static void PrintReport(const std::vector<BenchResult>& results, const CorpusCounts& counts,
-                        const Options& options, const PromotionSummary& promotion)
+                        const Options& options)
 {
     const BenchResult* denominator{Slowest(results, [](const BenchResult& result) {
-        return IsRankable(result) && result.domain == ExecutionDomain::PRE_GSR_TAPSCRIPT;
+        return result.domain == ExecutionDomain::PRE_GSR_TAPSCRIPT;
     })};
     const BenchResult* numerator{Slowest(results, [](const BenchResult& result) {
-        return IsRankable(result) && result.role == HeadlineRole::NEW_GSR;
+        return result.new_in_v2;
     })};
     const BenchResult* schnorr{Slowest(results, [](const BenchResult& result) {
         return result.domain == ExecutionDomain::RAW_SCHNORR;
     })};
     const BenchResult* full_varops{SlowestFullVarops(results, [](const BenchResult& result) {
-        return IsRankable(result) && result.domain == ExecutionDomain::GSR_TAPSCRIPT_V2;
+        return result.new_in_v2;
     })};
 
-    std::cout << "\nVAROPS BENCHMARK SUMMARY\n";
-    std::cout << strprintf("Cases: %u/%u; stable set: %u cases x %u rounds\n",
+    const auto line{[](const std::string& label, const std::string& value) {
+        std::cout << "  " << std::left << std::setw(24) << (label + ':') << value << '\n';
+    }};
+
+    std::cout << "\n== VAROPS BENCHMARK SUMMARY ==\n";
+    line("cases", strprintf("%u/%u completed x %u stable rounds",
                            counts.completed_cases, counts.generated_cases,
-                           promotion.promoted_cases, options.stable_rounds);
+                           options.stable_rounds));
+    if (options.sample_budget_percent != 100) {
+        line("sample mode", strprintf("%u%% budget (%u varops), no fixed/rejection cases",
+                                     options.sample_budget_percent, SampleBudget(options)));
+    }
+    line("schnorr baseline", strprintf("80,000 checks: %.3f s",
+                                       schnorr ? schnorr->median_sec : 0.0));
     if (denominator) {
-        std::cout << strprintf("Pre-v2 measured max: %s  %.3f s\n",
-                               CompactResultName(*denominator), denominator->median_sec);
+        line("pre-v2 worst", strprintf("%s: %.3f s",
+                                       CompactResultName(*denominator), denominator->median_sec));
     }
     if (numerator) {
-        std::cout << strprintf("V2 additions measured max: %s  %.3f s\n",
-                               CompactResultName(*numerator), numerator->median_sec);
+        const std::string label{options.sample_budget_percent == 100 ?
+            "v2 measured worst" : "v2 measured worst (sample)"};
+        line(label, strprintf("%s: %.3f s",
+                              CompactResultName(*numerator), numerator->median_sec));
     }
     if (full_varops) {
-        std::cout << strprintf("All-v2 projected max: %s  %.3f s",
-                               CompactResultName(*full_varops),
-                               full_varops->full_varops.median_sec);
-        if (schnorr && schnorr->median_sec > 0)
-            std::cout << strprintf(" (%.3fx Schnorr)",
-                                   full_varops->full_varops.median_sec / schnorr->median_sec);
-        std::cout << '\n';
-    }
-    if (denominator && numerator && denominator->median_sec > 0) {
-        if (const auto paired{PairedRatioStats(*numerator, *denominator)}) {
-            std::cout << strprintf("V2/pre-v2 measured ratio:    %.3fx\n", paired->median);
-        } else {
-            std::cout << strprintf("V2/pre-v2 measured ratio:    %.3fx\n",
-                                   numerator->median_sec / denominator->median_sec);
+        std::string ratios;
+        if (schnorr && schnorr->median_sec > 0) {
+            ratios += strprintf("%.2fx schnorr", full_varops->full_varops.median_sec / schnorr->median_sec);
         }
+        if (denominator && denominator->median_sec > 0) {
+            if (!ratios.empty()) ratios += ", ";
+            ratios += strprintf("%.2fx pre-v2",
+                                full_varops->full_varops.median_sec / denominator->median_sec);
+        }
+        if (numerator && numerator->median_sec > 0) {
+            if (!ratios.empty()) ratios += ", ";
+            ratios += strprintf("%.2fx v2 measured",
+                                full_varops->full_varops.median_sec / numerator->median_sec);
+        }
+        line("v2 projected worst",
+             strprintf("%s: %.3f s (%s)", CompactResultName(*full_varops),
+                       full_varops->full_varops.median_sec, ratios.empty() ? "no baseline" : ratios));
     }
-    if (schnorr) {
-        std::cout << strprintf("80,000 Schnorr checks:       %.3f s\n", schnorr->median_sec);
+    std::cout << "\n  top 5 new-v2 cases (measured or projected):\n";
+    const auto top{TopWorstNewV2Cases(results)};
+    for (size_t i{0}; i < top.size(); ++i) {
+        const BenchResult& result{*top[i]};
+        const bool projected{result.full_varops.median_sec > result.median_sec};
+        const auto stage{projected ? result.full_varops.aggregate_stage : result.aggregate_stage};
+        std::cout << strprintf("  %u. %.3f s (%s, %s): %s\n", i + 1,
+                               WorstCaseSeconds(result), projected ? "projected" : "measured",
+                               stage ? TimingStageName(*stage) : "unmeasured", result.name);
+        if (result.executed_opcodes) {
+            std::cout << strprintf("     Executed logical opcodes: %u in %u repetitions; varops consumed: %u",
+                                   *result.executed_opcodes, result.repetitions, result.varops_consumed);
+            if (result.full_varops.status == "extrapolated") {
+                std::cout << strprintf("; projected opcodes: %.0f",
+                                       *result.executed_opcodes * result.full_varops.scale);
+            }
+            std::cout << '\n';
+        }
     }
 }
 
@@ -2411,16 +3396,6 @@ static std::string CsvEscape(std::string_view value)
     return escaped + '"';
 }
 
-static std::string JoinPromotionReasons(const std::vector<std::string>& reasons)
-{
-    std::string joined;
-    for (const std::string& reason : reasons) {
-        if (!joined.empty()) joined += ';';
-        joined += reason;
-    }
-    return joined;
-}
-
 static std::string CsvNumber(double value)
 {
     return strprintf("%.17g", value);
@@ -2441,6 +3416,7 @@ enum class CsvColumn : size_t {
     NAME,
     EXECUTION_DOMAIN,
     HEADLINE_ROLE,
+    NEW_IN_V2,
     OPCODE,
     SEQUENCE_OPCODES,
     OPERAND_SHAPE,
@@ -2453,9 +3429,8 @@ enum class CsvColumn : size_t {
     ACTUAL_TERMINATION,
     SATURATION,
     REPETITIONS,
+    EXECUTED_OPCODES,
     SEQUENCE_VAROPS,
-    PROMOTED,
-    PROMOTION_REASONS,
     STAGE,
     ROUND,
     ORDER,
@@ -2471,6 +3446,7 @@ enum class CsvColumn : size_t {
     FULL_VAROPS_SCRIPT_EXECUTIONS,
     FULL_VAROPS_MEASURED_VAROPS,
     FULL_VAROPS_SCALE,
+    FULL_VAROPS_PROJECTED_OPCODES,
     FULL_VAROPS_STAGE,
     FULL_VAROPS_SAMPLES,
     FULL_VAROPS_WALL_SECONDS,
@@ -2486,13 +3462,13 @@ static constexpr size_t CsvIndex(CsvColumn column) { return static_cast<size_t>(
 using CsvRow = std::array<std::string, CsvIndex(CsvColumn::COUNT)>;
 
 static constexpr std::string_view CSV_HEADER{
-    "Record_Type,Measurement_Mode,Rank,Name,Domain,Headline_Role,Opcode,Sequence_Opcodes,"
+    "Record_Type,Measurement_Mode,Rank,Name,Domain,Headline_Role,New_In_V2,Opcode,Sequence_Opcodes,"
     "Operand_Shape,Operand_Pattern,Script_Bytes,Initial_Stack_Items,Initial_Stack_Bytes,"
-    "Varops_Consumed,Expected_Termination,Actual_Termination,Saturation,Repetitions,"
-    "Sequence_Varops,Promoted,Promotion_Reasons,Stage,Round,Order,Samples,Wall_Seconds,"
+    "Varops_Consumed,Expected_Termination,Actual_Termination,Saturation,Repetitions,Executed_Logical_Opcodes,"
+    "Sequence_Varops,Stage,Round,Order,Samples,Wall_Seconds,"
     "Wall_Min_Seconds,Wall_Max_Seconds,MdAPE,Schnorr_Equivalents,Varops_Percentage,"
     "Full_Varops_Status,Full_Varops_Script_Bytes,Full_Varops_Script_Executions,Full_Varops_Measured_Varops,"
-    "Full_Varops_Scale,Full_Varops_Stage,Full_Varops_Samples,Full_Varops_Wall_Seconds,"
+    "Full_Varops_Scale,Full_Varops_Projected_Logical_Opcodes,Full_Varops_Stage,Full_Varops_Samples,Full_Varops_Wall_Seconds,"
     "Full_Varops_Wall_Min_Seconds,Full_Varops_Wall_Max_Seconds,Full_Varops_MdAPE,"
     "Full_Varops_Schnorr_Equivalents"};
 static_assert(std::ranges::count(CSV_HEADER, ',') + 1 == CsvIndex(CsvColumn::COUNT));
@@ -2514,6 +3490,7 @@ static void SetResultIdentity(CsvRow& row, const BenchResult& result)
     CsvField(row, CsvColumn::NAME) = result.name;
     CsvField(row, CsvColumn::EXECUTION_DOMAIN) = DomainName(result.domain);
     CsvField(row, CsvColumn::HEADLINE_ROLE) = RoleName(result.role);
+    CsvField(row, CsvColumn::NEW_IN_V2) = result.new_in_v2 ? "true" : "false";
     CsvField(row, CsvColumn::OPCODE) = result.opcode_name;
     CsvField(row, CsvColumn::SEQUENCE_OPCODES) = result.sequence_opcodes;
     CsvField(row, CsvColumn::OPERAND_SHAPE) = result.operand_shape;
@@ -2526,6 +3503,9 @@ static void SetResultIdentity(CsvRow& row, const BenchResult& result)
     CsvField(row, CsvColumn::ACTUAL_TERMINATION) = ScriptErrorString(result.actual_error);
     CsvField(row, CsvColumn::SATURATION) = result.saturation;
     CsvField(row, CsvColumn::REPETITIONS) = CsvNumber(result.repetitions);
+    if (result.executed_opcodes) {
+        CsvField(row, CsvColumn::EXECUTED_OPCODES) = CsvNumber(*result.executed_opcodes);
+    }
     CsvField(row, CsvColumn::SEQUENCE_VAROPS) = CsvNumber(result.varops_per_repeat);
 }
 
@@ -2546,8 +3526,7 @@ static bool FlushAndClose(std::ofstream& file, const fs::path& path)
 }
 
 static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std::string& filepath,
-                              const CorpusCounts& counts, const Options& options,
-                              const PromotionSummary& promotion)
+                              const CorpusCounts& counts, const Options& options)
 {
     const fs::path output_target{fs::PathFromString(filepath)};
     fs::path output_temporary{output_target};
@@ -2562,7 +3541,7 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
     for (const BenchResult& result : results)
         raw_sample_count += result.samples.size();
 
-    output_file << "# Schema: bench_varops-v3\n";
+    output_file << "# Schema: bench_varops-v5\n";
     output_file << GetBenchmarkSystemInfo();
     output_file << "# Record types: summary=aggregated row; sample=normalized wall-clock measurement.\n";
     output_file << "# Wall_Seconds: summary median or sample value; Schnorr samples are normalized to 80,000 validations.\n";
@@ -2570,16 +3549,19 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
                    "to exactly 40 billion varops.\n";
     output_file << "# Full-varops extrapolation requires at least 1% of the budget in the measured script.\n";
     output_file << "# Measurement_Mode distinguishes realistic measurements and full-varops extrapolations.\n";
+    output_file << "# New_In_V2 marks workloads requiring v2 rules or limits, not only new opcode names.\n";
     output_file << strprintf("# Records: summary=%u sample=%u\n", results.size(), raw_sample_count);
-    output_file << "# Realistic measurement: scripts stop at their natural script-size or varops limit; "
-                   "initial stack preparation is untimed.\n";
+    output_file << "# Realistic measurement: scripts stop at their natural script-size or varops limit, "
+                   "or at the declared exploratory sample cap; initial stack preparation is untimed.\n";
+    output_file << "# Executed_Logical_Opcodes counts candidate-schedule v2 preflight opcode events; "
+                   "fragment calls include their executed body instructions.\n";
     output_file << "# Sequence opcodes exclude the final cleanup/result suffix.\n";
-    output_file << strprintf("# Corpus: requested_opcodes=%u generated=%u completed=%u profile=full\n",
-                             counts.requested_opcodes, counts.generated_cases, counts.completed_cases);
-    output_file << strprintf("# Protocol: schnorr_samples=%u threshold=%.2f round_seed=0x%x stable_rounds=%u promoted=%u wall_cutoff=%.9f\n",
-                             SCHNORR_BASELINE_SAMPLES, PROMOTION_THRESHOLD,
-                             static_cast<unsigned int>(ROUND_SEED),
-                             options.stable_rounds, promotion.promoted_cases, promotion.promotion_cutoff_seconds);
+    output_file << strprintf("# Corpus: requested_opcodes=%u generated=%u completed=%u profile=%s\n",
+                             counts.requested_opcodes, counts.generated_cases, counts.completed_cases,
+                             options.sample_budget_percent == 100 ? "full" : "exploratory-sample");
+    output_file << strprintf("# Protocol: schnorr_samples=%u sample_budget_percent=%u sample_budget_varops=%u\n",
+                             SCHNORR_BASELINE_SAMPLES,
+                             options.sample_budget_percent, SampleBudget(options));
     output_file << "#\n";
     output_file << CSV_HEADER << '\n';
 
@@ -2594,8 +3576,6 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
         CsvField(row, CsvColumn::RECORD_TYPE) = "summary";
         CsvField(row, CsvColumn::MEASUREMENT_MODE) = "combined";
         CsvField(row, CsvColumn::RANK) = CsvNumber(index + 1);
-        CsvField(row, CsvColumn::PROMOTED) = result.promoted ? "true" : "false";
-        CsvField(row, CsvColumn::PROMOTION_REASONS) = JoinPromotionReasons(result.promotion_reasons);
         CsvField(row, CsvColumn::STAGE) =
             result.aggregate_stage ? TimingStageName(*result.aggregate_stage) : "unmeasured";
         CsvField(row, CsvColumn::SAMPLES) = CsvNumber(result.aggregate_stage ? std::ranges::count_if(
@@ -2622,6 +3602,10 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
                 CsvNumber(result.full_varops.measured_varops);
             CsvField(row, CsvColumn::FULL_VAROPS_SCALE) =
                 CsvNumber(result.full_varops.scale);
+            if (result.executed_opcodes) {
+                CsvField(row, CsvColumn::FULL_VAROPS_PROJECTED_OPCODES) =
+                    CsvNumber(*result.executed_opcodes * result.full_varops.scale);
+            }
             CsvField(row, CsvColumn::FULL_VAROPS_STAGE) =
                 TimingStageName(*result.full_varops.aggregate_stage);
             CsvField(row, CsvColumn::FULL_VAROPS_SAMPLES) =
@@ -2650,8 +3634,7 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
             CsvField(row, CsvColumn::RECORD_TYPE) = "sample";
             CsvField(row, CsvColumn::MEASUREMENT_MODE) = MeasurementModeName(sample.mode);
             CsvField(row, CsvColumn::NAME) = result.name;
-            CsvField(row, CsvColumn::PROMOTED) = result.promoted ? "true" : "false";
-            CsvField(row, CsvColumn::PROMOTION_REASONS) = JoinPromotionReasons(result.promotion_reasons);
+            CsvField(row, CsvColumn::NEW_IN_V2) = result.new_in_v2 ? "true" : "false";
             CsvField(row, CsvColumn::STAGE) = TimingStageName(sample.stage);
             CsvField(row, CsvColumn::ROUND) = CsvNumber(sample.round);
             CsvField(row, CsvColumn::ORDER) = CsvNumber(sample.order);
@@ -2682,14 +3665,19 @@ static void PrintUsage(const char* program)
               << "Options:\n"
               << "  --opcodes OP_NAME...    Benchmark only explicitly supported opcodes\n"
               << "  --epochs N              Stable measurement rounds (default: 5)\n"
+              << "  --sample-budget-percent N  Sample repeatable v2 cases at N% of the 40B budget (1..100)\n"
+              << "                            Omit fixed/rejection cases; extrapolate measured time and opcodes\n"
+              << "  --case-filter TEXT      Match case names; retain selected pre-v2 baselines\n"
               << "  --list-opcodes          List the declarative opcode inventory\n"
+              << "  --verify-costs         Cost-verification mode: assert static/runtime parity, skip timing\n"
+              << "  --coverage-manifest P Export candidate opcode/formula/parity CSV\n"
               << "  --silent                Suppress progress output\n"
-              << "  --file PATH             Atomically write a v3 summary-and-sample CSV\n"
+              << "  --file PATH             Atomically write a v4 summary-and-sample CSV\n"
               << "  --help, -h              Show this help\n\n"
-              << "Protocol constants: promotion threshold 0.40, round seed 0x475352.\n\n"
+              << "\n"
               << "Examples:\n"
               << "  " << program << " --opcodes OP_ROLL OP_SHA256\n"
-              << "  " << program << " --opcodes OP_NOP --epochs 1 --file results.csv\n";
+              << "  " << program << " --sample-budget-percent 10 --file results.csv\n";
 }
 
 static Options ParseArguments(int argc, char* argv[])
@@ -2718,8 +3706,25 @@ static Options ParseArguments(int argc, char* argv[])
                 throw std::runtime_error("invalid --epochs value '" + std::string{argv[i]} + "'");
             }
             options.stable_rounds = *stable_rounds;
+        } else if (arg == "--sample-budget-percent") {
+            if (++i >= argc) throw std::runtime_error("--sample-budget-percent requires an integer from 1 to 100");
+            const std::optional<uint32_t> percent{ToIntegral<uint32_t>(argv[i])};
+            if (!percent || *percent < 1 || *percent > 100) {
+                throw std::runtime_error("invalid --sample-budget-percent value '" + std::string{argv[i]} + "'");
+            }
+            options.sample_budget_percent = *percent;
+        } else if (arg == "--case-filter") {
+            if (++i >= argc || std::string_view{argv[i]}.empty()) {
+                throw std::runtime_error("--case-filter requires a nonempty substring");
+            }
+            options.case_filter = argv[i];
         } else if (arg == "--list-opcodes") {
             options.list_opcodes = true;
+        } else if (arg == "--verify-costs") {
+            options.verify_costs = true;
+        } else if (arg == "--coverage-manifest") {
+            if (++i >= argc) throw std::runtime_error("--coverage-manifest requires a path");
+            options.coverage_manifest = argv[i];
         } else if (arg == "--silent") {
             options.silent = true;
         } else if (arg == "--file") {
@@ -2733,6 +3738,122 @@ static Options ParseArguments(int argc, char* argv[])
         }
     }
     return options;
+}
+
+static std::map<opcodetype, ParityCoverage> VerifyCorpusCosts(
+    const std::vector<CaseSpec>& specs, const CryptoFixture& fixture, bool silent)
+{
+    std::map<opcodetype, ParityCoverage> parity;
+    size_t checked{0};
+    size_t independent_checked{0};
+    size_t boundary_checked{0};
+    for (const CaseSpec& spec : specs) {
+        if (DomainFor(spec.role) != ExecutionDomain::GSR_TAPSCRIPT_V2) continue;
+        const MaterializedCase planned{Materialize(spec, fixture)};
+        const size_t cleanup_items{spec.cleanup_items.value_or(planned.initial_stack.size())};
+        CScript verification_script;
+        const bool one_repeat{!spec.sequence.empty() && spec.expected_error == SCRIPT_ERR_OK};
+        if (!one_repeat) {
+            verification_script = planned.script;
+        } else {
+            verification_script.insert(verification_script.end(), spec.sequence.begin(), spec.sequence.end());
+            for (size_t i{0}; i < cleanup_items; ++i) {
+                verification_script.push_back(static_cast<unsigned char>(OP_DROP));
+            }
+            verification_script.push_back(static_cast<unsigned char>(OP_1));
+        }
+        MaterializedCase test_case{
+            &spec,
+            planned.initial_stack,
+            std::move(verification_script),
+            one_repeat ? 1 : planned.repetitions,
+            planned.varops_per_repeat,
+            "cost-verification",
+            planned.transaction,
+        };
+        if (spec.empty_witness_items && one_repeat) {
+            test_case.transaction = MakeOpTxContext(*spec.empty_witness_items, test_case.script);
+        }
+        BenchSignatureChecker checker{fixture, test_case.transaction.get()};
+        IndependentCostAudit independent_audit{spec};
+        EvalOutcome observed;
+        {
+            varops::ScopedCostAudit audit_scope{&independent_audit};
+            observed = Evaluate(test_case, checker);
+        }
+        const bool expected_success{spec.expected_error == SCRIPT_ERR_OK};
+        if (observed.success != expected_success || observed.error != spec.expected_error) {
+            throw std::runtime_error(strprintf(
+                "cost verification semantic mismatch for %s: expected %s, got %s (script=%s, consumed=%u)",
+                spec.name, ScriptErrorString(spec.expected_error), ScriptErrorString(observed.error),
+                HexStr(test_case.script), observed.varops_consumed) +
+                strprintf(" script_size=%u ops=%s initial_items=%u cleanup=%u", test_case.script.size(),
+                          SequenceOpcodeNames(test_case.script), test_case.initial_stack.size(),
+                          spec.cleanup_items.value_or(test_case.initial_stack.size())));
+        }
+        ++checked;
+
+        // For successful cases, the observed exact cost must be sufficient and
+        // one fewer varop must fail. This includes setup, restoration, cleanup
+        // suffix instructions, and the separate final success check.
+        if (observed.success && observed.varops_consumed > 0) {
+            ++parity[spec.opcode].successful_cases;
+            if (!independent_audit.Passed()) {
+                throw std::runtime_error("independent formula mismatch for " + spec.name +
+                                         ": " + independent_audit.Mismatch());
+            }
+            if (independent_audit.ExpectedTotal() != observed.varops_consumed ||
+                independent_audit.ActualTotal() != observed.varops_consumed) {
+                throw std::runtime_error(strprintf(
+                    "independent total mismatch for %s: expected=%u audited-runtime=%u consumed=%u",
+                    spec.name, independent_audit.ExpectedTotal(),
+                    independent_audit.ActualTotal(), observed.varops_consumed));
+            }
+            ++parity[spec.opcode].static_formula_cases;
+            ++independent_checked;
+            const EvalOutcome exact{Evaluate(test_case, checker, observed.varops_consumed)};
+            if (!exact.success || exact.error != SCRIPT_ERR_OK ||
+                exact.varops_consumed != observed.varops_consumed) {
+                throw std::runtime_error("exact-budget replay mismatch for " + spec.name);
+            }
+            const EvalOutcome short_budget{Evaluate(test_case, checker, observed.varops_consumed - 1)};
+            if (short_budget.success || short_budget.error != SCRIPT_ERR_VAROP_COUNT) {
+                throw std::runtime_error("budget-minus-one did not reject for " + spec.name);
+            }
+            ++boundary_checked;
+        }
+        if (!silent && checked % CLI_PROGRESS_INTERVAL == 0) {
+            std::cout << strprintf("Cost verification: %u cases\n", checked);
+        }
+    }
+    std::cout << strprintf("Outcome verification passed: %u candidate cases.\n", checked);
+    std::cout << strprintf(
+        "Independent formula parity passed: %u successful cases across %u opcode families.\n",
+        independent_checked, parity.size());
+    std::cout << strprintf(
+        "Exact-budget/budget-minus-one verification passed: %u successful cases.\n",
+        boundary_checked);
+    return parity;
+}
+
+static void RequireIndependentParity(
+    const std::vector<CaseSpec>& specs,
+    const std::map<opcodetype, ParityCoverage>& parity)
+{
+    std::set<opcodetype> selected;
+    for (const CaseSpec& spec : specs) {
+        if (DomainFor(spec.role) == ExecutionDomain::GSR_TAPSCRIPT_V2) {
+            selected.insert(spec.opcode);
+        }
+    }
+    for (const opcodetype opcode : selected) {
+        const auto found{parity.find(opcode)};
+        if (found == parity.end() || found->second.successful_cases == 0 ||
+            found->second.static_formula_cases != found->second.successful_cases) {
+            throw std::runtime_error("candidate timing refused: independent parity incomplete for " +
+                                     OpcodeName(opcode));
+        }
+    }
 }
 
 } // namespace
@@ -2754,67 +3875,92 @@ int main(int argc, char* argv[])
         const CryptoFixture fixture;
         const std::vector<CaseSpec> specs{GenerateCaseSpecs(options)};
         if (specs.empty()) throw std::runtime_error("the requested opcode set generated no cases");
+        if (options.verify_costs) {
+            const auto parity{VerifyCorpusCosts(specs, fixture, options.silent)};
+            RequireIndependentParity(specs, parity);
+            if (!options.coverage_manifest.empty()) {
+                WriteCoverageManifest(options.coverage_manifest, parity);
+            }
+            return 0;
+        }
+        Options parity_options{options};
+        parity_options.case_filter.clear();
+        const std::vector<CaseSpec> parity_specs{GenerateCaseSpecs(parity_options)};
+        const auto parity{VerifyCorpusCosts(parity_specs, fixture, true)};
+        RequireIndependentParity(parity_specs, parity);
         ReleaseAllocatorCaches();
 
+        const uint64_t sample_budget{SampleBudget(options)};
         std::set<opcodetype> completed_opcodes;
         std::vector<BenchResult> results;
         results.reserve(specs.size() + 1);
+        std::vector<std::optional<size_t>> result_indices(specs.size());
+        std::vector<bool> skipped(specs.size());
         CorpusCounts counts{
             options.selected_opcodes.empty() ? OpcodeRegistry().size() : options.selected_opcodes.size(),
             specs.size(),
             0,
         };
-        PromotionSummary promotion;
-
         RunGlobalWarmup(fixture);
         results.push_back(RunRawSchnorr(fixture));
-        promotion.promotion_cutoff_seconds = results.front().median_sec * PROMOTION_THRESHOLD;
-
-        for (size_t index{0}; index < specs.size(); ++index) {
-            MaterializedCase test_case{Materialize(specs[index], fixture)};
-            BenchResult result{RunDiscoveryCase(test_case, fixture, index)};
-            completed_opcodes.insert(specs[index].opcode);
-            results.push_back(std::move(result));
-            ++counts.completed_cases;
-            if (!options.silent &&
-                ((index + 1) % CLI_PROGRESS_INTERVAL == 0 || index + 1 == specs.size())) {
-                std::cout << strprintf("Discovery: %u/%u cases\n", index + 1, specs.size());
-            }
-            ReleaseAllocatorCaches();
-        }
-
-        promotion = PromoteDiscoveryResults(results, results.front());
-        std::vector<size_t> promoted_indices;
-        promoted_indices.reserve(promotion.promoted_cases);
-        for (size_t index{1}; index < results.size(); ++index) {
-            if (results[index].promoted) promoted_indices.push_back(index);
-        }
-        const auto schedules{BuildRoundSchedules(promoted_indices, options.stable_rounds)};
+        std::vector<size_t> all_indices;
+        all_indices.reserve(specs.size());
+        for (size_t index{0}; index < specs.size(); ++index) all_indices.push_back(index);
+        const auto schedules{BuildRoundSchedules(all_indices, options.stable_rounds)};
         if (!options.silent) {
             std::cout << strprintf("Stable measurement: %u cases x %u rounds\n",
-                                   promotion.promoted_cases, options.stable_rounds);
+                                   all_indices.size(), options.stable_rounds);
         }
         for (size_t round{0}; round < schedules.size(); ++round) {
             for (size_t order{0}; order < schedules[round].size(); ++order) {
-                const size_t result_index{schedules[round][order]};
-                MaterializedCase test_case{Materialize(specs[result_index - 1], fixture)};
-                BenchResult& result{results[result_index]};
-                const EvalOutcome expected{result.actual_error == SCRIPT_ERR_OK,
-                                           result.actual_error, result.varops_consumed};
-                TimingSample realistic_sample{
-                    RunTimedCaseSample(test_case, fixture, expected,
-                                       TimingStage::STABLE, round + 1, order, true)};
+                const size_t spec_index{schedules[round][order]};
+                if (skipped[spec_index]) continue;
+                MaterializedCase test_case{Materialize(specs[spec_index], fixture, sample_budget)};
+                if (test_case.repetitions == 0) {
+                    skipped[spec_index] = true;
+                    if (!options.silent) {
+                        std::cout << "Skipped (one sequence exceeds sample budget): " << specs[spec_index].name << '\n';
+                    }
+                    continue;
+                }
+                std::optional<EvalOutcome> expected;
+                if (result_indices[spec_index]) {
+                    const BenchResult& previous{results[*result_indices[spec_index]]};
+                    expected = EvalOutcome{previous.actual_error == SCRIPT_ERR_OK,
+                                           previous.actual_error, previous.varops_consumed};
+                }
+                CaseSample sample{RunTimedCaseSample(test_case, fixture, expected,
+                                                     round + 1, order, sample_budget)};
+                if (!result_indices[spec_index]) {
+                    BenchResult result{ResultMetadata(test_case)};
+                    result.actual_error = sample.outcome.error;
+                    result.varops_consumed = sample.outcome.varops_consumed;
+                    result.executed_opcodes = sample.executed_opcodes;
+                    ConfigureFullVaropsExtrapolation(test_case, sample.outcome, result.full_varops);
+                    result_indices[spec_index] = results.size();
+                    results.push_back(std::move(result));
+                    completed_opcodes.insert(specs[spec_index].opcode);
+                    ++counts.completed_cases;
+                }
+                BenchResult& result{results[*result_indices[spec_index]]};
                 std::optional<TimingSample> full_varops_sample;
                 if (result.full_varops.status == "extrapolated") {
-                    if (expected.varops_consumed != result.full_varops.measured_varops) {
+                    if (sample.outcome.varops_consumed != result.full_varops.measured_varops) {
                         throw std::runtime_error("full-varops extrapolation plan changed");
                     }
                     full_varops_sample =
-                        ExtrapolateFullVaropsSample(realistic_sample, result.full_varops);
+                        ExtrapolateFullVaropsSample(sample.timing, result.full_varops);
                 }
-                result.samples.push_back(std::move(realistic_sample));
+                const double wall{std::max(sample.timing.wall_sec,
+                                           full_varops_sample ? full_varops_sample->wall_sec : 0.0)};
+                result.samples.push_back(std::move(sample.timing));
                 if (full_varops_sample) {
                     result.samples.push_back(std::move(*full_varops_sample));
+                }
+                if (!options.silent) {
+                    std::cout << strprintf("round %u case %u/%u %s: %.3f s\n", round + 1,
+                                           order + 1, schedules[round].size(), result.name,
+                                           wall) << std::flush;
                 }
             }
             if (!options.silent) {
@@ -2822,7 +3968,7 @@ int main(int argc, char* argv[])
                                        round + 1, schedules.size());
             }
         }
-        for (size_t index : promoted_indices) {
+        for (size_t index{1}; index < results.size(); ++index) {
             AggregateSamples(results[index], TimingStage::STABLE, MeasurementMode::REALISTIC);
             if (results[index].full_varops.status == "extrapolated") {
                 AggregateSamples(results[index], TimingStage::STABLE, MeasurementMode::FULL_VAROPS);
@@ -2835,13 +3981,11 @@ int main(int argc, char* argv[])
             }
         }
         std::sort(results.begin(), results.end(), [](const BenchResult& left, const BenchResult& right) {
-            const double left_max{std::max(left.median_sec, left.full_varops.median_sec)};
-            const double right_max{std::max(right.median_sec, right.full_varops.median_sec)};
-            return left_max > right_max;
+            return WorstCaseSeconds(left) > WorstCaseSeconds(right);
         });
-        PrintReport(results, counts, options, promotion);
+        PrintReport(results, counts, options);
         if (!options.output_file.empty() &&
-            !SaveResultsToFile(results, options.output_file, counts, options, promotion)) {
+            !SaveResultsToFile(results, options.output_file, counts, options)) {
             return 1;
         }
         return 0;
