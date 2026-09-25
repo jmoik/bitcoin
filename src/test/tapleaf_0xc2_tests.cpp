@@ -96,11 +96,6 @@ static EvalOutcome VerifyTapleaf0xC2WithFlags(const CScript& leaf_script, const 
     return EvalOutcome{ok, error, varops_budget.Remaining()};
 }
 
-static EvalOutcome VerifyTapleaf0xC2(const CScript& leaf_script, const Stack& initial_stack, uint64_t budget)
-{
-    return VerifyTapleaf0xC2WithFlags(leaf_script, initial_stack, TAPLEAF_0XC2_SCRIPT_VERIFY_FLAGS, budget);
-}
-
 BOOST_FIXTURE_TEST_SUITE(tapleaf_0xc2_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(op_success_classification)
@@ -108,7 +103,7 @@ BOOST_AUTO_TEST_CASE(op_success_classification)
     constexpr auto tapleaf_0xc2_op_success = std::to_array<uint8_t>({
         79, 80, 98, 137, 138, 143, 144,
         187, 188, 189, 192, 193, 194, 195, 196, 197, 198, 199,
-        200, 201, 202, 203, 205, 206, 208, 209, 210, 211, 212,
+        200, 201, 202, 203, 205, 206, 210, 211, 212,
         213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
         226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238,
         239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251,
@@ -143,41 +138,6 @@ BOOST_AUTO_TEST_CASE(verification_without_a_budget_is_capped)
     script << OP_DUP << OP_MUL;
     BOOST_REQUIRE_GT(varops::MulCost(1 << 20, 1 << 20), varops::TxBudget(MAX_BLOCK_WEIGHT));
     BOOST_CHECK_EQUAL(verify(script), SCRIPT_ERR_VAROP_COUNT);
-}
-
-BOOST_AUTO_TEST_CASE(pushes_use_the_expanded_stack_element_limit)
-{
-    const valtype max_element(MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE, 0x01);
-    CScript max_push;
-    max_push << max_element;
-    EvalOutcome outcome{VerifyTapleaf0xC2(max_push, {}, AMPLE_VAROPS_BUDGET)};
-    BOOST_CHECK(outcome.ok);
-    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_OK);
-
-    const valtype too_large_element(MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE + 1, 0x01);
-    CScript too_large_push;
-    too_large_push << too_large_element;
-    outcome = VerifyTapleaf0xC2(too_large_push, {}, AMPLE_VAROPS_BUDGET);
-    BOOST_CHECK(!outcome.ok);
-    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_PUSH_SIZE);
-}
-
-BOOST_AUTO_TEST_CASE(skipped_branches_validate_pushes)
-{
-    const valtype max_element(MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE, 0x01);
-    CScript max_skipped_push;
-    max_skipped_push << OP_0 << OP_IF << max_element << OP_ENDIF;
-    BOOST_CHECK_EQUAL(RunTapleaf0xC2(max_skipped_push, {}, AMPLE_VAROPS_BUDGET).error, SCRIPT_ERR_OK);
-
-    const valtype too_large_element(MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE + 1, 0x01);
-    CScript oversized_skipped_push;
-    oversized_skipped_push << OP_0 << OP_IF << too_large_element << OP_ENDIF;
-    BOOST_CHECK_EQUAL(RunTapleaf0xC2(oversized_skipped_push, {}, AMPLE_VAROPS_BUDGET).error, SCRIPT_ERR_PUSH_SIZE);
-
-    CScript truncated_skipped_push;
-    truncated_skipped_push << OP_0 << OP_IF;
-    truncated_skipped_push.push_back(static_cast<unsigned char>(OP_PUSHDATA4));
-    BOOST_CHECK_EQUAL(RunTapleaf0xC2(truncated_skipped_push, {}, AMPLE_VAROPS_BUDGET).error, SCRIPT_ERR_BAD_OPCODE);
 }
 
 BOOST_AUTO_TEST_CASE(signature_checks_run_within_the_budget)

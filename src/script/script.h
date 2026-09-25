@@ -50,6 +50,9 @@ inline constexpr int MAX_TAPLEAF_0XC2_STACK_SIZE = 32'768;
 // and limits all stack and altstack elements to 8,000,000 bytes in total.
 inline constexpr unsigned int MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE = 4'000'000;
 inline constexpr unsigned int MAX_TAPLEAF_0XC2_TOTAL_STACK_SIZE = 2 * MAX_TAPLEAF_0XC2_STACK_ELEMENT_SIZE;
+// Maximum size of a Tapleaf 0xC2 script after unrolling its macro references
+// (reusable macros draft)
+inline constexpr unsigned int MAX_TAPLEAF_0XC2_UNROLLED_SIZE = 4'000'000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
@@ -229,6 +232,10 @@ enum opcodetype
 
     // Opcode proposed by the Extended Primitives draft
     OP_BYTEREV = 0xcf,
+
+    // Opcodes proposed by the reusable macros draft
+    OP_MACRO = 0xd0,
+    OP_CALLMACRO = 0xd1,
 
     OP_INVALIDOPCODE = 0xff,
 };
