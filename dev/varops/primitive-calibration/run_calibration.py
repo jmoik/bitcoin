@@ -26,9 +26,9 @@ HERE = Path(__file__).resolve().parent
 BUILD = ROOT / "build-varops-calibration"
 INTERMEDIATE = HERE / "calibration-intermediate"
 REFERENCE_EPOCHS = 5
-PRIMITIVE_EPOCHS = 3
-SAMPLE_MS = 5
-COPY_SAMPLE_MS = 30
+PRIMITIVE_EPOCHS = 7
+SAMPLE_MS = 10
+COPY_SAMPLE_MS = 100
 TARGET_FRACTION = 1.0
 
 

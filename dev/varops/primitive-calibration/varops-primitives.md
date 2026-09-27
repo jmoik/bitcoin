@@ -22,6 +22,12 @@ Degree is the maximum polynomial degree in the specified size/count features: 0 
 | `SIG` | Signature verification and fixed transaction-message preparation; SIGCHECK. | 0 | No |
 | `TWEAK` | Public-key tweak operation. | 0 | Yes |
 
+## Collection protocol
+
+Run `python3 dev/varops/primitive-calibration/run_calibration.py` from the same clean, frozen commit on every machine (`python` on Windows). Defaults: 7 primitive epochs, 10 ms per batch, 100 ms for storage lifetimes; median, margin 1. Reference measurement retains 5 rounds, and normalization uses 100% of the local pre-v2 reference. Build uses up to 8 jobs; measurements remain serial. Progress is printed between fixtures approximately every 5 seconds.
+
+Keep the existing fixture set, feature basis and 100× underprediction objective unchanged across machines. Preserve raw epochs. Repeat suspicious fixtures in separate processes before changing prices; isolated growth repeats do not replace mixed allocator-history coverage. These collection settings are a practical accuracy/runtime compromise, not a confidence guarantee. Combine only matching model/source/fixture sets; SIG remains fixed at 500,000. Validate any resulting schedule with `bench_varops` before adopting it.
+
 ## Postponed experimental extensions
 
 Retain these implementation prices, fixtures and research; their finalization is outside the current BIP 440 model.

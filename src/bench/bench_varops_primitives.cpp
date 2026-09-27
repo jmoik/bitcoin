@@ -184,9 +184,9 @@ double ReadReference(std::istream& in)
 }
 
 struct Options {
-    size_t epochs{3};
-    double epoch_ms{5.0};
-    double copy_epoch_ms{30.0};
+    size_t epochs{7};
+    double epoch_ms{10.0};
+    double copy_epoch_ms{100.0};
     double percentile{0.5};
     double margin{1.0};
     size_t max_bytes{4'000'000};
@@ -293,6 +293,10 @@ double FitMultiplicativeDeviation(const std::vector<Point>& points, const Line& 
 }
 
 class Runner {
+    const Clock::time_point m_started{Clock::now()};
+    Clock::time_point m_last_progress{m_started};
+    size_t m_completed_fixtures{0};
+
 public:
     Options options;
     std::vector<Rate> rates;
@@ -315,6 +319,13 @@ public:
     Sample Measure(const std::string& name, size_t max_repetitions, Make make, Run run)
     {
         Require(max_repetitions > 0, "empty repetition limit");
+        const auto now{Clock::now()};
+        if (m_completed_fixtures == 0 || now - m_last_progress >= std::chrono::seconds{5}) {
+            const auto seconds{std::chrono::duration_cast<std::chrono::seconds>(now - m_started).count()};
+            std::cerr << "  Progress: " << m_completed_fixtures << " fixtures complete; "
+                      << seconds << " s elapsed; measuring " << name << '\n';
+            m_last_progress = now;
+        }
         const auto epoch = [&](size_t n) {
             auto state = make(n);  // Untimed, independent state for every epoch.
             Observe(state);
@@ -342,6 +353,7 @@ public:
             raw << CSV(name) << ',' << n << ',' << e << ',' << ns << '\n';
         }
         Require(raw.good(), "raw sample write failed");
+        ++m_completed_fixtures;
         return {name, n, Quantile(observations,0.5), Quantile(observations,options.percentile)};
     }
 
@@ -1706,9 +1718,9 @@ void Help()
 {
     std::cout << "Usage: bench_varops_primitives (--reference-csv FILE | --pre-v2-seconds SECONDS | --max-diagnostic) [options]\n"
         "  --out FILE          Summary CSV (default dev/varops/primitive_costs.csv); raw epochs use FILE.samples.csv\n"
-        "  --epochs N          Measured epochs per fixture (default 3)\n"
-        "  --sample-ms MS      Target timed duration per epoch (default 5)\n"
-        "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default 30)\n"
+        "  --epochs N          Measured epochs per fixture (default 7)\n"
+        "  --sample-ms MS      Target timed duration per epoch (default 10)\n"
+        "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default 100)\n"
         "  --calibration-candidate Collect the frozen PRODUCE/NORMALIZE model only\n"
         "  --percentile P      Empirical quantile, 0..1 (default .5; NOT a confidence interval)\n"
         "  --margin M          Multiplicative margin >=1 (default 1)\n"
