@@ -15,7 +15,7 @@ class Budget;
 } // namespace varops
 
 enum class OpTxResult {
-    ERROR,
+    SCRIPT_ERROR,
     NORMAL,
     IMMEDIATE_SUCCESS,
 };

@@ -101,7 +101,7 @@ struct ResultValue {
 OpTxResult SetError(ScriptError* ret, ScriptError error)
 {
     if (ret) *ret = error;
-    return OpTxResult::ERROR;
+    return OpTxResult::SCRIPT_ERROR;
 }
 
 bool ReadScopeOperand(const valtype& bytes, uint32_t& result)

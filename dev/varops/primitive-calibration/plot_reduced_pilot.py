@@ -585,8 +585,11 @@ def main():
                 '<div class="table"><table><thead><tr><th>Opcode</th><th>Primitive composition</th>'
                 '<th>Parameters used</th><th>Parity verification</th></tr></thead><tbody>'+rows+'</tbody></table></div></section>')
     doc+='</main></html>'
-    (output_root/'primitive-fits.html').write_text(doc)
-    (output_root/'fits.json').write_text(json.dumps(dict(metadata=meta,fits=results),indent=2)+'\n')
+    (output_root/'primitive-fits.html').write_text(doc, encoding='utf-8')
+    (output_root/'fits.json').write_text(
+        json.dumps(dict(metadata=meta, fits=results), indent=2) + '\n',
+        encoding='utf-8',
+    )
     print(f'{output_root}/primitive-fits.html')
     for name,r in results.items():
         print(name,r['formula_ns'],f"RMS {r['weighted_rms_factor']:.3f}x")

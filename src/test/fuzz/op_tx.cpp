@@ -223,7 +223,7 @@ FUZZ_TARGET(op_tx)
         stack_without_scope_operands.resize(stack_without_scope_operands.size() - *scope_operand_count);
     }
 
-    if (outcome.result == OpTxResult::ERROR) {
+    if (outcome.result == OpTxResult::SCRIPT_ERROR) {
         Assert(outcome.stack == stack_without_selector ||
                (scope_operand_count && outcome.stack == stack_without_scope_operands));
         Assert(outcome.remaining == budget);
@@ -258,7 +258,7 @@ FUZZ_TARGET(op_tx)
     Assert(exact.stack == outcome.stack);
     if (cost != 0) {
         const Outcome insufficient{Evaluate(stack, altstack, checker, execdata, cost - 1)};
-        Assert(insufficient.result == OpTxResult::ERROR);
+        Assert(insufficient.result == OpTxResult::SCRIPT_ERROR);
         Assert(insufficient.error == SCRIPT_ERR_VAROP_COUNT);
         Assert(insufficient.remaining == cost - 1);
         Assert(insufficient.stack == stack_without_scope_operands);

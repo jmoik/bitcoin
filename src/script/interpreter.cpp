@@ -246,7 +246,7 @@ class FragmentInstructionCursor
     uint64_t m_position{0};
 
 public:
-    enum class Result { END, INSTRUCTION, ERROR };
+    enum class Result { END, INSTRUCTION, SCRIPT_ERROR };
 
     explicit FragmentInstructionCursor(const StaticFragmentProgram& program)
         : m_program{program}, m_frames{{program.main_begin, program.script.end(), program.fragments.size()}} {}
@@ -278,25 +278,25 @@ public:
             }
             if (!GetScriptOp(frame.pc, frame.end, opcode, &data)) {
                 set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                return Result::ERROR;
+                return Result::SCRIPT_ERROR;
             }
             if (opcode == OP_MACRO) {
                 set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                return Result::ERROR;
+                return Result::SCRIPT_ERROR;
             }
             if (opcode == OP_CALLMACRO) {
                 uint64_t index;
                 if (!ReadFragmentCompactSize(frame.pc, frame.end, index) || index >= m_program.fragments.size() ||
                     (frame.body_index != m_program.fragments.size() && index >= frame.body_index)) {
                     set_error(serror, SCRIPT_ERR_BAD_OPCODE);
-                    return Result::ERROR;
+                    return Result::SCRIPT_ERROR;
                 }
                 const auto& body{m_program.fragments[index]};
                 const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
                 const uint64_t call_charge{varops::FixedOpcodeCost() + varops::MacroDecodeCost(body_size)};
                 if (!budget.Spend(call_charge)) {
                     set_error(serror, SCRIPT_ERR_VAROP_COUNT);
-                    return Result::ERROR;
+                    return Result::SCRIPT_ERROR;
                 }
                 if (varops::g_cost_audit) {
                     varops::g_cost_audit->StandaloneCharge(OP_CALLMACRO, body_size,
@@ -1639,7 +1639,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
             const bool fExec{vfExec.all_true()};
             const auto next{cursor.Next(opcode, vchPushValue, opcode_pos, varops_budget, serror, !fExec)};
             if (next == FragmentInstructionCursor::Result::END) break;
-            if (next == FragmentInstructionCursor::Result::ERROR) return false;
+            if (next == FragmentInstructionCursor::Result::SCRIPT_ERROR) return false;
             uint64_t varcost = 0;
             varops::Meter cost_meter;
 
@@ -2517,7 +2517,7 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                 case OP_TX: {
                     const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, serror)};
-                    if (result == OpTxResult::ERROR) return false;
+                    if (result == OpTxResult::SCRIPT_ERROR) return false;
                     if (result == OpTxResult::IMMEDIATE_SUCCESS) {
                         if (flags & SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS) {
                             return set_error(serror, SCRIPT_ERR_DISCOURAGE_OP_SUCCESS);

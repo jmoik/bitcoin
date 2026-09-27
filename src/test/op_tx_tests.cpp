@@ -233,7 +233,7 @@ BOOST_AUTO_TEST_CASE(reference_vectors)
             const OpTxResult result{EvalOpTx(stack, altstack, checker, execdata, varops_budget, &error)};
             const UniValue& expected{test["expected"]};
             const bool expected_success{expected["success"].get_bool()};
-            BOOST_CHECK_EQUAL(result != OpTxResult::ERROR, expected_success);
+            BOOST_CHECK_EQUAL(result != OpTxResult::SCRIPT_ERROR, expected_success);
             if (expected_success) {
                 const bool expected_immediate{expected.exists("immediate_success") && expected["immediate_success"].get_bool()};
                 BOOST_CHECK_EQUAL(result == OpTxResult::IMMEDIATE_SUCCESS, expected_immediate);
@@ -291,7 +291,7 @@ BOOST_AUTO_TEST_CASE(interpreter_dispatch_and_execution_cost)
     stack = ValtypeStack{Stack{valtype{0x00, 0x02, 0x00, 0x00, 0x00, 0x00}}};
     const ValtypeStack altstack;
     varops::Budget insufficient_budget{varops::FixedOpcodeCost() - 1};
-    BOOST_CHECK(EvalOpTx(stack, altstack, checker, execdata, insufficient_budget, &error) == OpTxResult::ERROR);
+    BOOST_CHECK(EvalOpTx(stack, altstack, checker, execdata, insufficient_budget, &error) == OpTxResult::SCRIPT_ERROR);
     BOOST_CHECK_EQUAL(error, SCRIPT_ERR_VAROP_COUNT);
     BOOST_CHECK_EQUAL(stack.size(), 0);
     BOOST_CHECK_EQUAL(*insufficient_budget.Remaining(), varops::FixedOpcodeCost() - 1);
@@ -340,7 +340,7 @@ BOOST_AUTO_TEST_CASE(undefined_selector_fails_closed)
         ValtypeStack altstack;
         varops::Budget budget{varops::FixedOpcodeCost()};
         ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
-        BOOST_CHECK(EvalOpTx(stack, altstack, checker, execdata, budget, &error) == OpTxResult::ERROR);
+        BOOST_CHECK(EvalOpTx(stack, altstack, checker, execdata, budget, &error) == OpTxResult::SCRIPT_ERROR);
         BOOST_CHECK_EQUAL(error, SCRIPT_ERR_TX_SELECTOR);
         BOOST_CHECK_EQUAL(stack.size(), 0);
         BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
