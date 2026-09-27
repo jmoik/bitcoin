@@ -79,7 +79,6 @@ constexpr uint64_t COST_COPY_FIXED{CopyCost(0)};
 constexpr uint64_t COST_COPY_BYTE{CopyCost(1) - CopyCost(0)};
 constexpr uint64_t COST_RELEASE_FIXED{2 * ReleaseCost(8) - ReleaseCost(16)};
 constexpr uint64_t COST_RELEASE_BYTE{(ReleaseCost(16) - ReleaseCost(8)) / 8};
-constexpr uint64_t COST_RELEASE_DISCARDED_BYTE{DiscardCost(1)};
 constexpr uint64_t COST_READ_FIXED{ReadCost(0)};
 constexpr uint64_t COST_READ{(ReadCost(8) - ReadCost(0)) / 8};
 constexpr uint64_t COST_ARITH_FIXED{ArithCost(0)};
@@ -91,8 +90,7 @@ constexpr uint64_t COST_MOVE{MoveCost(1) - MoveCost(0)};
 constexpr uint64_t COST_MUL_ROW_FIXED{MulRowCost(0)};
 constexpr uint64_t COST_MUL_ROW{MulRowCost(1) - MulRowCost(0)};
 constexpr uint64_t COST_DIV_FIXED{DivCoreCost(0, 0)};
-constexpr uint64_t COST_DIV_STEP{DivCoreCost(1, 0) - DivCoreCost(0, 0)};
-constexpr uint64_t COST_DIV_CELL{DivCoreCost(1, 1) - DivCoreCost(1, 0)};
+constexpr uint64_t COST_DIV_CELL{DivCoreCost(1, 1) - DivCoreCost(0, 0)};
 constexpr uint64_t COST_H256_FIXED{Sha256Cost(0)};
 constexpr uint64_t COST_H256_BYTE{Sha256Cost(1) - Sha256Cost(0)};
 constexpr uint64_t COST_H160_FIXED{Ripemd160Cost(0)};
@@ -101,12 +99,10 @@ constexpr uint64_t COST_H1_FIXED{Sha1Cost(0)};
 constexpr uint64_t COST_H1_BYTE{Sha1Cost(1) - Sha1Cost(0)};
 constexpr uint64_t COST_SIG{SignatureCost()};
 constexpr uint64_t COST_TWEAK{TweakCost()};
-constexpr uint64_t COST_SIGHASH{SighashCost()};
 constexpr uint64_t COST_SELECT_FIXED{TxSelectCost(0)};
 constexpr uint64_t COST_SELECT_ITEM{TxSelectCost(1) - TxSelectCost(0)};
 constexpr uint64_t COST_DECODE_FIXED{MacroDecodeCost(0)};
 constexpr uint64_t COST_DECODE{MacroDecodeCost(1) - MacroDecodeCost(0)};
-constexpr uint64_t COST_FINAL{FinalCost()};
 constexpr uint64_t COST_SCALAR_OUTPUT{ScalarOutputCost()};
 } // namespace varops
 
@@ -168,6 +164,7 @@ struct Options {
     uint32_t sample_budget_percent{100};
     bool silent{false}, list_opcodes{false};
     bool verify_costs{false};
+    bool exclude_experimental{false};
     std::string output_file;
     std::string coverage_manifest;
     std::string case_filter;
@@ -301,6 +298,15 @@ struct EvalOutcome {
 static uint64_t IndependentWordSize(size_t size)
 {
     return (size + 7) / 8 * 8;
+}
+
+static uint64_t InitialProducerCost(const std::vector<valtype>& stack)
+{
+    uint64_t total{0};
+    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        for (const auto& value : stack) total += varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * value.size();
+    }
+    return total;
 }
 
 static uint64_t IndependentCharge(unsigned __int128 cost)
@@ -598,7 +604,6 @@ public:
             case OP_CHECKSIG: case OP_CHECKSIGVERIFY: {
                 const valtype& signature{IndependentTop(stack, 1)};
                 if (!signature.empty()) {
-                    IndependentAdd(pending.q, varops::COST_SIGHASH);
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
                     IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
                     IndependentAdd(pending.q, varops::COST_SIG);
@@ -611,7 +616,6 @@ public:
                 const size_t number_size{IndependentTop(stack, 1).size()};
                 IndependentPrep(pending.q, number_size);
                 if (!signature.empty()) {
-                    IndependentAdd(pending.q, varops::COST_SIGHASH);
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
                     IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
                     IndependentAdd(pending.q, varops::COST_SIG);
@@ -668,12 +672,9 @@ public:
                 pending.deferred = Deferred::SUBSTR_OUTPUT;
                 break;
             case OP_LEFT: {
-                const size_t data_size{IndependentTop(stack, 1).size()};
                 const valtype& offset_value{IndependentTop(stack)};
                 IndependentPrep(pending.q, offset_value.size());
                 IndependentRead(pending.q, offset_value.size());
-                IndependentAdd(pending.q, varops::COST_RELEASE_DISCARDED_BYTE,
-                               data_size - IndependentDecodeU64(offset_value, data_size));
                 break;
             }
             case OP_RIGHT: {
@@ -683,8 +684,6 @@ public:
                 IndependentPrep(pending.q, offset_value.size());
                 IndependentRead(pending.q, offset_value.size());
                 IndependentAdd(pending.q, varops::COST_COPY_BYTE, offset);
-                IndependentAdd(pending.q, varops::COST_RELEASE_DISCARDED_BYTE,
-                               data_size - offset);
                 break;
             }
             case OP_INVERT: case OP_2MUL: case OP_2DIV: {
@@ -711,6 +710,11 @@ public:
                 } else if (opcode == OP_MUL) {
                     const uint64_t rows{std::max(left_words, right_words) / 8};
                     const uint64_t row_limbs{std::min(left_words, right_words) / 8};
+                    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+                        AddCopy(pending.q, left_words + right_words);
+                        IndependentPrep(pending.q, left_words + right_words);
+                        AddCopy(pending.q, (row_limbs + 1) * 8);
+                    }
                     IndependentAdd(pending.q, varops::COST_MUL_ROW_FIXED, rows);
                     IndependentAdd(pending.q, varops::COST_MUL_ROW, rows * row_limbs);
                     IndependentAdd(pending.q, varops::COST_ARITH_FIXED, rows);
@@ -721,7 +725,6 @@ public:
                     const uint64_t right_limbs{right_words / 8};
                     const uint64_t steps{right_limbs == 1 ? left_limbs : (left_limbs > right_limbs ? left_limbs - right_limbs : 1)};
                     IndependentAdd(pending.q, varops::COST_DIV_FIXED);
-                    IndependentAdd(pending.q, varops::COST_DIV_STEP, steps);
                     IndependentAdd(pending.q, varops::COST_DIV_CELL,
                                    steps * right_limbs);
                     AddRelease(pending.q, std::max(left, right));
@@ -769,6 +772,9 @@ public:
             break;
         case Deferred::PRODUCED:
             IndependentProduced(pending.q, IndependentTop(stack).size());
+            if (varops::PRODUCER_LIFETIME_EXPERIMENT && opcode == OP_MUL) {
+                pending.q -= varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * IndependentWordSize(IndependentTop(stack).size());
+            }
             break;
         case Deferred::B_COPY_OUTPUT:
             AddCopy(pending.q, IndependentTop(stack).size());
@@ -785,6 +791,9 @@ public:
             const size_t outputs{m_spec.op_tx_collate.value_or(true) ? 1 :
                 m_spec.op_tx_result_values.value_or(*m_spec.empty_witness_items + 2)};
             for (size_t i{0}; i < outputs; ++i) {
+                if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+                    IndependentAdd(pending.q, varops::COST_COPY_FIXED);
+                }
                 IndependentAdd(pending.q, varops::COST_COPY_BYTE, IndependentTop(stack, i).size());
             }
             break;
@@ -809,11 +818,16 @@ public:
         unsigned __int128 q{0};
         IndependentPrep(q, value_size);
         IndependentRead(q, value_size);
-        IndependentAdd(q, varops::COST_FINAL);
         Compare(OP_INVALIDOPCODE, IndependentCharge(q), actual_charge);
     }
 
     bool Passed() const { return m_mismatch.empty() && !m_pending; }
+    void InitialStack(const ValtypeStack& stack, uint64_t actual_charge) override
+    {
+        unsigned __int128 q{0};
+        for (size_t i = 0; i < stack.size(); ++i) AddCopy(q, stack.at(i).size());
+        Compare(OP_INVALIDOPCODE, IndependentCharge(q), actual_charge);
+    }
     const std::string& Mismatch() const { return m_mismatch; }
     uint64_t ExpectedTotal() const { return m_expected_total; }
     uint64_t ActualTotal() const { return m_actual_total; }
@@ -1366,10 +1380,10 @@ static uint64_t CalibrateRepeatVarops(const CaseSpec& spec, const std::vector<va
                                            spec.name, ScriptErrorString(outcome.error)));
     }
     const uint64_t suffix_cost{
-        CandidateCleanupCost(stack, cleanup_items) +
+        InitialProducerCost(stack) + CandidateCleanupCost(stack, cleanup_items) +
         varops::COST_F + varops::COST_SCALAR_OUTPUT +
         varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
-        varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
+        varops::COST_READ_FIXED + varops::COST_READ * 8};
     if (outcome.varops_consumed < suffix_cost) {
         throw std::runtime_error("calibration consumed less than the cleanup and final-result cost");
     }
@@ -1413,10 +1427,10 @@ static MaterializedCase Materialize(const CaseSpec& spec, const CryptoFixture& f
         uint64_t budget_limit{std::numeric_limits<uint64_t>::max()};
         if (DomainFor(spec.role) == ExecutionDomain::GSR_TAPSCRIPT_V2 && materialized.varops_per_repeat != 0) {
             const uint64_t suffix_cost{
-                CandidateCleanupCost(materialized.initial_stack, cleanup_items) +
+                InitialProducerCost(materialized.initial_stack) + CandidateCleanupCost(materialized.initial_stack, cleanup_items) +
                 varops::COST_F + varops::COST_SCALAR_OUTPUT +
                 varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
-                varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
+                varops::COST_READ_FIXED + varops::COST_READ * 8};
             budget_limit = suffix_cost <= budget_ceiling ?
                 (budget_ceiling - suffix_cost) / materialized.varops_per_repeat : 0;
         }
@@ -2016,6 +2030,24 @@ static void AddSpliceCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 "cat-element-reject", "2000001B+2000001B", "dense", Ops({OP_CAT}),
                 FixedStack({PatternBytes(2'000'001, "dense"), PatternBytes(2'000'001, "dense")}),
                 FixedCase(SCRIPT_ERR_STACK_ELEMENT_SIZE, 1, 0, "stack-element-limit"));
+        // Lifetime calibration showed allocator discontinuities here. Test the
+        // actual evaluator's rounded-copy growth path, not only host vectors.
+        for (size_t total : {65535U, 65536U, 65537U, 86658U, 135402U, 169252U, 211565U, 330570U}) {
+            AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                    "cat-allocation-boundary", FormatBytes(total), "half-plus-half", sequence,
+                    FixedStack({PatternBytes(total / 2, "alternating"), PatternBytes(total - total / 2, "dense")}));
+        }
+        // SUBSTR creates an exact-sized result rather than DUP's rounded spare
+        // capacity. Recreate that state in Script on every iteration before CAT.
+        for (size_t total : {65536U, 65537U, 65538U, 65543U, 65544U, 65545U, 65552U,
+                             86657U, 86658U, 86659U, 86666U, 135394U, 135401U, 135402U,
+                             135403U, 135410U, 169252U, 211565U, 330570U}) {
+            CScript tight{Ops({OP_2DUP, OP_SWAP, OP_0})};
+            tight << PaddedNumber(total / 2, 8) << OP_SUBSTR << OP_SWAP << OP_CAT << OP_DROP;
+            AddCase(specs, opcode, HeadlineRole::NEW_GSR,
+                    "cat-tight-allocation", FormatBytes(total), "substr-recreates-tight-buffer", tight,
+                    FixedStack({PatternBytes(total / 2, "alternating"), PatternBytes(total - total / 2, "dense")}));
+        }
         return;
     }
 
@@ -2073,7 +2105,10 @@ static uint64_t MulSequenceCost(size_t left, size_t right)
     const uint64_t rows{std::max(left_words, right_words) / 8};
     const uint64_t row_limbs{std::min(left_words, right_words) / 8};
     const size_t output_size{left + right};
-    return 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
+    const uint64_t storage{varops::PRODUCER_LIFETIME_EXPERIMENT ?
+        varops::CopyCost(left_words + right_words) + varops::PrepCost(left_words + right_words) +
+        varops::CopyCost((row_limbs + 1) * 8) - varops::CopyCost(varops::WordSpan(output_size)) : 0};
+    return storage + 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
            varops::COST_COPY_BYTE * (left + right) +
            2 * varops::COST_PREP_FIXED +
            varops::COST_PREP_BYTE * (left_words + right_words) +
@@ -2146,7 +2181,7 @@ static uint64_t DivModSequenceCost(opcodetype opcode, size_t dividend, size_t di
            varops::COST_COPY_BYTE * (dividend + divisor) +
            2 * varops::COST_PREP_FIXED +
            varops::COST_PREP_BYTE * (dividend_words + divisor_words) +
-           varops::COST_DIV_FIXED + varops::COST_DIV_STEP * steps +
+           varops::COST_DIV_FIXED +
            varops::COST_DIV_CELL * steps * divisor_limbs +
            varops::COST_OUTPUT_FIXED + varops::COST_OUTPUT_BYTE * dividend_words;
 }
@@ -2171,6 +2206,32 @@ static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     valtype short_high_limb{DivisorTopClear(17)};
     short_high_limb.back() = 1;
     add(PatternBytes(34, "dense"), std::move(short_high_limb), "34Bx17B", "normalization-top-byte-one");
+    // Reproduce the prepared-kernel sweep's 65/64-limb allocation boundary
+    // through normal interpreter execution, including operand restoration.
+    const auto seeded = [](size_t size, uint64_t seed) {
+        valtype value(size);
+        for (auto& byte : value) {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            byte = static_cast<unsigned char>(seed);
+        }
+        value.back() |= 0x80;
+        return value;
+    };
+    for (uint64_t seed : {17U, 127U}) {
+        for (bool top_one : {false, true}) {
+            valtype divisor{seeded(64 * 8, seed + 5)};
+            if (top_one) {
+                std::fill(divisor.end() - 8, divisor.end(), 0);
+                divisor[divisor.size() - 8] = 1;
+            } else {
+                divisor.back() = 0x40;
+            }
+            add(seeded(65 * 8, seed), std::move(divisor), "520Bx512B",
+                strprintf("wide-normalization-%s-seed%u", top_one ? "top-one" : "top-clear", seed));
+        }
+    }
     add(PatternBytes(8, "one-low"), PatternBytes(16, "late-nonzero"), "8Bx16B", "dividend-smaller");
     const valtype addback_dividend{
         0x71, 0x0a, 0x7f, 0x30, 0x34, 0x4d, 0x13, 0x98, 0xb1, 0x15, 0xd5, 0x64, 0xac, 0xc8, 0x9d, 0x56,
@@ -2457,7 +2518,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         const uint64_t fixed_cost{
             (3 + stack_items + 1) * varops::COST_F +
             varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
-            varops::COST_READ_FIXED + varops::COST_READ * 8 + varops::COST_FINAL};
+            varops::COST_READ_FIXED + varops::COST_READ * 8};
         const uint64_t call_cost{
             varops::COST_F + varops::COST_DECODE_FIXED +
             varops::COST_DECODE * hash_body_size + body_cost};
@@ -2719,7 +2780,7 @@ static std::map<std::string, opcodetype> SupportedOpcodeMap()
     return out;
 }
 
-static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
+static std::pair<std::string, std::string> BaselineFormula(opcodetype opcode)
 {
     if (opcode >= OP_0 && opcode <= OP_PUSHDATA4) return {"F + COPY(n)", "F,COPY.fixed,COPY.byte"};
     switch (opcode) {
@@ -2766,13 +2827,13 @@ static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
         return {"F + PREP(operands) + BIT(bytes) + OUTPUT(out)",
             "F,PREP.fixed,PREP.byte,READ,BIT,OUTPUT.fixed,OUTPUT.byte"};
         case OP_MUL: return {"F + PREP(a,b) + u*(MULROW(v) + ARITH(8*(v+1))) + OUTPUT(out)", "F,PREP.fixed,PREP.byte,MULROW,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte"};
-        case OP_DIV: case OP_MOD: return {"F + PREP(a,b) + DIVCORE(s,v) + OUTPUT(out) + RELEASE(max input)", "F,PREP.fixed,PREP.byte,DIVCORE.step,DIVCORE.cell,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
+        case OP_DIV: case OP_MOD: return {"F + PREP(a,b) + DIVCORE(s,v) + OUTPUT(out) + RELEASE(max input)", "F,PREP.fixed,PREP.byte,DIVCORE.fixed,DIVCORE.cell,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
     case OP_CAT: return {"F + COPY(a+b)", "F,COPY.fixed,COPY.byte"};
     case OP_SUBSTR:
         return {"F + PREP(indices) + READ(indices) + COPY(out) + RELEASE(W(source), W(indices))",
                 "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte,RELEASE.fixed,RELEASE.byte"};
-    case OP_LEFT: return {"F + PREP(index) + READ(W(index)) + RELEASE.discarded*(input-offset)", "F,PREP.fixed,PREP.byte,READ,RELEASE.discarded"};
-    case OP_RIGHT: return {"F + PREP(index) + READ(W(index)) + COPY.byte*offset + RELEASE.discarded*(input-offset)", "F,PREP.fixed,PREP.byte,READ,COPY.byte,RELEASE.discarded"};
+    case OP_LEFT: return {"F + PREP(index) + READ(W(index))", "F,PREP.fixed,PREP.byte,READ"};
+    case OP_RIGHT: return {"F + PREP(index) + READ(W(index)) + COPY.byte*offset", "F,PREP.fixed,PREP.byte,READ,COPY.byte"};
     case OP_SHA1:
         return {"F + H1(n) + COPY(digest)", "F,H1.fixed,H1.byte,COPY.fixed,COPY.byte"};
     case OP_RIPEMD160:
@@ -2784,7 +2845,7 @@ static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
     case OP_HASH256:
         return {"F + H256(n) + H256(32) + COPY(digest)", "F,H256.fixed,H256.byte (n),H256.fixed,H256.byte (32),COPY.fixed,COPY.byte"};
     case OP_CHECKSIG: case OP_CHECKSIGVERIFY: case OP_CHECKSIGADD:
-        return {"F + optional SIGHASH + H256 + SIG + result work", "F,SIGHASH,H256.fixed,H256.byte,SIG,OUTPUT(8),PREP.fixed,PREP.byte,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte,COPY.fixed,COPY.byte"};
+        return {"F + optional H256 + SIG + result work", "F,H256.fixed,H256.byte,SIG,OUTPUT(8),PREP.fixed,PREP.byte,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte,COPY.fixed,COPY.byte"};
     case OP_CHECKLOCKTIMEVERIFY: case OP_CHECKSEQUENCEVERIFY:
         return {"F + PREP(n) + READ(W(n)) + OUTPUT(n)", "F,PREP.fixed,PREP.byte,READ,OUTPUT.fixed,OUTPUT.byte"};
     case OP_TX:
@@ -2793,6 +2854,43 @@ static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
     case OP_MACRO: return {"DECODE(body bytes) once; CALLMACRO: F + DECODE(body bytes)", "F,DECODE"};
     default: return {"unwired", ""};
     }
+}
+
+static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
+{
+    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return BaselineFormula(opcode);
+    // NUMERIC_RESULT(n) = PRODUCE(W(n)) + NORMALIZE(n). Initial witness
+    // production is charged once per script, not again in each opcode formula.
+    switch (opcode) {
+    case OP_DROP: case OP_2DROP: case OP_NIP: return {"F", "F"};
+    case OP_BYTEREV: return {"F + BIT(n)", "F,BIT"};
+    case OP_MIN: case OP_MAX:
+        return {"F + PREP(operands) + READ(W) + NUMERIC_RESULT(out)", "F,PREP,READ,PRODUCE,NORMALIZE"};
+    case OP_DIV: case OP_MOD:
+        return {"F + PREP(a,b) + DIVCORE(s,v) + NUMERIC_RESULT(out)", "F,PREP,DIVCORE,PRODUCE,NORMALIZE"};
+    case OP_MUL:
+        return {"F + PREP(a,b) + PRODUCE(8*(u+v)) + PREP(8*(u+v)) + PRODUCE(8*(v+1)) + u*(MULROW(v) + ARITH(8*(v+1))) + NORMALIZE(out)",
+                "F,PREP,PRODUCE,MULROW,ARITH,NORMALIZE"};
+    case OP_SUBSTR:
+        return {"F + PREP(indices) + READ(indices) + PRODUCE(out)", "F,PREP,READ,PRODUCE"};
+    case OP_LSHIFT: case OP_RSHIFT:
+        return {"F + PREP(operands) + READ(shift) + BIT(W(input)) + NUMERIC_RESULT(out)", "F,PREP,READ,BIT,PRODUCE,NORMALIZE"};
+    case OP_TX: case OP_MACRO:
+        return {"postponed extension; excluded from frozen calibration", "postponed"};
+    default: break;
+    }
+    auto result{BaselineFormula(opcode)};
+    for (std::string* text : {&result.first, &result.second}) {
+        for (const auto& [from, to] : {std::pair{std::string{"COPY"}, std::string{"PRODUCE"}},
+                                      std::pair{std::string{"OUTPUT"}, std::string{"NUMERIC_RESULT"}}}) {
+            size_t pos{0};
+            while ((pos = text->find(from, pos)) != std::string::npos) {
+                text->replace(pos, from.size(), to);
+                pos += to.size();
+            }
+        }
+    }
+    return result;
 }
 
 struct ParityCoverage {
@@ -2836,6 +2934,7 @@ static std::vector<CaseSpec> GenerateCaseSpecs(const Options& options)
     std::vector<CaseSpec> specs;
     for (const OpcodeEntry& entry : OpcodeRegistry()) {
         const opcodetype opcode{entry.opcode};
+        if (options.exclude_experimental && (opcode == OP_TX || opcode == OP_MACRO)) continue;
         if (!options.selected_opcodes.empty() && !options.selected_opcodes.contains(opcode)) continue;
         entry.generate(specs, opcode);
     }
@@ -3054,7 +3153,9 @@ static bool ConfigureFullVaropsExtrapolation(const MaterializedCase& test_case,
         result.status = "zero-varops";
         return false;
     }
-    if (expected.varops_consumed < MIN_FULL_VAROPS_SAMPLE_BUDGET) {
+    const uint64_t initial_cost{InitialProducerCost(test_case.initial_stack)};
+    if (expected.varops_consumed <= initial_cost ||
+        expected.varops_consumed - initial_cost < MIN_FULL_VAROPS_SAMPLE_BUDGET) {
         result.status = "insufficient-sample";
         return false;
     }
@@ -3063,7 +3164,10 @@ static bool ConfigureFullVaropsExtrapolation(const MaterializedCase& test_case,
     result.script_bytes = test_case.script.size();
     result.script_executions = 1;
     result.measured_varops = expected.varops_consumed;
-    result.scale = static_cast<double>(TOTAL_VAROPS_BUDGET) / result.measured_varops;
+    // Initial ownership is funded once, not on every compressed repetition.
+    // Keeping interpreter-entry and cleanup-opcode time in the numerator is conservative.
+    result.scale = static_cast<double>(TOTAL_VAROPS_BUDGET - initial_cost) /
+                   (result.measured_varops - initial_cost);
     return true;
 }
 
@@ -3671,6 +3775,7 @@ static void PrintUsage(const char* program)
               << "  --list-opcodes          List the declarative opcode inventory\n"
               << "  --verify-costs         Cost-verification mode: assert static/runtime parity, skip timing\n"
               << "  --coverage-manifest P Export candidate opcode/formula/parity CSV\n"
+              << "  --exclude-experimental Skip postponed OP_TX/macro cases (including parity checks)\n"
               << "  --silent                Suppress progress output\n"
               << "  --file PATH             Atomically write a v4 summary-and-sample CSV\n"
               << "  --help, -h              Show this help\n\n"
@@ -3722,6 +3827,8 @@ static Options ParseArguments(int argc, char* argv[])
             options.list_opcodes = true;
         } else if (arg == "--verify-costs") {
             options.verify_costs = true;
+        } else if (arg == "--exclude-experimental") {
+            options.exclude_experimental = true;
         } else if (arg == "--coverage-manifest") {
             if (++i >= argc) throw std::runtime_error("--coverage-manifest requires a path");
             options.coverage_manifest = argv[i];
@@ -3860,6 +3967,11 @@ static void RequireIndependentParity(
 
 int main(int argc, char* argv[])
 {
+    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        std::cerr << "Experimental producer lifetime schedule: PRODUCE=" << varops::CopyCost(0)
+                  << "+" << varops::CopyCost(1) - varops::CopyCost(0)
+                  << "*n; initial stack prepaid; explicit RELEASE=0.\n";
+    }
     try {
         const Options options{ParseArguments(argc, argv)};
         if (options.list_opcodes) {
@@ -3888,6 +4000,7 @@ int main(int argc, char* argv[])
         const std::vector<CaseSpec> parity_specs{GenerateCaseSpecs(parity_options)};
         const auto parity{VerifyCorpusCosts(parity_specs, fixture, true)};
         RequireIndependentParity(parity_specs, parity);
+        if (!options.coverage_manifest.empty()) WriteCoverageManifest(options.coverage_manifest, parity);
         ReleaseAllocatorCaches();
 
         const uint64_t sample_budget{SampleBudget(options)};

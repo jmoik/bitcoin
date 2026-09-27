@@ -1615,6 +1615,14 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
     execdata.m_codeseparator_pos_init = true;
     execdata.m_tapscript = program.script;
     execdata.m_tapscript_init = true;
+    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        // Witness values have no producing opcode. Prepay their complete lifetime.
+        // Immediate-success prescanning happens before this evaluator is entered.
+        varops::Meter initial;
+        for (size_t i = 0; i < stack.size(); ++i) initial.Add(varops::CopyCost(stack.at(i).size()));
+        if (!initial.Spend(varops_budget)) return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
+        if (varops::g_cost_audit) varops::g_cost_audit->InitialStack(stack, initial.Total());
+    }
     for (const auto& body : program.fragments) {
         const uint64_t body_size{static_cast<uint64_t>(body.end - body.begin)};
         const uint64_t definition_charge{varops::MacroDecodeCost(body_size)};
@@ -2446,7 +2454,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                     const valtype& vchPubKey = stacktop(-1);
 
                     if (!vchSig.empty()) {
-                        cost_meter.Add(varops::SighashCost());
                         cost_meter.Add(varops::Sha256Cost(96));
                         cost_meter.Add(varops::SignatureCost());
                     }
@@ -2481,7 +2488,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                     ChargePrepValue(cost_meter, stack.at(stack.size() - 2).size());
                     if (!sig.empty()) {
-                        cost_meter.Add(varops::SighashCost());
                         cost_meter.Add(varops::Sha256Cost(96));
                         cost_meter.Add(varops::SignatureCost());
                         cost_meter.Add(varops::ArithCost(varops::detail::WordSize(stack.at(stack.size() - 2).size())));
@@ -2675,10 +2681,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                     // BIP 441 cost: W(length(OFFSET)) * 2 (LENGTHCONV).
                     const uint64_t offset{offset_v64.ToU64Ceil(stack.back().size(), varcost)};
-                    cost_meter.Add(varops::DiscardCost(stack.back().size() - offset));
-                    if (!cost_meter.Spend(varops_budget)) {
-                        return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
-                    }
                     valtype vch = stack.PopBackValue();
                     vch.erase(vch.begin() + offset, vch.end());
                     stack.push_back(std::move(vch));
@@ -2707,7 +2709,6 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
 
                     // The in-place splice moves bytes but creates no new entry.
                     cost_meter.Add(varops::CopyCost(offset) - varops::CopyCost(0));
-                    cost_meter.Add(varops::DiscardCost(vch.size() - offset));
                     if (!cost_meter.Spend(varops_budget)) {
                         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
                     }
@@ -2773,6 +2774,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         const uint64_t right_limbs{varops::detail::WordSize(right_size) / 8};
                         const uint64_t rows{std::max(left_limbs, right_limbs)};
                         const uint64_t row_limbs{std::min(left_limbs, right_limbs)};
+                        if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+                            // The row kernels exclude the result and scratch allocations.
+                            const size_t result_bytes{static_cast<size_t>((left_limbs + right_limbs) * 8)};
+                            cost_meter.Add(varops::CopyCost(result_bytes) + varops::PrepCost(result_bytes) +
+                                           varops::CopyCost((row_limbs + 1) * 8));
+                        }
                         // Each row is multiplied and accumulated into the result.
                         cost_meter.Add(rows * (varops::MulRowCost(row_limbs) +
                                                varops::ArithCost((row_limbs + 1) * 8)));
@@ -2852,7 +2859,12 @@ static bool EvalTapscriptV2Impl(ValtypeStack& stack, const StaticFragmentProgram
                         assert(!"invalid opcode");
                     }
 
-                    ChargeProducedValue(cost_meter, v64a.size());
+                    if (varops::PRODUCER_LIFETIME_EXPERIMENT && opcode == OP_MUL) {
+                        // Result storage was prepaid at its full span, before multiplication.
+                        cost_meter.Add(varops::OutputCost(v64a.size()) - varops::CopyCost(varops::WordSpan(v64a.size())));
+                    } else {
+                        ChargeProducedValue(cost_meter, v64a.size());
+                    }
                     if (opcode == OP_DIV || opcode == OP_MOD) {
                         // The divisor is consumed; MOD can also replace the dividend buffer.
                         ChargeReleaseValue(cost_meter, std::max(left_size, right_size));
@@ -3579,7 +3591,6 @@ bool CheckTapscriptV2ScriptResult(ValtypeStack& stack, varops::Budget& varops_bu
     varops::Meter final_meter;
     final_meter.Add(varops::PrepCost(back_val.size()));
     final_meter.Add(varops::ReadCost(back_val.size()));
-    final_meter.Add(varops::FinalCost());
     if (!final_meter.Spend(varops_budget)) {
         return set_error(serror, SCRIPT_ERR_VAROP_COUNT);
     }

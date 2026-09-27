@@ -199,9 +199,15 @@ struct Options {
     bool prep_audit{false};
     bool prep_only{false};
     bool arith_only{false};
+    bool div_only{false};
     bool hash_only{false};
     bool items_only{false};
     bool copy_only{false};
+    bool storage_only{false};
+    bool produce_only{false};
+    bool growth_only{false};
+    size_t growth_seed{1};
+    bool calibration_candidate{false};
     bool max_diagnostic{false};
     bool self_test{false};
 };
@@ -425,7 +431,7 @@ public:
         Require(out.good(), "cannot open output: " + options.output);
         out << std::setprecision(17)
             << "# Reference_Script_Evaluation_Seconds: " << options.reference_sec << '\n'
-            << "# Primitive_Model: reduced-20260922\n"
+            << "# Primitive_Model: " << (options.calibration_candidate ? "producer-normalize-v1" : "legacy-primitives") << '\n'
             << "# Reference_Source: " << (options.reference_csv.empty() ? "--pre-v2-seconds" : options.reference_csv) << '\n'
             << "# Empirical_Percentile: " << options.percentile << '\n'
             << "# Safety_Multiplier: " << options.margin << '\n'
@@ -594,6 +600,16 @@ std::vector<size_t> Sizes(const Options& options, size_t minimum=0, size_t limit
     }
     for (size_t n : {2'000'000U, 3'000'000U, 3'500'000U}) {
         if (n >= minimum && n <= cap) result.push_back(n);
+    }
+    // Portable allocation-size boundaries plus previously observed allocator
+    // transitions. These are fixture sizes, never consensus charge features.
+    std::vector<size_t> boundaries{65536, 86658, 135402, 169252, 211565, 330570};
+    for (size_t n = 8; n <= cap; n *= 2) boundaries.push_back(n);
+    for (size_t boundary : boundaries) {
+        for (int delta : {-1, 0, 1}) {
+            const size_t n{static_cast<size_t>(static_cast<int64_t>(boundary) + delta)};
+            if (n >= minimum && n <= cap) result.push_back(n);
+        }
     }
     if (cap>=minimum) result.push_back(cap);
     std::sort(result.begin(),result.end());
@@ -912,7 +928,7 @@ void EstimateCopy(Runner& r)
 // PREP/OUTPUT: directly call the production ownership/conversion paths. OUTPUT
 // measures MoveToValtype followed by rvalue stack insertion as one operation.
 // Tight PREP samples are growth checks, not a separately exported primitive.
-void EstimateRepresentation(Runner& r)
+void EstimateRepresentation(Runner& r, bool include_output = true)
 {
     std::vector<Point> prep,output;
     struct CompositionCheck { size_t bytes; double tight; double spare; };
@@ -950,6 +966,8 @@ void EstimateRepresentation(Runner& r)
         prep.push_back({1,double(W(n)),std::move(prep_spare)});
         composition.push_back({n,prep_tight.tail,prep.back().sample.tail});
 
+        if (!include_output) continue;
+
         struct OutputState {
             std::vector<Val64> numbers;
             std::vector<std::unique_ptr<ValtypeStack>> stacks;
@@ -986,6 +1004,7 @@ void EstimateRepresentation(Runner& r)
         }
     }
     r.Pair("PREP.fixed","PREP.byte","rounded_byte",prep,"fresh Val64::MoveFromValtype with pre-reserved rounded capacity");
+    if (!include_output) return;
     // Small scalar construction is part of the same result-production family.
     for (uint64_t value : std::array<uint64_t, 7>{0, 1, 255, 256, 65536, 0x80000000ULL, UINT64_MAX}) {
         Val64 fixture(value);
@@ -1004,6 +1023,340 @@ void EstimateRepresentation(Runner& r)
     }
     r.Pair("OUTPUT.fixed","OUTPUT.byte","rounded_byte",output,
            "numeric result production/insertion/release, including scalar construction");
+}
+
+// Producer lifetime model: complete creation/use/destruction is timed together.
+// NORMALIZE isolates numeric materialization; no insertion or destruction occurs
+// inside its timer. Sizes/counts describe semantic values, never capacity.
+void EstimateProducer(Runner& r)
+{
+    std::ofstream manifest(r.options.output + ".produce.csv");
+    Require(manifest.good(), "cannot open producer manifest");
+    manifest << "probe,kind,items,bytes,normalize_bytes\n";
+    const auto cycle = [&](const std::string& label, const std::string& kind,
+                           size_t items, size_t bytes, size_t numeric_bytes, auto work) {
+        work();
+        const double old_ms{r.options.epoch_ms};
+        r.options.epoch_ms = r.options.copy_epoch_ms;
+        r.Repeated(label, [] { return 0; }, [&](auto&, size_t) { work(); });
+        r.options.epoch_ms = old_ms;
+        manifest << CSV(label) << ',' << kind << ',' << items << ',' << bytes << ',' << numeric_bytes << '\n';
+    };
+    auto sizes = Sizes(r.options);
+    for (size_t boundary : {65536U, 86658U, 135402U, 169252U, 211565U, 330570U}) {
+        for (int delta : {-16, -8, -1, 0, 1, 8, 16}) {
+            const size_t n{static_cast<size_t>(static_cast<int64_t>(boundary) + delta)};
+            if (n <= r.options.max_bytes) sizes.push_back(n);
+        }
+    }
+    std::sort(sizes.begin(), sizes.end());
+    sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+    if (r.options.growth_only) {
+        sizes = {65520, 65528, 65535, 65536, 65537, 65538, 65543, 65544, 65545, 65552,
+                 86650, 86657, 86658, 86659, 86666, 135386, 135394, 135401, 135402,
+                 135403, 135410, 135418, 169244, 169251, 169252, 169260};
+        std::erase_if(sizes, [&](size_t n) { return n > r.options.max_bytes; });
+        std::mt19937_64 rng{r.options.growth_seed};
+        std::shuffle(sizes.begin(), sizes.end(), rng);
+    }
+    for (const size_t n : sizes) {
+        const Bytes source{Pattern(n)};
+        ValtypeStack stack;
+        stack.reserve(8);
+        for (const std::string mode : {"stack", "vector", "zero", "shrink-empty", "shrink-one", "grow"}) {
+            if (r.options.growth_only && mode != "grow") continue;
+            // Growth funds both the original value and its enlarged replacement.
+            cycle("PRODUCE/" + mode + "/" + std::to_string(n), "produce",
+                  mode == "grow" ? 2 : 1, mode == "grow" ? n + n / 2 : n, 0, [&] {
+                if (mode == "stack") {
+                    stack.push_back(source);
+                    Observe(stack.back());
+                    stack.pop_back();
+                } else {
+                    Bytes value;
+                    if (mode == "zero") {
+                        value.resize(n);
+                    } else if (mode == "grow") {
+                        value.assign(source.begin(), source.begin() + n / 2);
+                        value.insert(value.end(), source.begin() + n / 2, source.end());
+                    } else {
+                        value = source;
+                    }
+                    Observe(value);
+                    if (mode == "shrink-empty") value.resize(0);
+                    if (mode == "shrink-one") value.resize(std::min<size_t>(n, 1));
+                    stack.push_back(std::move(value));
+                    Observe(stack.back());
+                    stack.pop_back();
+                }
+            });
+        }
+        if (r.options.growth_only) continue;
+        // Source and result are both funded: never attribute freeing a 4 MB
+        // source to the size of a one-byte result.
+        const size_t source_size{std::min<size_t>(3'998'900, r.options.max_bytes)};
+        const Bytes large_source{Pattern(source_size)};
+        const size_t result_size{std::min(n, source_size)};
+        cycle("PRODUCE/churn/" + std::to_string(n), "produce", 2, source_size + result_size, 0, [&] {
+            Bytes temporary{large_source};
+            Bytes result(temporary.begin(), temporary.begin() + result_size);
+            Observe(temporary);
+            stack.push_back(std::move(result));
+            stack.pop_back();
+        });
+        for (const bool offset : {false, true}) {
+            struct State { std::vector<Val64> numbers; std::vector<Bytes> results; };
+            const std::string label{"NORMALIZE/" + std::string(offset ? "offset-span/" : "aligned/") + std::to_string(n)};
+            r.Measure(label, r.PoolLimit(2 * W(n + 8) + 256), [&](size_t count) {
+                State state;
+                state.numbers.resize(count);
+                state.results.resize(count);
+                for (size_t i = 0; i < count; ++i) {
+                    Bytes bytes{Pattern(n)};
+                    ProbeVal64::Configure(r.options.portable_math, offset);
+                    state.numbers[i].MoveFromValtype(std::move(bytes));
+                    ProbeVal64::Configure(r.options.portable_math, r.options.offset_spans);
+                }
+                return state;
+            }, [](auto& state, size_t count) {
+                for (size_t i = 0; i < count; ++i) {
+                    state.results[i] = state.numbers[i].MoveToValtype();
+                    Observe(state.results[i]);
+                }
+            });
+            manifest << CSV(label) << ",normalize,1,0," << n << '\n';
+        }
+        // These are held-out composition checks, not more fit constraints.
+        for (const bool spare : {false, true}) {
+            cycle("PRODUCER_CHECK/numeric/" + std::string(spare ? "spare/" : "tight/") + std::to_string(n),
+                  "numeric", 1, n, n, [&] {
+                Bytes bytes;
+                if (spare) bytes.reserve(W(n) + 16);
+                bytes.insert(bytes.end(), source.begin(), source.end());
+                Val64 number{std::move(bytes)};
+                stack.push_back(number.MoveToValtype());
+                Observe(stack.back());
+                stack.pop_back();
+            });
+        }
+    }
+    if (r.options.growth_only) return;
+    for (uint64_t value : {uint64_t{0}, uint64_t{1}, uint64_t{255}, uint64_t{256}, uint64_t{65536}, UINT64_MAX}) {
+        Val64 fixture(value);
+        const size_t n{fixture.MoveToValtype().size()};
+        const std::string label{"NORMALIZE/scalar/" + std::to_string(value)};
+        struct State { std::vector<Val64> numbers; std::vector<Bytes> results; };
+        r.Measure(label, r.PoolLimit(512), [&](size_t count) {
+            State state;
+            state.results.resize(count);
+            state.numbers.reserve(count);
+            for (size_t i = 0; i < count; ++i) state.numbers.emplace_back(value);
+            return state;
+        }, [](auto& state, size_t count) {
+            for (size_t i = 0; i < count; ++i) {
+                state.results[i] = state.numbers[i].MoveToValtype();
+                Observe(state.results[i]);
+            }
+        });
+        manifest << CSV(label) << ",normalize,1,0," << n << '\n';
+    }
+    for (size_t n : {0U, 1U, 8U, 521U, 4096U, 65536U, 1048576U}) {
+        if (n > r.options.max_bytes) continue;
+        const Bytes source{Pattern(n)};
+        for (size_t count : {1U, 8U, 64U, 1024U, 32768U}) {
+            if (count * (n + 32) > r.options.fixture_bytes / 2) continue;
+            cycle("PRODUCER_CHECK/retained/" + std::to_string(n) + "/" + std::to_string(count),
+                  "retained", count, n * count, 0, [&] {
+                ValtypeStack stack;
+                for (size_t i = 0; i < count; ++i) {
+                    Bytes value{source};
+                    value.resize(std::min<size_t>(n, 1));
+                    stack.push_back(std::move(value));
+                }
+                Observe(stack);
+            });
+        }
+    }
+}
+
+// Complete finite lifetimes: unlike Measure's prepared-state probes, every
+// mutable buffer (including its final destruction) is inside the timed loop.
+// Immutable source bytes are fixtures, not free mutable allocation history.
+// These are composite diagnostics, not additional independent opcode charges.
+void EstimateStorage(Runner& r)
+{
+    std::ofstream manifest(r.options.output + ".storage.csv");
+    Require(manifest.good(), "cannot open storage fixture manifest");
+    manifest << "probe,bytes,items,current_varops,kind\n";
+    const auto cycle = [&](const std::string& name, size_t bytes, size_t items, auto work) {
+        work(); // Validate the path before collecting measurements.
+        r.Repeated(name, [] { return 0; }, [&](auto&, size_t) { work(); });
+        manifest << CSV(name) << ',' << bytes << ',' << items << ",0,lifetime\n";
+    };
+    for (size_t n : Sizes(r.options)) {
+        const Bytes source{Pattern(n)};
+        for (const std::string mode : {"stack", "vector", "shrink-empty", "shrink-one", "shrink-half"}) {
+            cycle("STORAGE/copy/" + mode + "/" + std::to_string(n), n, 1, [&] {
+                if (mode == "stack") {
+                    ValtypeStack stack;
+                    stack.push_back(source);
+                    Observe(stack.back());
+                } else {
+                    Bytes value{source};
+                    Observe(value);
+                    if (mode == "shrink-empty") value.resize(0);
+                    if (mode == "shrink-one") value.resize(std::min<size_t>(n, 1));
+                    if (mode == "shrink-half") value.resize(n / 2);
+                    Observe(value);
+                }
+            });
+        }
+        for (bool spare : {false, true}) {
+            cycle("STORAGE/numeric/" + std::string(spare ? "spare/" : "tight/") + std::to_string(n), n, 1, [&] {
+                Bytes bytes;
+                if (spare) bytes.reserve(W(n) + 16);
+                bytes.insert(bytes.end(), source.begin(), source.end());
+                Val64 number{std::move(bytes)};
+                ValtypeStack stack;
+                stack.push_back(number.MoveToValtype());
+                Observe(stack.back());
+            });
+        }
+    }
+
+    // Retain small logical values backed by larger buffers; creation, shrinking,
+    // accumulated storage and final reclamation all occur within this sample.
+    for (size_t n : {0U, 1U, 8U, 521U, 4096U, 65536U, 1048576U}) {
+        if (n > r.options.max_bytes) continue;
+        const Bytes source{Pattern(n)};
+        for (size_t count : {1U, 8U, 64U, 1024U, 32768U}) {
+            if (count * (n + 32) > r.options.fixture_bytes / 2) continue;
+            for (bool shrink : {false, true}) {
+                cycle("STORAGE/retained/" + std::string(shrink ? "shrunk/" : "whole/") +
+                          std::to_string(n) + "/" + std::to_string(count), n, count, [&] {
+                    ValtypeStack stack;
+                    for (size_t i = 0; i < count; ++i) {
+                        Bytes value{source};
+                        if (shrink) value.resize(std::min<size_t>(n, 1));
+                        stack.push_back(std::move(value));
+                    }
+                    Observe(stack);
+                });
+            }
+        }
+    }
+
+    BaseSignatureChecker checker;
+    const auto script_sample = [&](const std::string& name, size_t size, const CScript& script,
+                                   const std::vector<Bytes>& initial) {
+        uint64_t charged{0};
+        const auto execute = [&] {
+            Frame frame{initial}; // Witness-stack copy and eventual cleanup are timed.
+            ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+            bool immediate{false};
+            const bool ok{EvalTapscriptV2(frame.stack, script, FLAGS, checker, frame.context,
+                                         frame.budget, &error, &immediate)};
+            if (!ok || immediate || !CheckTapscriptV2ScriptResult(frame.stack, frame.budget, &error)) {
+                throw std::runtime_error(strprintf("storage fixture %s failed: %d", name, int(error)));
+            }
+            charged = DIAGNOSTIC_BUDGET - *frame.budget.Remaining();
+            Observe(frame);
+        };
+        execute();
+        r.Repeated(name, [] { return 0; }, [&](auto&, size_t) { execute(); });
+        manifest << CSV(name) << ',' << size << ',' << initial.size() << ',' << charged << ",script\n";
+    };
+    for (size_t n : {0U, 1U, 7U, 8U, 9U, 63U, 64U, 65U, 119U, 120U, 121U,
+                     127U, 128U, 129U, 519U, 520U, 521U, 4096U, 65536U, 1048576U, 1999000U, 3998900U}) {
+        if (n > r.options.max_bytes) continue;
+        const Bytes source{Pattern(n)};
+        const Bytes index{Val64{uint64_t(n / 2)}.MoveToValtype()};
+        const auto run = [&](const std::string& mode, const CScript& script, const std::vector<Bytes>& initial) {
+            script_sample("STORAGE/script/" + mode + "/" + std::to_string(n), n, script, initial);
+        };
+        run("witness-drop", CScript{} << OP_DROP << OP_1, {source});
+        run("literal", CScript{} << source << OP_DROP << OP_1, {});
+        run("dup-altstack", CScript{} << OP_DUP << OP_TOALTSTACK << OP_FROMALTSTACK << OP_2DROP << OP_1, {source});
+        if (n <= 2'000'000) run("cat", CScript{} << OP_CAT << OP_DROP << OP_1, {source, source});
+        run("cat-grow-one", CScript{} << OP_CAT << OP_DROP << OP_1, {source, Bytes{1}});
+        run("substr", CScript{} << OP_SUBSTR << OP_DROP << OP_1, {source, index, Bytes{1}});
+        run("left", CScript{} << OP_LEFT << OP_DROP << OP_1, {source, index});
+        run("right", CScript{} << OP_RIGHT << OP_DROP << OP_1, {source, index});
+        run("carry", CScript{} << OP_1ADD << OP_DROP << OP_1, {Bytes(n, 0xff)});
+        run("cancel", CScript{} << OP_SUB << OP_DROP << OP_1, {source, source});
+        run("min", CScript{} << OP_MIN << OP_DROP << OP_1, {source, source});
+        run("max", CScript{} << OP_MAX << OP_DROP << OP_1, {source, source});
+        run("numequalverify", CScript{} << OP_NUMEQUALVERIFY << OP_1, {source, source});
+        run("normalize", CScript{} << OP_0NOTEQUAL << OP_DROP << OP_1, {Bytes(n, 0)});
+        run("shift-grow", CScript{} << OP_LSHIFT << OP_DROP << OP_1, {source, Bytes{65}});
+        run("shift-shrink", CScript{} << OP_RSHIFT << OP_DROP << OP_1, {source, Bytes{65}});
+        run("mul", CScript{} << OP_MUL << OP_DROP << OP_1, {source, Pattern(16)});
+        run("div", CScript{} << OP_DIV << OP_DROP << OP_1, {source, Bytes(16, 1)});
+        run("mod", CScript{} << OP_MOD << OP_DROP << OP_1, {source, Bytes(16, 1)});
+        if (n <= 4096) {
+            for (size_t divisor_size : {8U, 64U, 128U}) {
+                for (bool normalized : {false, true}) {
+                    Bytes divisor{Pattern(divisor_size)};
+                    if (!normalized) divisor.back() = 1;
+                    const auto suffix{std::to_string(divisor_size) + (normalized ? "-normalized" : "-grow")};
+                    run("div-" + suffix, CScript{} << OP_DIV << OP_DROP << OP_1, {source, divisor});
+                    run("mod-" + suffix, CScript{} << OP_MOD << OP_DROP << OP_1, {source, divisor});
+                }
+            }
+        }
+        run("sha256", CScript{} << OP_SHA256 << OP_DROP << OP_1, {source});
+        // Both source duplication and result destruction are now timed. Unlike
+        // the old scoped churn timer, this does not attribute source work to n.
+        run("substr-churn", CScript{} << OP_3DUP << OP_SUBSTR << OP_DROP << OP_2DROP << OP_DROP << OP_1,
+            {source, index, index});
+        CScript repeated;
+        for (size_t i = 0; i < 64; ++i) repeated << OP_3DUP << OP_SUBSTR << OP_DROP;
+        repeated << OP_2DROP << OP_DROP << OP_1;
+        run("substr-repeat", repeated, {source, index, index});
+        if (n != 0) run("final", CScript{} << OP_NOP, {source});
+    }
+
+    // Macro metadata, call frames and inactive-span summaries are different
+    // allocations from value buffers; retain them as complete-script controls.
+    for (size_t definitions : {1U, 8U, 128U}) {
+        const CScript body{CScript{} << OP_0 << OP_IF << OP_1 << OP_ENDIF};
+        CScript script;
+        for (size_t i = 0; i < definitions; ++i) {
+            script << OP_MACRO;
+            script.push_back(body.size()); // Canonical one-byte CompactSize.
+            script.insert(script.end(), body.begin(), body.end());
+        }
+        for (size_t i = 0; i < definitions; ++i) {
+            script << OP_CALLMACRO;
+            script.push_back(i);
+        }
+        script << OP_1;
+        script_sample("STORAGE/script/macros/" + std::to_string(definitions), definitions, script, {});
+    }
+
+    // OP_TX owns result vectors and planning arrays; context preparation remains
+    // outside this evaluator-only boundary, exactly as in EstimateItems.
+    for (bool collate : {false, true}) {
+        for (size_t n : {0U, 1U, 8U, 128U, 4096U}) {
+            TransactionFixture fixture(n);
+            for (size_t bytes : {0U, 32U, 520U}) {
+                for (auto& item : fixture.tx.vin[0].scriptWitness.stack) item = Pattern(bytes);
+                auto tx_checker{fixture.Checker()};
+                const Bytes selector{0, static_cast<unsigned char>(collate), 0, 0x20, 0x80, 0};
+                cycle("STORAGE/select/" + std::string(collate ? "collated/" : "items/") +
+                          std::to_string(bytes) + "/" + std::to_string(n), bytes, n, [&] {
+                    Frame frame{{selector}, fixture.context};
+                    ValtypeStack alt;
+                    ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+                    const auto status{EvalOpTx(frame.stack, alt, tx_checker, frame.context, frame.budget, &error)};
+                    Require(status == OpTxResult::NORMAL && frame.stack.size() == (collate ? 1 : n),
+                            "storage OP_TX fixture failed");
+                    Observe(frame.stack);
+                });
+            }
+        }
+    }
+    Require(manifest.good(), "storage manifest write failed");
 }
 
 // READ: Val64 zero/comparison helpers. Full scans are forced by equal/all-zero
@@ -1041,6 +1394,7 @@ void EstimateArithmetic(Runner& r)
     for(size_t n:Sizes(r.options,1)) {
         const size_t words=(n+7)/8;
         for(bool unequal:{false,true}) {
+          for (bool borrow_chain : {false, true}) {
             struct State { Words a,b; };
             const auto make=[&](size_t count) {
                 std::vector<State> states;
@@ -1049,10 +1403,15 @@ void EstimateArithmetic(Runner& r)
                     states.push_back({Words(words,UINT64_MAX),Words(unequal?1:words,0)});
                     states.back().a.back()=0x7fffffffffffffffULL;
                     states.back().b.front()=1;
+                    if (borrow_chain) {
+                        std::fill(states.back().a.begin(), states.back().a.end(), 0);
+                        states.back().a.back() = 1;
+                    }
                 }
                 return states;
             };
-            const auto suffix=std::to_string(words)+(unequal?"/one-word":"/equal");
+            const auto suffix=std::to_string(words)+(unequal?"/one-word":"/equal")+
+                              (borrow_chain ? "/borrow-chain" : "/carry-chain");
             const size_t capacity=r.PoolLimit(16*words+128);
             auto add=r.Measure("ARITH/add/"+suffix,capacity,make,[](auto& states,size_t count) {
                 for(size_t i=0;i<count;++i) {
@@ -1070,6 +1429,7 @@ void EstimateArithmetic(Runner& r)
             });
             p.push_back({1,double(8*words),std::move(add)});
             p.push_back({1,double(8*words),std::move(sub)});
+          }
         }
     }
     r.Pair("ARITH.fixed","ARITH.byte","rounded_byte",p,
@@ -1126,9 +1486,56 @@ void EstimateMove(Runner& r)
     r.LinearRate("MOVE","entry",p,"max tail time per header moved by ValtypeStack::Roll");
 }
 
-// MUL: production MultiplySpan cell work. DIVCORE samples currently time full
-// OpDiv on prepared operands; export raw timings only until trial work is
-// separated from storage/normalization. Adding MUL to that total double counts.
+// DIVCORE includes normalization and temporary storage in the prepared DIV/MOD
+// call. Fresh operands prevent repetition from measuring an already divided value.
+void EstimateDivision(Runner& r)
+{
+    size_t fixtures{0};
+    for (size_t bw : {1U, 2U, 3U, 4U, 8U, 16U, 32U, 64U, 128U, 256U, 1024U}) {
+        std::vector<size_t> dividends{std::max(size_t{1}, bw - 1), bw, bw + 1, 2 * bw, 4 * bw, bw + 32};
+        std::sort(dividends.begin(), dividends.end());
+        dividends.erase(std::unique(dividends.begin(), dividends.end()), dividends.end());
+        for (size_t aw : dividends) {
+            if (std::max(aw, bw) * 8 > r.options.max_bytes) continue;
+            for (uint64_t seed : {17U, 127U}) {
+                for (const std::string pattern : {"normalized", "top-clear", "top-one"}) {
+                    Bytes a{Pattern(aw * 8, seed)}, b{Pattern(bw * 8, seed + 5)};
+                    if (pattern == "normalized") {
+                        b.back() |= 0x80;
+                    } else if (pattern == "top-clear") {
+                        b.back() = 0x40;
+                    } else {
+                        std::fill(b.end() - 8, b.end(), 0);
+                        b[b.size() - 8] = 1;
+                    }
+                    for (bool modulo : {false, true}) {
+                        struct State { Val64 a, b; State(Bytes x, Bytes y) : a(std::move(x)), b(std::move(y)) {} };
+                        const std::string name{"DIVCORE/" + std::to_string(aw) + "/" + std::to_string(bw) +
+                            "/" + std::to_string(seed) + (modulo ? "/MOD/" : "/DIV/") + pattern};
+                        r.Measure(name, r.PoolLimit(2 * (aw + bw) * 8 + 256), [&](size_t count) {
+                            std::vector<std::unique_ptr<State>> states;
+                            states.reserve(count);
+                            for (size_t i{0}; i < count; ++i) states.push_back(std::make_unique<State>(a, b));
+                            return states;
+                        }, [&](auto& states, size_t count) {
+                            for (size_t i{0}; i < count; ++i) {
+                                const bool ok{modulo ? Val64::OpMod(states[i]->a, states[i]->b)
+                                                     : Val64::OpDiv(states[i]->a, states[i]->b)};
+                                if (!ok) throw std::runtime_error("division fixture failed");
+                            }
+                        });
+                        if (++fixtures % 100 == 0) std::cerr << "  DIVCORE: " << fixtures << " fixtures measured\n";
+                    }
+                }
+            }
+        }
+    }
+    r.Add({"DIVCORE", "trial", "prepared DIV/MOD across divisor widths, shape and normalization paths",
+           0, 0, "diagnostic_no_fit"});
+}
+
+// MUL measures production MultiplySpan rows; DIVCORE bundles the complete
+// prepared DIV/MOD call. Adding MUL to the latter would double-count work.
 void EstimateMulDiv(Runner& r)
 {
     std::vector<Point> mul;
@@ -1139,25 +1546,8 @@ void EstimateMulDiv(Runner& r)
         });
         mul.push_back({1,double(words),std::move(sample)});
     }
-    for(size_t aw:std::initializer_list<size_t>{2,4,8,32,128}) for(size_t bw:std::initializer_list<size_t>{1,2,3}) {
-        if(bw>=aw || aw*8>r.options.max_bytes) continue;
-        for(uint64_t seed:std::initializer_list<uint64_t>{1,17,127}) {
-            struct State { Val64 a,b; State(Bytes x,Bytes y):a(std::move(x)),b(std::move(y)){} };
-            Bytes a=Pattern(aw*8,seed), b=Pattern(bw*8,seed+5);
-            // Top bits already set: no initial left shift and no extra limb.
-            r.Measure("DIVCORE/"+std::to_string(aw)+"/"+std::to_string(bw)+"/"+std::to_string(seed),
-                r.PoolLimit(2*(aw+bw)*8+256),[&](size_t count){
-                    std::vector<std::unique_ptr<State>> v; v.reserve(count);
-                    for(size_t i=0;i<count;++i) v.push_back(std::make_unique<State>(a,b));
-                    return v;
-                },[](auto& v,size_t count){
-                    for(size_t i=0;i<count;++i) {bool ok=Val64::OpDiv(v[i]->a,v[i]->b); if(!ok) throw std::runtime_error("division fixture failed");}
-                });
-        }
-    }
     r.LinearRate("MUL", "limb_cell", mul, "MultiplySpan time per source limb; coefficient for u*v cells");
-    r.Add({"DIVCORE", "trial", "raw OpDiv timings retained; isolated trial coefficients unresolved",
-           0, 0, "diagnostic_no_fit"});
+    EstimateDivision(r);
 }
 
 // H_*: initialized/finalized production hash passes. The shared SHA256 fit also
@@ -1221,23 +1611,6 @@ void EstimateSignatures(Runner& r,const Crypto& crypto)
         good+=result->data()[0]; Observe(result);
     });
     r.LinearRate("TWEAK","operation",{{1,1,std::move(tweak)}},"XOnlyPubKey::AddTweak: parse, group operation, x-only serialization");
-}
-
-// SIGHASH: actual SignatureHashSchnorr over a prepared transaction context.
-void EstimateContext(Runner& r)
-{
-    TransactionFixture fixture;
-    std::vector<Point> hashes;
-    for(uint8_t type:std::array<uint8_t,5>{SIGHASH_DEFAULT,SIGHASH_ALL,SIGHASH_NONE,SIGHASH_ALL|SIGHASH_ANYONECANPAY,SIGHASH_NONE|SIGHASH_ANYONECANPAY}) {
-        auto sample=r.Repeated("SIGHASH/"+std::to_string(type),[&]{return fixture.context;},[&](auto& context,size_t){
-            uint256 result;
-            bool valid=SignatureHashSchnorr(result,context,fixture.tx,0,type,SigVersion::TAPSCRIPT_V2,fixture.precomputed,MissingDataBehavior::FAIL);
-            if(!valid) throw std::runtime_error("sighash fixture failed");
-            Observe(result);
-        });
-        hashes.push_back({1,1,std::move(sample)});
-    }
-    r.LinearRate("SIGHASH","message",hashes,"real TapSighash message over precomputed context; excludes SIGHASH_SINGLE output hash");
 }
 
 // SELECT: EvalOpTx over one input and N empty witness items, in both formats.
@@ -1335,7 +1708,8 @@ void Help()
         "  --out FILE          Summary CSV (default dev/varops/primitive_costs.csv); raw epochs use FILE.samples.csv\n"
         "  --epochs N          Measured epochs per fixture (default 31)\n"
         "  --sample-ms MS      Target timed duration per epoch (default 2)\n"
-        "  --copy-sample-ms MS Target duration for COPY fixtures (default: --sample-ms)\n"
+        "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default: --sample-ms)\n"
+        "  --calibration-candidate Collect the frozen PRODUCE/NORMALIZE model only\n"
         "  --percentile P      Empirical quantile, 0..1 (default .95; NOT a confidence interval)\n"
         "  --margin M          Multiplicative margin >=1 (default 1.15)\n"
         "  --max-bytes N       Maximum linear-probe payload (default 4000000)\n"
@@ -1345,7 +1719,12 @@ void Help()
         "  --prep-audit        Include neighbours of the PREP binding-size candidates\n"
     "  --prep-only         Run only the PREP/OUTPUT ownership-conversion probes\n"
     "  --copy-only         Run only the COPY/RELEASE isolated/churn probes\n"
+    "  --storage-only      Complete storage lifetimes and allocating-opcode checks\n"
+    "  --produce-only      Producer lifetimes and isolated numeric materialization\n"
+    "  --growth-only       Complete producer growth lifetimes near observed allocation boundaries\n"
+    "  --growth-seed N     Shuffle growth-only fixture order reproducibly (default 1)\n"
     "  --arith-only        Run only the separately measured ADD/SUB kernel audit\n"
+    "  --div-only          Run only the prepared DIV/MOD size and normalization sweep\n"
     "  --hash-only         Run only the hash primitive probes\n"
     "  --items-only        Run only the OP_TX SELECT probes\n"
     "  --max-diagnostic    Time OP_MAX's copy, compare, trim, and buffer lifetimes\n"
@@ -1375,15 +1754,24 @@ Options Parse(int argc,char** argv)
         else if(arg=="--prep-audit") o.prep_audit=true;
         else if(arg=="--prep-only") o.prep_only=true;
         else if(arg=="--copy-only") o.copy_only=true;
+        else if(arg=="--storage-only") o.storage_only=true;
+        else if(arg=="--produce-only") o.produce_only=true;
+        else if(arg=="--growth-only") { o.produce_only=true; o.growth_only=true; }
+        else if(arg=="--growth-seed") o.growth_seed=integer();
         else if(arg=="--max-diagnostic") o.max_diagnostic=true;
         else if(arg=="--arith-only") o.arith_only=true;
+        else if(arg=="--calibration-candidate") o.calibration_candidate=true;
+        else if(arg=="--div-only") o.div_only=true;
         else if(arg=="--hash-only") o.hash_only=true;
         else if(arg=="--items-only") o.items_only=true;
         else if(arg=="--self-test") o.self_test=true;
         else throw std::runtime_error("unknown option: "+arg);
     }
-    Require(int(o.prep_only) + int(o.copy_only) + int(o.arith_only) + int(o.hash_only) + int(o.items_only) + int(o.max_diagnostic) <= 1,
+    Require(int(o.prep_only) + int(o.copy_only) + int(o.storage_only) + int(o.produce_only) + int(o.arith_only) + int(o.div_only) + int(o.hash_only) + int(o.items_only) + int(o.max_diagnostic) <= 1,
             "choose only one focused probe group");
+    Require(!o.calibration_candidate || !(o.prep_only || o.copy_only || o.storage_only || o.produce_only ||
+            o.arith_only || o.div_only || o.hash_only || o.items_only || o.max_diagnostic),
+            "candidate collection cannot be combined with a focused probe");
     Require(o.epochs>=1 && o.epochs<=1000,"epochs must be 1..1000");
     Require(o.epoch_ms>0 && o.epoch_ms<=1000,"sample-ms must be >0 and <=1000");
     if (o.copy_epoch_ms == 0) o.copy_epoch_ms = o.epoch_ms;
@@ -1486,6 +1874,14 @@ void ProductionSelfTests()
     Words a{5,0},b{7,0}; size_t nonzero=0;
     Require(!ProbeVal64::AddSpans(a,b,nonzero)&&a[0]==12,"AddSpans self-test");
     Require(!ProbeVal64::SubtractSpans(a,b,nonzero)&&a[0]==5,"SubtractSpans self-test");
+    for (size_t words : {1U, 2U, 8U, 65U}) {
+        Words lhs(words, 0), rhs(words, 0);
+        lhs.back() = 1;
+        rhs.front() = 1;
+        Require(!ProbeVal64::SubtractSpans(lhs, rhs, nonzero), "borrow-chain underflow");
+        Require(lhs.back() == 0 && std::all_of(lhs.begin(), lhs.end() - 1,
+                    [](uint64_t limb) { return limb == UINT64_MAX; }), "full borrow chain not exercised");
+    }
     Words product(3);ProbeVal64::MultiplySpan(product,a,3);
     Require(product[0]==15,"MultiplySpan self-test");
     Val64 x(Bytes{100}),y(Bytes{7});Require(Val64::OpDiv(x,y),"division self-test");
@@ -1518,6 +1914,21 @@ int main(int argc,char** argv)
         std::cerr<<"Reference: "<<options.reference_sec<<" s (Script evaluation only).\n"
                  <<"Empirical percentile: "<<options.percentile<<"; safety multiplier: "<<options.margin<<".\n";
         Runner runner(options);Crypto crypto;
+        if (options.calibration_candidate) {
+            Require(varops::PRODUCER_LIFETIME_EXPERIMENT, "candidate collection requires the producer-lifetime build");
+            EstimateFixed(runner);
+            EstimateProducer(runner);
+            EstimateRepresentation(runner, false);
+            EstimateTraversal(runner);
+            EstimateArithmetic(runner);
+            EstimateBit(runner);
+            EstimateMove(runner);
+            EstimateMulDiv(runner);
+            EstimateHashes(runner, crypto);
+            EstimateSignatures(runner, crypto);
+            runner.Save();
+            return 0;
+        }
         if (options.epochs == 1) std::cerr << "Single-epoch pilot: no repeatability or uncertainty estimate.\n";
         if (options.prep_only) {
             EstimateRepresentation(runner);
@@ -1531,6 +1942,18 @@ int main(int argc,char** argv)
             std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
             return 0;
         }
+        if (options.storage_only) {
+            EstimateStorage(runner);
+            runner.Save();
+            std::cerr << "Wrote storage lifetimes to " << options.output << ".samples.csv\n";
+            return 0;
+        }
+        if (options.produce_only) {
+            EstimateProducer(runner);
+            runner.Save();
+            std::cerr << "Wrote producer lifetimes to " << options.output << ".samples.csv\n";
+            return 0;
+        }
         if (options.arith_only) {
             EstimateArithmetic(runner);
             runner.Save();
@@ -1539,6 +1962,12 @@ int main(int argc,char** argv)
         }
         if (options.hash_only) {
             EstimateHashes(runner, crypto);
+            runner.Save();
+            std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
+            return 0;
+        }
+        if (options.div_only) {
+            EstimateDivision(runner);
             runner.Save();
             std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
             return 0;
@@ -1559,7 +1988,6 @@ int main(int argc,char** argv)
         EstimateMulDiv(runner);
         EstimateHashes(runner,crypto);
         EstimateSignatures(runner,crypto);
-        EstimateContext(runner);
         EstimateItems(runner);
         EstimateDecode(runner);
         EstimateFinal(runner);

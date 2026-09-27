@@ -22,11 +22,20 @@ namespace varops {
 constexpr uint64_t WordSpan(size_t bytes) { return (static_cast<uint64_t>(bytes) + 7) / 8 * 8; }
 constexpr uint64_t FixedOpcodeCost() { return 382; }
 constexpr uint64_t PrepCost(size_t bytes) { return 233 + WordSpan(bytes); }
+#ifdef GSR_PRODUCER_LIFETIME_EXPERIMENT
+// Provisional measurement-derived schedule, isolated from ordinary builds.
+inline constexpr bool PRODUCER_LIFETIME_EXPERIMENT{true};
+constexpr uint64_t ProduceCost(size_t bytes) { return 639 + 6 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t NormalizeCost(size_t bytes) { return 766 + WordSpan(bytes); }
+constexpr uint64_t OutputCost(size_t bytes) { return ProduceCost(WordSpan(bytes)) + NormalizeCost(bytes); }
+constexpr uint64_t CopyCost(size_t bytes) { return ProduceCost(bytes); }
+constexpr uint64_t ReleaseCost(size_t) { return 0; }
+#else
+inline constexpr bool PRODUCER_LIFETIME_EXPERIMENT{false};
 constexpr uint64_t OutputCost(size_t bytes) { return 1209 + 4 * WordSpan(bytes); }
 constexpr uint64_t CopyCost(size_t bytes) { return 668 + 2 * static_cast<uint64_t>(bytes); }
 constexpr uint64_t ReleaseCost(size_t bytes) { return bytes == 0 ? 0 : 963 + 3 * WordSpan(bytes); }
-// A shortened in-place value retains its allocation.
-constexpr uint64_t DiscardCost(size_t bytes) { return bytes; }
+#endif
 constexpr uint64_t ReadCost(size_t bytes) { return 89 + 3 * WordSpan(bytes); }
 constexpr uint64_t ArithCost(size_t bytes) { return 51 + 4 * static_cast<uint64_t>(bytes); }
 constexpr uint64_t BitCost(size_t bytes) { return 74 + static_cast<uint64_t>(bytes); }
@@ -34,23 +43,22 @@ constexpr uint64_t MoveCost(size_t entries) { return 255 + 18 * static_cast<uint
 constexpr uint64_t MulRowCost(size_t limbs) { return 34 + 14 * static_cast<uint64_t>(limbs); }
 constexpr uint64_t DivCoreCost(size_t steps, size_t divisor_limbs)
 {
-    return 296 + 303 * static_cast<uint64_t>(steps) * divisor_limbs;
+    return 1574 + 267 * static_cast<uint64_t>(steps) * divisor_limbs;
 }
 constexpr uint64_t Sha256Cost(size_t bytes) { return 2943 + 48 * static_cast<uint64_t>(bytes); }
 constexpr uint64_t Ripemd160Cost(size_t bytes) { return 2555 + 40 * static_cast<uint64_t>(bytes); }
 constexpr uint64_t Sha1Cost(size_t bytes) { return 1516 + 25 * static_cast<uint64_t>(bytes); }
 constexpr uint64_t SignatureCost() { return 500'000; }
 constexpr uint64_t TweakCost() { return 140839; }
-constexpr uint64_t SighashCost() { return 3173; }
 constexpr uint64_t TxSelectCost(size_t items) { return 3234 + 645 * static_cast<uint64_t>(items); }
 constexpr uint64_t MacroDecodeCost(size_t bytes) { return 2 + 55 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t FinalCost() { return 1147; }
 constexpr uint64_t ScalarOutputCost() { return OutputCost(8); }
 
 // The quadratic charge dominates. Both numeric operands are at most 4 MB.
 constexpr uint64_t MAX_V2_LIMBS{WordSpan(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) / 8};
 static_assert(MAX_V2_LIMBS <=
-              (std::numeric_limits<uint64_t>::max() - 296) / 303 / MAX_V2_LIMBS);
+              (std::numeric_limits<uint64_t>::max() - DivCoreCost(0, 0)) /
+                  (DivCoreCost(1, 1) - DivCoreCost(0, 0)) / MAX_V2_LIMBS);
 
 /** Hash work only; result construction is charged separately. */
 constexpr uint64_t HashCost(opcodetype opcode, size_t input_bytes)
@@ -154,6 +162,7 @@ public:
     virtual void StandaloneCharge(opcodetype opcode, uint64_t feature_units,
                                   uint64_t actual_charge) = 0;
     virtual void FinalCheck(size_t value_size, uint64_t actual_charge) = 0;
+    virtual void InitialStack(const ValtypeStack&, uint64_t) {}
 };
 
 inline thread_local CostAudit* g_cost_audit{nullptr};

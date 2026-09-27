@@ -12,13 +12,14 @@ import platform
 import statistics
 import subprocess
 
-ORDER = 'F PREP OUTPUT COPY RELEASE READ ARITH BIT MOVE MUL DIVCORE H256 H160 H1 SIG TWEAK SIGHASH SELECT DECODE FINAL'.split()
+ORDER = 'F PREP OUTPUT COPY RELEASE READ ARITH BIT MOVE MUL DIVCORE H256 H160 H1 SIG TWEAK SELECT DECODE FINAL'.split()
 DISPLAY_NAMES = {'SELECT': 'OP_TX_SELECT', 'DECODE': 'MACRO_DECODE'}
 PRIMITIVE_CATEGORIES = [
-    ('interpreter', 'Interpreter and context', ('F', 'SELECT', 'DECODE', 'FINAL')),
+    ('interpreter', 'Interpreter and context', ('F', 'FINAL')),
     ('stack', 'Stack and byte processing', ('COPY', 'RELEASE', 'READ', 'MOVE')),
     ('numeric', 'Numeric and bit operations', ('PREP', 'OUTPUT', 'ARITH', 'BIT', 'MUL', 'DIVCORE')),
-    ('crypto', 'Hashing and signatures', ('H256', 'H160', 'H1', 'SIG', 'SIGHASH', 'TWEAK')),
+    ('crypto', 'Hashing and signatures', ('H256', 'H160', 'H1', 'SIG', 'TWEAK')),
+    ('postponed', 'Postponed experimental extensions', ('SELECT', 'DECODE')),
 ]
 SAMPLED_DIMENSIONS = {
     'F': 'Executed NOP count',
@@ -38,11 +39,12 @@ SAMPLED_DIMENSIONS = {
     'MOVE': 'Roll depth × empty or nonempty items',
     'H256': 'Message bytes × Core or tagged hash path',
     'SELECT': 'Empty witness-item count × collated or noncollated output',
-    'DIVCORE': 'Dividend limbs × divisor limbs × three data seeds',
-    'SIGHASH': 'Five sighash modes',
+    'DIVCORE': 'Dividend/divisor limbs × DIV/MOD × normalization patterns × data seeds',
     'TWEAK': 'One fixed key and tweak',
 }
-CONSTANT = {'F', 'SIG', 'TWEAK', 'SIGHASH', 'FINAL'}
+CONSTANT = {'F', 'SIG', 'TWEAK', 'FINAL'}
+MODEL_ID = 'producer-normalize-v1'
+PRODUCER_ORDER = 'F PREP PRODUCE NORMALIZE READ ARITH BIT MOVE MUL DIVCORE H256 H160 H1 SIG TWEAK'.split()
 UNDER_PENALTIES = (10, 100)
 COLORS = ['#2563eb', '#d97706', '#15803d', '#9333ea', '#dc2626', '#0891b2', '#64748b', '#be185d']
 NOTES = {
@@ -50,18 +52,17 @@ NOTES = {
     'PREP': 'Fit uses pre-reserved inputs. Tight-capacity inputs remain visible as excluded growth diagnostics; their extra work still needs coverage in complete compositions.',
     'OUTPUT': 'Shared fit includes materialization/insertion/release and small scalar construction. A shared fit does not establish that these paths have equal fixed work.',
     'COPY': 'Fit uses isolated copied-value creation and insertion, excluding subsequent release. Churn points remain visible only as composition diagnostics for COPY + RELEASE. The empty-copy fast path is shown but excluded. The local candidate uses this follow-up 100× fit; it remains preliminary.',
-    'RELEASE': 'Times ValtypeStack removal and buffer destruction. Churn separates release of the copied result and the 4 MB source. Preallocated fixtures include touched buffers shrunk to empty before release: logical size and capacity then differ. OP_LEFT/RIGHT also use a separate provisional 1 varop per discarded byte after target adjustment and integer rounding. Capacity is diagnostic, not a consensus charge input.',
+    'RELEASE': 'Times ValtypeStack removal and buffer destruction. Churn separates release of the copied result and the 4 MB source. Preallocated fixtures include touched buffers shrunk to empty before release: logical size and capacity then differ. Capacity is diagnostic, not a consensus charge input.',
     'BIT': 'The one-byte reversal performs no swaps and is shown but excluded from this fit.',
     'MUL': 'Only MultiplySpan rows (u=1) were measured. The u*v extension is the declared model, not a measured complete multiplication or validation of accumulation/storage work.',
-    'DIVCORE': 'Diagnostic fit of complete OpDiv on prepared operands, NOT an isolated trial coefficient. Storage and normalization are included. Do not add this fitted total to overlapping MUL/storage charges.',
+    'DIVCORE': 'Complete prepared DIV/MOD: fixed setup + coefficient × s*v. Storage and normalization are included; do not add overlapping MUL/storage charges. No independent per-step coefficient.',
     'H256': 'One shared H256 fit covers Core SHA256 and libsecp tagged hashing. Tagged calls use two passes and n+70 bytes. Backend differences remain visible; this compromise is not an upper bound.',
     'H160': 'Direct RIPEMD160 domain ends at 520 bytes. Includes the 32-byte HASH160 intermediate input.',
     'H1': 'Direct SHA1 domain ends at 520 bytes.',
     'SIG': 'Plot shows complete signature verification. Fit estimates a nonnegative constant over the fitted H256(64+n) allowance; it does not independently identify curve-only work.',
-    'SIGHASH': 'Measured supported modes over prepared transaction context; excludes SIGHASH_SINGLE. Construction and hashing in this call are bundled, not independently isolated.',
     'SELECT': 'One selected input plus n empty witness items, both output formats. Includes planning, output production and cleanup (also collated framing). Not a pure traversal-only rate.',
     'DECODE': 'Dense GetOp scan diagnostic for the byte-based charge on OP_MACRO declarations and OP_CALLMACRO references; not a complete OP_SUCCESS prescan measurement.',
-    'FINAL': 'Plot shows complete final checks. Fit estimates a nonnegative remainder over fitted PREP(W(n))+READ(W(n)); zero remainder would mean no extra allowance identified, not free finalization.',
+    'FINAL': 'Diagnostic only, not a charged primitive. Final checking pays PREP(n)+READ(n). Plot shows complete final checks; historical residual fits are not implementation prices.',
 }
 
 
@@ -83,8 +84,7 @@ def sampling_grid(family, rows, group_rows, epochs):
         assert lengths + scalars == count
         return f'{lengths} + {scalars} = {count}'
     if family == 'DIVCORE':
-        assert count % 3 == 0
-        return f'{count // 3} × 3 = {count}'
+        return f'{count} operation/size/pattern fixtures'
     variants = [n // epochs for (name, _), n in group_rows.items() if name == family]
     if family != 'COPY' and len(variants) > 1 and len(set(variants)) == 1:
         return f'{variants[0]} × {len(variants)} = {count:,}'
@@ -211,21 +211,32 @@ def fit_divcore(points, under_penalty=1):
     return min(candidates)[1]
 
 
+def fit_divcore_reduced(points, under_penalty=1):
+    fixed, cell = fit([dict(p, c=1) for p in points], 'affine', under_penalty)
+    return fixed, 0, cell
+
+
 def features(family, x, group):
     if family == 'DIVCORE':
         return x, x*int(group.split('=')[1])
     if family == 'H256' and group == 'secp_tagged':
         return 2, x+70
-    if family in {'PREP', 'OUTPUT'}:
+    if family in {'PREP', 'OUTPUT', 'NORMALIZE'}:
         return 1, word(x)
     return 1, x
 
 
-def parse(row):
+def parse(row, producer_manifest=None):
     label = row['probe']; parts = label.split('/'); family = parts[0]
     x, group, included = 1, 'measurement', True
     y = float(row['ns_per_execution'])
-    if family == 'F':
+    if family in {'PRODUCE', 'NORMALIZE'}:
+        fixture = producer_manifest[label]
+        count = int(fixture['items'])
+        group = '/'.join(parts[1:-1])
+        x = int(fixture['normalize_bytes']) if family == 'NORMALIZE' else int(fixture['bytes']) / count
+        y /= count
+    elif family == 'F':
         x = int(parts[2])+1; y /= x; group = 'nop'
     elif family == 'PREP':
         x, group = int(parts[1]), parts[2]; included = group == 'spare'
@@ -235,7 +246,7 @@ def parse(row):
         else:
             x = int(parts[1]); group = 'materialized'
     elif family == 'ARITH':
-        x = int(parts[2])*8; group = parts[1]+'/'+parts[3]
+        x = int(parts[2])*8; group = parts[1]+'/'+'/'.join(parts[3:])
     elif family in {'READ', 'BIT'}:
         x = int(parts[2]); group = parts[1]
         if family == 'READ' or group != 'reverse':
@@ -247,7 +258,7 @@ def parse(row):
     elif family == 'MUL':
         x = int(parts[2]); group = 'u=1'
     elif family == 'DIVCORE':
-        aw, bw = int(parts[1]), int(parts[2]); x = aw if bw == 1 else aw-bw; group = f'v={bw}'
+        aw, bw = int(parts[1]), int(parts[2]); x = aw if bw == 1 else max(1, aw-bw); group = f'v={bw}'
     elif family == 'H256':
         x = int(parts[2]); group = parts[1]
     elif family == 'SELECT':
@@ -267,6 +278,8 @@ def parse(row):
     if label == 'BIT/reverse/1':
         included = False
     c, v = features(family, x, group)
+    if family == 'NORMALIZE':
+        v = word(x)
     return family, dict(label=label, x=x, y=y, c=c, v=v, group=group, included=included,
                         batch_ns=float(row['ns_per_execution'])*int(row['repetitions']), background=0)
 
@@ -276,10 +289,10 @@ def formula(family, coeff):
     if family in CONSTANT:
         return f'{a:.6g}'
     if family == 'MUL':
-        return f'{a:.6g} + {b:.6g} × u × v'
+        return f'u × ({a:.6g} + {b:.6g} × v)'
     if family == 'DIVCORE':
         return f'{a:.6g} + {b:.6g} × s + {coeff[2]:.6g} × s × v'
-    term = 'W(n)' if family in {'PREP', 'OUTPUT'} else 'k' if family in {'MOVE', 'SELECT'} else 'n'
+    term = 'W(n)' if family in {'PREP', 'OUTPUT', 'NORMALIZE'} else 'k' if family in {'MOVE', 'SELECT'} else 'n'
     return (f'{a:.6g} + ' if a else '') + f'{b:.6g} × {term}'
 
 
@@ -353,9 +366,9 @@ def plot(family, points, models):
             excluded = '' if p['included'] else '; excluded from fit'
             out.append(f'<circle cx="{px:.2f}" cy="{py:.2f}" r="3.1" {style}><title>{html.escape(p["label"])}: {p["y"]:.6g} ns; batch {p["batch_ns"]/1000:.3g} µs{excluded}</title></circle>')
     out.append('</g>')
-    axis = 'bytes n' if family not in {'F','MOVE','MUL','DIVCORE','SIGHASH','SELECT','TWEAK','RELEASE'} else {
+    axis = 'bytes n' if family not in {'F','MOVE','MUL','DIVCORE','SELECT','TWEAK','RELEASE'} else {
         'F':'executed instructions', 'MOVE':'entries k', 'MUL':'source limbs v (u = 1)', 'DIVCORE':'quotient steps s',
-        'SIGHASH':'sighash mode (numeric identifier)', 'SELECT':'selected input + witness items k', 'TWEAK':'fixture',
+        'SELECT':'selected input + witness items k', 'TWEAK':'fixture',
         'RELEASE':'allocated capacity (bytes) · diagnostic'}[family]
     out.append(f'<text x="425" y="381" text-anchor="middle">{axis} · log(1+x) spacing</text><text x="75" y="24">{"ns / executed instruction" if family == "F" else "ns / measured call"} · logarithmic y</text></g></svg>')
     legend = ' '.join(model_legend) + ' ' + ' '.join(f'<span style="color:{COLORS[i%len(COLORS)]}">● measured {html.escape(g)}'+(' (excluded from fit)' if not any(p['included'] for p in points if p['group']==g) else '')+'</span>' for i,g in enumerate(groups))
@@ -365,12 +378,14 @@ def plot(family, points, models):
 
 
 def main():
+    global ORDER, PRIMITIVE_CATEGORIES
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('result_dir', type=pathlib.Path)
     parser.add_argument('--sample-ms', type=float, required=True)
     parser.add_argument('--binary', type=pathlib.Path, required=True)
     parser.add_argument('--target-fraction', type=float, default=0.9,
                         help='Provisional runtime target as a fraction of the measured pre-v2 reference (default: 0.9)')
+    parser.add_argument('--producer-schedule', action='store_true', help='Fit the frozen reduced model')
     parser.add_argument('--measurements-csv', type=pathlib.Path,
                         help='Read a focused measurement CSV while updating the existing report')
     parser.add_argument('--baseline-dir', type=pathlib.Path,
@@ -383,6 +398,21 @@ def main():
     if not 0 < args.target_fraction <= 1:
         parser.error('--target-fraction must be greater than 0 and at most 1')
     root = args.result_dir.resolve()
+    producer_manifest = {}
+    if args.producer_schedule:
+        ORDER = PRODUCER_ORDER
+        PRIMITIVE_CATEGORIES = [
+            ('interpreter', 'Interpreter', ('F',)),
+            ('stack', 'Value lifetimes and traversal', ('PRODUCE', 'READ', 'MOVE')),
+            ('numeric', 'Numeric work', ('PREP', 'NORMALIZE', 'ARITH', 'BIT', 'MUL', 'DIVCORE')),
+            ('crypto', 'Hashing and signatures', ('H256', 'H160', 'H1', 'SIG', 'TWEAK')),
+        ]
+        SAMPLED_DIMENSIONS.update(PRODUCE='Produced bytes per event × lifetime path',
+                                  NORMALIZE='Numeric bytes × aligned/offset representation')
+        NOTES.update(PRODUCE='Complete allocation, population, insertion and release. Multi-event fixtures are plotted per production event; all charged bytes remain represented.',
+                     NORMALIZE='Numeric materialization only. Original allocation, stack insertion and later release are outside the timer.')
+        with (root/'measurements.csv.produce.csv').open() as f:
+            producer_manifest = {r['probe']: r for r in csv.DictReader(f)}
     output_root = args.output_dir.resolve() if args.output_dir else root
     composition_source = (args.opcode_composition.resolve() if args.opcode_composition else
                           output_root/'opcode-composition.csv')
@@ -405,11 +435,13 @@ def main():
                 if row['probe'].startswith('COPY_CONTROL/'):
                     continue
                 name = row['probe'].split('/', 1)[0]
-                if name == 'ZERO':
+                if args.producer_schedule and name == 'PRODUCER_CHECK':
+                    continue  # Retained in the portable artifact as held-out lifetime evidence.
+                if name in {'ZERO', 'SIGHASH'}:
                     continue  # Retain historical measurements without fitting the removed primitive.
                 if copy_only is not None and (name in focused_families) != copy_only:
                     continue
-                name,p = parse(row)
+                name,p = parse(row, producer_manifest)
                 row_count += 1
                 epochs.add(int(row['epoch']))
                 assert p['y'] > 0, row['probe']
@@ -427,17 +459,17 @@ def main():
     assert set(series) == set(ORDER)
     category_families = [family for _, _, families in PRIMITIVE_CATEGORIES for family in families]
     assert sorted(category_families) == sorted(ORDER)
-    assert set(SAMPLED_DIMENSIONS) == set(ORDER)
+    assert set(ORDER) <= set(SAMPLED_DIMENSIONS)
     assert all(count % len(epochs) == 0 for count in family_rows.values())
     assert all(count % len(epochs) == 0 for count in group_rows.values())
     fits, penalized_fits, penalized_100_fits = {}, {}, {}
     for model, under_penalty in ((fits, 1), (penalized_fits, 10), (penalized_100_fits, 100)):
-        for family in [f for f in ORDER if f not in {'SIG','FINAL'}]+['SIG','FINAL']:
+        for family in [f for f in ORDER if f not in {'SIG','FINAL'}]+[f for f in ('SIG','FINAL') if f in ORDER]:
             ps = [p for p in series[family] if p['included']]
             for p in ps:
                 p['background'] = background(family,p['x'],model)
             mode = 'residual' if family in {'SIG','FINAL'} else 'constant' if family in CONSTANT else 'affine'
-            model[family] = (fit_divcore(ps, under_penalty) if family == 'DIVCORE' else
+            model[family] = (fit_divcore_reduced(ps, under_penalty) if family == 'DIVCORE' else
                              fit(ps, mode, under_penalty))
     # Exact synthetic fixtures check the optimizer and declared feature shapes.
     test = [dict(x=x,y=12+.25*x,c=1,v=x,group='test') for x in [0,1,8,64,1024]]
@@ -465,12 +497,15 @@ def main():
     build = {}
     if cache.exists():
         for line in cache.read_text().splitlines():
-            if line.startswith(('CMAKE_BUILD_TYPE:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
+            if line.startswith(('CMAKE_BUILD_TYPE:', 'APPEND_CPPFLAGS:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
                 key, value = line.split('=', 1)
                 build[key.split(':', 1)[0]] = value
     reference_seconds = float(headers['Reference_Script_Evaluation_Seconds'])
+    if args.producer_schedule and headers.get('Primitive_Model') != MODEL_ID:
+        raise RuntimeError('collection model does not match the frozen fitting model')
     target_seconds = reference_seconds * args.target_fraction
     meta = dict(collected=stamp,generated=datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+                model_id=MODEL_ID if args.producer_schedule else 'legacy-primitives',
                 platform=platform.platform(),head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip(),
                 epochs=len(epochs),target_batch_ms=args.sample_ms,max_bytes=headers.get('Max_Probe_Bytes'),
                 copy_target_batch_ms=headers.get('Copy_Target_Batch_MS'),
@@ -537,7 +572,7 @@ def main():
                          f'<p class="metrics">{len(selected)} fitted / {len(ps)} measured fixtures · 100× fit below {misses} points (largest {max_under:.2f}×) · symmetric RMS error factor {rms:.3f}× · shortest batch {shortest:.3g} µs</p></section>')
         result=dict(a_ns=coeff[0],b_ns=coeff[1],formula_ns=ftext,weighted_rms_factor=rms,worst_error_factor=worst,notes=note,
                     provisional_integer_cost=rounded_cost,
-                    applied_to_candidate=True,
+                    applied_to_candidate=False,
                     under_penalty_10_fit=dict(a_ns=penalized_fits[family][0],
                                               b_ns=penalized_fits[family][1],
                                               formula_ns=penalized_text),
@@ -554,8 +589,10 @@ def main():
     doc+=f'<p>Collected {stamp} · {len(ORDER)} families · {row_count // len(epochs)} fixture instances · {sum(map(len,series.values()))} plotted points · {len(epochs)} measured epochs per fixture</p>'
     if args.baseline_dir:
         doc+='<p>New COPY and RELEASE measurements are combined with the prior run for all other families; source files and hashes are listed below.</p>'
-    doc+=f'''<p class="notice">The local candidate uses these rounded fit coefficients except SIG, which is fixed at 500,000 varops for sigops parity; OP_MULTI and discarded-byte charges are separate provisional measurements. This report does not plot the published or ordinary budget schedule, and the candidate has not passed runtime-safety validation.</p>
-<p>Preliminary measurements, not calibrated costs. {args.sample_ms} ms target batches, with {html.escape(str(headers.get('Copy_Target_Batch_MS', args.sample_ms)))} ms for COPY/RELEASE; prepared-state limits can shorten them. Each dot is the median of measured epochs for that fixture. COPY is fitted only to isolated creation and insertion; churn remains a composition diagnostic for COPY + RELEASE. RELEASE measures destruction separately, and complete-cycle timings remain controls. The nanosecond fits have no safety margin; only their varops conversion uses the provisional {args.target_fraction:.0%} runtime target. No uncertainty estimates or acceptance claim. All timings are nanoseconds on this machine. Repeated fixture labels caused by word-rounded size aliases are collapsed to their median; raw records remain intact.</p>
+    storage_note = ('PRODUCE covers complete creation/insertion/release lifetimes; NORMALIZE measures numeric materialization separately. Multi-event lifetimes are shown per production event. Held-out lifetimes are not fitting constraints.' if args.producer_schedule else
+                    'COPY is fitted only to isolated creation and insertion; churn remains a composition diagnostic for COPY + RELEASE. RELEASE measures destruction separately, and complete-cycle timings remain controls.')
+    doc+=f'''<p class="notice">These fitted coefficients are proposals, not automatically applied implementation prices. SIG remains fixed at 500,000 varops for sigops parity. This report does not establish runtime-safety acceptance.</p>
+<p>Preliminary measurements, not calibrated costs. {args.sample_ms} ms target batches, with {html.escape(str(headers.get('Copy_Target_Batch_MS', args.sample_ms)))} ms for storage lifetimes; prepared-state limits can shorten them. Each dot is the median of measured epochs for that fixture. {storage_note} The nanosecond fits have no safety margin; only their varops conversion uses the provisional {args.target_fraction:.0%} runtime target. No uncertainty estimates or acceptance claim. All timings are nanoseconds on this machine. Repeated fixture labels caused by word-rounded size aliases are collapsed to their median; raw records remain intact.</p>
 <p>The displayed curves are the 100× underprediction-penalty fit: squared log(prediction / measurement) errors are weighted 100× when the fit falls below a measurement. Fits use equal weight per path and operand-size decade (zero separate) and nonnegative coefficients. Dots are unchanged measurements; H256 and DIVCORE show multiple lines for their specified paths or operand shapes. This exploratory fit is not an upper bound or an accepted budget.</p>
 <p>Measured pre-v2 reference: {reference_seconds:.9f} seconds. Provisional target: {args.target_fraction:.0%} × reference = {target_seconds:.9f} seconds. Except for the fixed SIG override, convert each fitted coefficient using 40,000,000,000 / ({target_seconds:.9f} seconds × 1,000,000,000) ≈ {varops_per_ns:.9f} varops/ns, then round that coefficient upward to a whole varop. The reference comes from an earlier same-machine run, so these are preliminary comparisons, not consensus parameters.</p>
 <p>Every nonconstant fit includes a nonnegative degree-zero term. SIG and FINAL fit a remainder against the complete measured process. DIVCORE is a bundled diagnostic, not an isolated coefficient. The old covering estimates in measurements.csv are not used here.</p>'''
@@ -571,6 +608,8 @@ def main():
     doc+='<details><summary>Run details and source fingerprints</summary><pre>'+html.escape(json.dumps(meta,indent=2))+'</pre><p>The reference Script-evaluation time converts fitted nanoseconds to provisional varops; it is not used when fitting the timing curves.</p></details></header>'
     for slug, title, families in PRIMITIVE_CATEGORIES:
         doc+=f'<h2 class="category-title" id="category-{slug}">{html.escape(title)}</h2>'
+        if slug == 'postponed':
+            doc+='<p>OP_TX and macro costing are retained research, postponed outside BIP 440 finalization. Implementation and measurements remain unchanged.</p>'
         doc+=''.join(cards[family] for family in families)
     if composition_rows:
         rows = ''.join(

@@ -4,6 +4,10 @@ Working method, not an accepted consensus schedule. Revised 2026-09-22 after ins
 
 See [varops-primitives.md](varops-primitives.md) for each primitive's meaning, function type, production call, sampling grid and current measurement gaps.
 
+**2026-09-26 frozen collection contract:** [producer-normalize-v1](varops-primitives.md#frozen-collection-and-fitting) supersedes the historical registry and descriptive-fit procedure below for new calibration runs. Use PRODUCE + NORMALIZE, the existing 100× underprediction objective, and `40B / T_pre` normalization (no extra 0.9 factor); SIG remains 500,000. The [storage ledger](storage-accounting.md) defines production events. Preserve prior datasets as comparisons rather than mixing model versions. New fits do not automatically overwrite implementation prices.
+
+**Scope:** OP_TX and macro finalization, including their specialized costing, are postponed. Retain their implementation, fixtures and research; references to them in the registry and historical checklist below are research-only, not prerequisites for BIP 440. The general objective of supporting script compression remains in scope without specifying particular compression opcodes.
+
 ## Objective
 
 Permit more expensive operations and script compression (for example, reusable bodies) without creating a slower *feasible script-evaluation workload* than the slowest known pre-v2 reference, `T_pre`, on the same machine. A workload's scripts, witnesses, and transactions must satisfy the relevant consensus size, weight, and execution limits; those limits constrain what can be repeated, but **block validation is not timed**. Freeze a pre-v2 script-workload panel and a **pinned pre-upgrade reference build**; define `T_pre` as the maximum of their repeated per-workload script-evaluation timing estimates, never the largest single run. Include any operand restoration executed by their scripts. Measure the same panel on the candidate build as a legacy-regression check, but do not let a candidate slowdown raise `T_pre`. Changing the reference build or panel requires an explicit methodology revision. `T_pre` is empirical, not proof of the absolute pre-v2 maximum.
@@ -48,14 +52,13 @@ Use only the declared basis below. `a`, `b`, etc. are nonnegative fitted coeffic
 | Multiply row `MULROW(v)` (replaces bare `mu`) | `a + b*v`; 1 | Production `MultiplySpan`, including its carry writes. Row overhead and limb throughput are measured separately. |
 | Multiplication `MUL(u,v)` | Derived, degree at most 2 | For the present schoolbook kernel, `u * (MULROW(v) + ARITH(8*(v+1)))`, with `u >= v`. Add the separately identified setup, scratch/result storage and normalization work. No independently fitted opcode coefficient. |
 | Quotient estimate / correction `DIVSTEP` | `a`; 0 | Isolate bounded scalar trial work, including correction cases. Timing all of `OpDiv` is a composition check, not this primitive. |
-| Division / modulo `DIVCORE(q,v)` | Proposed core: `q * (DIVSTEP + MULROW(v) + 2*ARITH(8*(v+1)))`; 2 | Covers a trial multiply/subtract and possible add-back; leading comparison/subtraction, normalization, storage and result work are separate. The one-limb shortcut needs its own counts of the same applicable primitives. Prove conservative `q,v` bounds before freezing this composition; measured internal iterations are not charge inputs. |
+| Division / modulo `DIVCORE(s,v)` | `a + c*s*v`; 2 | Bundled complete prepared DIV/MOD call, including normalization and scratch storage. Do not also charge its internal MUL/ARITH/storage work. Use the BIP441 operand-derived `s,v`, not measured loop counts. Compare the reduced fit against `a+b*s+c*s*v` as a diagnostic. |
 | SHA-256 `H256(n)` | `a + b*n`; 1 | Production init/write/finalize, with Core and relevant libsecp paths separately labelled. Padding boundaries are samples, not fitted breakpoints. |
 | RIPEMD-160 `H160(n)` | `a + b*n`; 1 | Same boundary; use each caller's legal domain, including the 520-byte direct-op limit. |
 | SHA-1 `H1(n)` | `a + b*n`; 1 | Same boundary and direct-op size limit. |
-| Curve verification `SIG` | `a`; 0 | Separate curve work from challenge hashing using an independently identifiable probe or matched total-verification model. Do not treat subtraction of an oversized hash estimate as proof of a small curve cost. |
+| Signature allowance `SIG` | Fixed 500,000; 0 | Covers verification and fixed transaction-message preparation. Curve/challenge-hash timing remains diagnostic; no separate message-preparation primitive. |
 | Public-key tweak `TWEAK` | `a`; 0 | Full fixed-size production tweak operation. |
 | Lock checks `LOCK` | `a`; 0 | Real locktime/sequence checks over prepared context. |
-| Signature-message construction `SIGHASH` | `a`; 0 | Fixed-size message paths with declared precomputation. Variable output/message hashing uses hash terms separately; do not count hashes already included in the measured helper twice. |
 | OP_TX planning/traversal `SELECTOR + ITEM(k)` | `a + b*k`; 1 | Joint measurement of selector and specified selected/result items, with byte/result production independently accounted. Empty-item probes alone cannot separate traversal from allocation and cleanup. |
 | Decode `DECODE(n)` | `a + b*n`; 1 | Actual parser/scanner over dense opcodes and pushes. Separate once-per-script prescan from repeated execution decoding; neither may overlap with `F` unnoticed. |
 | Fragment reference `REF` | `a`; 0 | Actual cursor/reference transition, excluding the body operations and separately counted scans. Current probe reports this unavailable despite the live fragment implementation. |
@@ -71,7 +74,7 @@ For each opcode, record the exact source calls, primitive multiplicities, input/
 
 Examples to audit are `HASH160 = F + H256(n) + H160(32) + digest production`, and `ADD = F + PREP(a) + PREP(b) + ARITH(max(W(a), W(b))) + result/growth work`. Resolve the last terms from their actual producer paths rather than replacing them with an unexplained opcode surcharge. Fixed kernel overhead is allowed even for a one-byte operand; it must correspond to work actually measured.
 
-For quadratic operations, derive counts from deterministic operand features, including padded values, fast paths, normalization growth and bounded quotient corrections. Charge a conservative size bound before superlinear work. A result length only known afterward cannot be used to justify that preflight. `DIVCORE` remains a composition to finish, not a new polynomial to fit independently from the shared primitives.
+For quadratic operations, derive counts from deterministic operand features, including padded values, fast paths, normalization growth and bounded quotient corrections. Charge a conservative size bound before superlinear work. A result length only known afterward cannot be used to justify that preflight. `DIVCORE` is calibrated as one bundled process; verify its composition with PREP, PRODUCE and NORMALIZE through complete DIV/MOD scripts.
 
 ## Measurement contract and components
 

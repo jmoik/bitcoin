@@ -71,10 +71,12 @@ BOOST_AUTO_TEST_CASE(bip440_cost_constants)
     BOOST_CHECK_EQUAL(varops::COST_PER_SIGOP, 500'000);
     BOOST_CHECK_EQUAL(varops::SigcheckCost(OP_CHECKSIG), varops::COST_PER_SIGOP);
     BOOST_CHECK_EQUAL(varops::SignatureCost(), varops::COST_PER_SIGOP);
-    BOOST_CHECK_EQUAL(varops::CopyCost(0), 668);
-    BOOST_CHECK_EQUAL(varops::CopyCost(1), 670);
+    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        BOOST_CHECK_EQUAL(varops::CopyCost(0), 668);
+        BOOST_CHECK_EQUAL(varops::CopyCost(1), 670);
+    }
     BOOST_CHECK_EQUAL(varops::ReleaseCost(0), 0);
-    BOOST_CHECK_EQUAL(varops::ReleaseCost(8), 987);
+    BOOST_CHECK_EQUAL(varops::ReleaseCost(8), varops::PRODUCER_LIFETIME_EXPERIMENT ? 0 : 987);
 }
 
 BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
@@ -84,7 +86,8 @@ BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
     BOOST_CHECK_EQUAL(varops::Sha256Cost(1) - varops::Sha256Cost(0), 48);
     BOOST_CHECK_EQUAL(varops::PrepCost(9), 249);
     BOOST_CHECK_EQUAL(varops::HashCost(OP_SHA256, 32), 4479);
-    BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), 1241);
+    BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), varops::OutputCost(8));
+    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), 1241);
 
     // Spending more than once deducts only newly added whole-varop costs.
     varops::Meter meter;
@@ -99,6 +102,28 @@ BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
     meter.Add(1);
     BOOST_CHECK(!meter.Spend(budget));
     BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(divcore_fixed_and_cell_cost)
+{
+    const uint64_t fixed{varops::DivCoreCost(0, 0)};
+    const uint64_t cell{varops::DivCoreCost(1, 1) - fixed};
+    BOOST_CHECK_EQUAL(fixed, 1574);
+    BOOST_CHECK_EQUAL(cell, 267);
+    // Only a fixed setup term and a steps*divisor-limbs term remain.
+    for (const size_t steps : {1U, 2U, 32U, 1024U}) {
+        BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, 0), fixed);
+        for (const size_t limbs : {1U, 2U, 3U, 16U, 1024U}) {
+            BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, limbs), fixed + cell * steps * limbs);
+        }
+    }
+    const uint64_t cost{varops::DivCoreCost(32, 1024)};
+    varops::Budget exact{cost};
+    BOOST_CHECK(exact.Spend(cost));
+    BOOST_CHECK_EQUAL(*exact.Remaining(), 0);
+    varops::Budget short_budget{cost - 1};
+    BOOST_CHECK(!short_budget.Spend(cost));
+    BOOST_CHECK_EQUAL(*short_budget.Remaining(), cost - 1);
 }
 
 static uint64_t ExpectedMulCost(size_t size_a, size_t size_b)

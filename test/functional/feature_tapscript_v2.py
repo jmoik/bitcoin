@@ -130,7 +130,6 @@ VAROPS_COST_MUL_ROW_FIXED = 34
 VAROPS_COST_MUL_ROW_CELL = 14
 VAROPS_COST_ARITH_FIXED = 51
 VAROPS_COST_ARITH_BYTE = 4
-VAROPS_COST_FINAL = 1147
 VERSIONBITS_PERIOD = 144
 
 
@@ -175,7 +174,7 @@ def mul_cost(size):
 
 
 def final_check_cost(size):
-    return prep_cost(size) + read_cost(size) + VAROPS_COST_FINAL
+    return prep_cost(size) + read_cost(size)
 
 
 def flip_leaf_version(ctx):

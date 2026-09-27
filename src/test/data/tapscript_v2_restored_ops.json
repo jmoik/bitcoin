@@ -2,10 +2,10 @@
   {
     "category": "OP_LEFT and OP_RIGHT tests",
     "tests": [
-      {"name":"OP_LEFT - basic functionality","initial stack":["68656C6C6F","03"],"opcodes":["OP_LEFT"],"final stack":["68656C"],"varops cost":738},
-      {"name":"OP_RIGHT - basic functionality","initial stack":["68656C6C6F","02"],"opcodes":["OP_RIGHT"],"final stack":["6C6F"],"varops cost":743},
-      {"name":"OP_LEFT with zero offset","initial stack":["74657374",""],"opcodes":["OP_LEFT"],"final stack":[""],"varops cost":708},
-      {"name":"OP_RIGHT with zero offset","initial stack":["74657374",""],"opcodes":["OP_RIGHT"],"final stack":[""],"varops cost":708},
+      {"name":"OP_LEFT - basic functionality","initial stack":["68656C6C6F","03"],"opcodes":["OP_LEFT"],"final stack":["68656C"],"varops cost":736},
+      {"name":"OP_RIGHT - basic functionality","initial stack":["68656C6C6F","02"],"opcodes":["OP_RIGHT"],"final stack":["6C6F"],"varops cost":740},
+      {"name":"OP_LEFT with zero offset","initial stack":["74657374",""],"opcodes":["OP_LEFT"],"final stack":[""],"varops cost":704},
+      {"name":"OP_RIGHT with zero offset","initial stack":["74657374",""],"opcodes":["OP_RIGHT"],"final stack":[""],"varops cost":704},
       {"name":"OP_LEFT with offset equal to string length","initial stack":["616263","03"],"opcodes":["OP_LEFT"],"final stack":["616263"],"varops cost":736},
       {"name":"OP_RIGHT with offset equal to string length","initial stack":["616263","03"],"opcodes":["OP_RIGHT"],"final stack":["616263"],"varops cost":742},
       {"name":"OP_LEFT with offset greater than string length","initial stack":["6869","0A"],"opcodes":["OP_LEFT"],"final stack":["6869"],"varops cost":736},
@@ -65,27 +65,27 @@
   {
     "category": "OP_DIV tests",
     "tests": [
-      {"name":"OP_DIV: 10 / 3 = 3","initial stack":["0x0a","0x03"],"opcodes":["OP_DIV"],"final stack":["0x03"],"varops cost":3691},
-      {"name":"OP_DIV: 256 / 2 = 128","initial stack":["0x0001","0x02"],"opcodes":["OP_DIV"],"final stack":["0x80"],"varops cost":3691},
-      {"name":"OP_DIV: 0 / 1 = 0","initial stack":["0x","0x01"],"opcodes":["OP_DIV"],"final stack":["0x"],"varops cost":3348},
-      {"name":"OP_DIV: 1 / 1 = 1","initial stack":["0x01","0x01"],"opcodes":["OP_DIV"],"final stack":["0x01"],"varops cost":3691},
-      {"name":"OP_DIV: 1 / 2 = 0","initial stack":["0x01","0x02"],"opcodes":["OP_DIV"],"final stack":["0x"],"varops cost":3659},
-      {"name":"OP_DIV: 4-byte / 2-byte (16777217 / 256 = 65536)","initial stack":["0x01000001","0x0001"],"opcodes":["OP_DIV"],"final stack":["0x000001"],"varops cost":3691},
-      {"name":"OP_DIV: 8-byte / 1-byte","initial stack":["0x0100000000000001","0x02"],"opcodes":["OP_DIV"],"final stack":["0x00000000000080"],"varops cost":3691},
-      {"name":"OP_DIV: Knuth D6 add-back correction","initial stack":["0x710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585","0xcd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"opcodes":["OP_DIV"],"final stack":["0x395e4842fab428f7"],"varops cost":4409}
+      {"name":"OP_DIV: 10 / 3 = 3","initial stack":["0x0a","0x03"],"opcodes":["OP_DIV"],"final stack":["0x03"],"varops cost":4933},
+      {"name":"OP_DIV: 256 / 2 = 128","initial stack":["0x0001","0x02"],"opcodes":["OP_DIV"],"final stack":["0x80"],"varops cost":4933},
+      {"name":"OP_DIV: 0 / 1 = 0","initial stack":["0x","0x01"],"opcodes":["OP_DIV"],"final stack":["0x"],"varops cost":4626},
+      {"name":"OP_DIV: 1 / 1 = 1","initial stack":["0x01","0x01"],"opcodes":["OP_DIV"],"final stack":["0x01"],"varops cost":4933},
+      {"name":"OP_DIV: 1 / 2 = 0","initial stack":["0x01","0x02"],"opcodes":["OP_DIV"],"final stack":["0x"],"varops cost":4901},
+      {"name":"OP_DIV: 4-byte / 2-byte (16777217 / 256 = 65536)","initial stack":["0x01000001","0x0001"],"opcodes":["OP_DIV"],"final stack":["0x000001"],"varops cost":4933},
+      {"name":"OP_DIV: 8-byte / 1-byte","initial stack":["0x0100000000000001","0x02"],"opcodes":["OP_DIV"],"final stack":["0x00000000000080"],"varops cost":4933},
+      {"name":"OP_DIV: Knuth D6 add-back correction","initial stack":["0x710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585","0xcd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"opcodes":["OP_DIV"],"final stack":["0x395e4842fab428f7"],"varops cost":5579}
     ]
   },
   {
     "category": "OP_MOD tests",
     "tests": [
-      {"name":"OP_MOD: 10 % 3 = 1","initial stack":["0x0a","0x03"],"opcodes":["OP_MOD"],"final stack":["0x01"],"varops cost":3691},
-      {"name":"OP_MOD: 7 % 7 = 0","initial stack":["0x07","0x07"],"opcodes":["OP_MOD"],"final stack":["0x"],"varops cost":3659},
-      {"name":"OP_MOD: 256 % 10 = 6","initial stack":["0x0001","0x0a"],"opcodes":["OP_MOD"],"final stack":["0x06"],"varops cost":3691},
-      {"name":"OP_MOD: 0 % 1 = 0","initial stack":["0x","0x01"],"opcodes":["OP_MOD"],"final stack":["0x"],"varops cost":3348},
-      {"name":"OP_MOD: 1 % 2 = 1","initial stack":["0x01","0x02"],"opcodes":["OP_MOD"],"final stack":["0x01"],"varops cost":3691},
-      {"name":"OP_MOD: 65535 % 256 = 255","initial stack":["0xffff","0x0001"],"opcodes":["OP_MOD"],"final stack":["0xff"],"varops cost":3691},
-      {"name":"OP_MOD: 4-byte % 2-byte","initial stack":["0x05000001","0x0001"],"opcodes":["OP_MOD"],"final stack":["0x05"],"varops cost":3691},
-      {"name":"OP_MOD: Knuth D6 add-back correction","initial stack":["0x710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585","0xcd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"opcodes":["OP_MOD"],"final stack":["0xcc072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"varops cost":4473}
+      {"name":"OP_MOD: 10 % 3 = 1","initial stack":["0x0a","0x03"],"opcodes":["OP_MOD"],"final stack":["0x01"],"varops cost":4933},
+      {"name":"OP_MOD: 7 % 7 = 0","initial stack":["0x07","0x07"],"opcodes":["OP_MOD"],"final stack":["0x"],"varops cost":4901},
+      {"name":"OP_MOD: 256 % 10 = 6","initial stack":["0x0001","0x0a"],"opcodes":["OP_MOD"],"final stack":["0x06"],"varops cost":4933},
+      {"name":"OP_MOD: 0 % 1 = 0","initial stack":["0x","0x01"],"opcodes":["OP_MOD"],"final stack":["0x"],"varops cost":4626},
+      {"name":"OP_MOD: 1 % 2 = 1","initial stack":["0x01","0x02"],"opcodes":["OP_MOD"],"final stack":["0x01"],"varops cost":4933},
+      {"name":"OP_MOD: 65535 % 256 = 255","initial stack":["0xffff","0x0001"],"opcodes":["OP_MOD"],"final stack":["0xff"],"varops cost":4933},
+      {"name":"OP_MOD: 4-byte % 2-byte","initial stack":["0x05000001","0x0001"],"opcodes":["OP_MOD"],"final stack":["0x05"],"varops cost":4933},
+      {"name":"OP_MOD: Knuth D6 add-back correction","initial stack":["0x710a7f30344d1398b115d564acc89d565a64dc1121f7227cf97f16bcebe89585","0xcd072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"opcodes":["OP_MOD"],"final stack":["0xcc072cd8be6f9f62ac4c09c28206e7e35594aa6b342f5d8a"],"varops cost":5643}
     ]
   },
   {

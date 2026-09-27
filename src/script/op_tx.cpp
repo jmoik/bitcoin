@@ -525,6 +525,9 @@ OpTxResult EvalOpTx(ValtypeStack& stack, const ValtypeStack& altstack,
     cost_meter.Add(varops::TxSelectCost(visited_items));
     // SELECT covers result-entry creation; only COPY's byte term remains.
     cost_meter.Add(varops::CopyCost(total_output_size) - varops::CopyCost(0));
+    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        cost_meter.Add(output_count * varops::CopyCost(0));
+    }
     if (!cost_meter.Spend(varops_budget)) return SetError(serror, SCRIPT_ERR_VAROP_COUNT);
 
     std::vector<valtype> outputs;

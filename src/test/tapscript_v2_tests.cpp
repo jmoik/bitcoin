@@ -39,6 +39,15 @@ using namespace test::tapscript_v2;
 
 static constexpr uint64_t AMPLE_VAROPS_BUDGET{1'000'000'000};
 
+static uint64_t InitialLifetimeCost(const Stack& stack)
+{
+    uint64_t cost{0};
+    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
+        for (const auto& value : stack) cost += varops::CopyCost(value.size());
+    }
+    return cost;
+}
+
 static valtype Bytes(std::string_view text)
 {
     return valtype{text.begin(), text.end()};
@@ -990,6 +999,135 @@ BOOST_AUTO_TEST_CASE(tapleaf_versions_isolate_restored_opcodes)
     BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_OK);
 }
 
+BOOST_AUTO_TEST_CASE(final_result_costs)
+{
+    for (const size_t size : {0U, 1U, 8U, 9U, 521U, 65536U}) {
+        for (const bool nonzero : {false, true}) {
+            if (size == 0 && nonzero) continue;
+            valtype value(size, 0);
+            if (nonzero) value.back() = 1;
+            const uint64_t cost{varops::PrepCost(size) + varops::ReadCost(size)};
+            for (const bool sufficient : {false, true}) {
+                ValtypeStack stack{Stack{value}};
+                varops::Budget budget{cost - (sufficient ? 0 : 1)};
+                ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+                BOOST_CHECK_EQUAL(CheckTapscriptV2ScriptResult(stack, budget, &error), sufficient && nonzero);
+                BOOST_CHECK_EQUAL(error, !sufficient ? SCRIPT_ERR_VAROP_COUNT :
+                                         nonzero ? SCRIPT_ERR_OK : SCRIPT_ERR_EVAL_FALSE);
+                if (sufficient) BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(producer_lifetime_accounting)
+{
+    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return;
+    for (size_t size : {0U, 1U, 521U, 65536U}) {
+        const Stack initial{valtype(size, 0x42)};
+        const uint64_t creation{varops::CopyCost(size)};
+        const auto check = [&](const CScript& script, uint64_t cost) {
+            const auto exact{test::tapscript_v2::EvalTapscriptV2(script, initial, cost)};
+            BOOST_REQUIRE(exact.ok);
+            BOOST_CHECK(exact.stack.empty());
+            BOOST_CHECK_EQUAL(exact.remaining_budget, 0);
+            const auto short_budget{test::tapscript_v2::EvalTapscriptV2(script, initial, cost - 1)};
+            BOOST_CHECK(!short_budget.ok);
+            BOOST_CHECK_EQUAL(short_budget.error, SCRIPT_ERR_VAROP_COUNT);
+        };
+        check(CScript{} << OP_DROP, creation + varops::FixedOpcodeCost());
+        check(CScript{} << OP_TOALTSTACK << OP_FROMALTSTACK << OP_DROP,
+              creation + 3 * varops::FixedOpcodeCost() + 2 * varops::MoveCost(1));
+        check(CScript{} << OP_DUP << OP_2DROP, 2 * creation + 2 * varops::FixedOpcodeCost());
+        const valtype zero;
+        const Stack shrink_initial{initial.front(), zero};
+        const uint64_t shrink_cost{creation + varops::CopyCost(0) + 2 * varops::FixedOpcodeCost() +
+                                   varops::PrepCost(0) + varops::ReadCost(0)};
+        const auto shrink{test::tapscript_v2::EvalTapscriptV2(CScript{} << OP_LEFT << OP_DROP, shrink_initial, shrink_cost)};
+        BOOST_REQUIRE(shrink.ok);
+        BOOST_CHECK_EQUAL(shrink.remaining_budget, 0);
+    }
+    // Multiplication constructs both a full-span result and a scratch row.
+    // Their production is charged before the row kernel, not at final output size.
+    const Stack operands{Num(2), Num(3)};
+    const uint64_t preflight{2 * varops::CopyCost(1) + varops::FixedOpcodeCost() +
+                             2 * varops::PrepCost(1) + varops::CopyCost(16) +
+                             varops::PrepCost(16) + varops::CopyCost(16) +
+                             varops::MulRowCost(1) + varops::ArithCost(16)};
+    const uint64_t materialize{varops::OutputCost(1) - varops::CopyCost(8)};
+    const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(OP_MUL), operands, preflight + materialize)};
+    BOOST_REQUIRE(exact.ok);
+    BOOST_CHECK(exact.stack == Stack{Num(6)});
+    BOOST_CHECK_EQUAL(exact.remaining_budget, 0);
+    const auto insufficient{test::tapscript_v2::EvalTapscriptV2(OneOp(OP_MUL), operands, preflight - 1)};
+    BOOST_CHECK(!insufficient.ok);
+    BOOST_CHECK_EQUAL(insufficient.error, SCRIPT_ERR_VAROP_COUNT);
+    BOOST_CHECK(insufficient.stack == operands);
+}
+
+BOOST_AUTO_TEST_CASE(producer_composition_boundaries)
+{
+    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return;
+    const auto check = [](opcodetype opcode, const Stack& inputs, const valtype& output, uint64_t work) {
+        const uint64_t total{InitialLifetimeCost(inputs) + varops::FixedOpcodeCost() + work};
+        const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), inputs, total)};
+        BOOST_REQUIRE(exact.ok);
+        BOOST_CHECK(exact.stack == Stack{output});
+        BOOST_CHECK_EQUAL(exact.remaining_budget, 0);
+        const auto short_budget{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), inputs, total - 1)};
+        BOOST_CHECK(!short_budget.ok);
+        BOOST_CHECK_EQUAL(short_budget.error, SCRIPT_ERR_VAROP_COUNT);
+    };
+    for (size_t size : {0U, 1U, 7U, 8U, 9U, 63U, 64U, 65U, 520U, 521U, 65535U, 65536U, 65537U}) {
+        valtype source(size, 0xff);
+        valtype joined{source};
+        joined.push_back(1);
+        check(OP_CAT, {source, Num(1)}, joined, varops::CopyCost(size + 1));
+        const size_t kept{std::min<size_t>(1, size)};
+        check(OP_SUBSTR, {source, Num(0), Num(1)}, valtype(kept, 0xff),
+              varops::PrepCost(0) + varops::ReadCost(0) + varops::PrepCost(1) +
+              varops::ReadCost(1) + varops::CopyCost(kept));
+        // Carry growth crosses each byte/word boundary; the result's lifetime
+        // is funded once, not separately again when its bytes are materialized.
+        valtype sum(size + 1, 0);
+        sum.back() = 1;
+        check(OP_ADD, {source, Num(1)}, sum,
+              varops::PrepCost(size) + varops::PrepCost(1) +
+              varops::ArithCost(std::max(varops::WordSpan(size), uint64_t{8})) + varops::OutputCost(size + 1));
+        if (size) {
+            valtype power(size + 1, 0);
+            power.back() = 1;
+            check(OP_SUB, {power, Num(1)}, source,
+                  varops::PrepCost(size + 1) + varops::PrepCost(1) +
+                  varops::ArithCost(varops::WordSpan(size + 1)) + varops::OutputCost(size));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(in_place_splice_costs)
+{
+    for (const size_t size : {8U, 521U, 65536U, 3950000U}) {
+        for (const size_t retained : {size_t{0}, size_t{1}, size / 2, size}) {
+            const valtype offset{Num(retained)};
+            for (const opcodetype opcode : {OP_LEFT, OP_RIGHT}) {
+                const uint64_t cost{(varops::PRODUCER_LIFETIME_EXPERIMENT ? varops::CopyCost(size) + varops::CopyCost(offset.size()) : 0) +
+                                    varops::FixedOpcodeCost() + varops::PrepCost(offset.size()) +
+                                    varops::ReadCost(offset.size()) +
+                                    (opcode == OP_RIGHT ? varops::CopyCost(retained) - varops::CopyCost(0) : 0)};
+                const Stack initial{valtype(size, 0x42), offset};
+                const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), initial, cost)};
+                BOOST_REQUIRE(exact.ok);
+                BOOST_CHECK_EQUAL(exact.error, SCRIPT_ERR_OK);
+                BOOST_CHECK_EQUAL(exact.remaining_budget, 0);
+                BOOST_CHECK(exact.stack == Stack{valtype(retained, 0x42)});
+                const auto short_budget{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), initial, cost - 1)};
+                BOOST_CHECK(!short_budget.ok);
+                BOOST_CHECK_EQUAL(short_budget.error, SCRIPT_ERR_VAROP_COUNT);
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(splice_opcodes_follow_bip441_byte_ranges)
 {
     CheckEval(OneOp(OP_CAT), {Bytes("ab"), Bytes("cde")}, {Bytes("abcde")}, (2 + 3) * varops::COST_COPYING);
@@ -1403,7 +1541,7 @@ BOOST_AUTO_TEST_CASE(hash_opcodes_follow_bip441_limits)
 
     for (const opcodetype opcode : {OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256}) {
         const size_t digest_size{opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160 ? 20U : 32U};
-        const uint64_t hash_cost{varops::FixedOpcodeCost() + varops::HashCost(opcode, maximum.size()) +
+        const uint64_t hash_cost{InitialLifetimeCost({maximum}) + varops::FixedOpcodeCost() + varops::HashCost(opcode, maximum.size()) +
                                  varops::CopyCost(digest_size)};
         const EvalOutcome outcome{EvalTapscriptV2(OneOp(opcode), {maximum}, hash_cost)};
         BOOST_REQUIRE(outcome.ok);
@@ -1415,7 +1553,7 @@ BOOST_AUTO_TEST_CASE(hash_opcodes_follow_bip441_limits)
                    SCRIPT_ERR_VAROP_COUNT);
     }
 
-    const uint64_t sha256_cost{varops::FixedOpcodeCost() + varops::HashCost(OP_SHA256, large.size()) +
+    const uint64_t sha256_cost{InitialLifetimeCost({large}) + varops::FixedOpcodeCost() + varops::HashCost(OP_SHA256, large.size()) +
                                varops::CopyCost(32)};
     const EvalOutcome sha256_out{EvalTapscriptV2(OneOp(OP_SHA256), {large}, sha256_cost)};
     BOOST_REQUIRE(sha256_out.ok);
@@ -1441,7 +1579,7 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_stack_limits_are_enforced)
     CheckError(OneOp(OP_3DUP), two_below_max_count, 0, SCRIPT_ERR_STACK_SIZE);
 
     const EvalOutcome one_below_depth{EvalTapscriptV2(OneOp(OP_DEPTH), one_below_max_count,
-                                                      varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
+                                                      InitialLifetimeCost(one_below_max_count) + varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
     BOOST_REQUIRE(one_below_depth.ok);
     BOOST_CHECK_EQUAL(one_below_depth.error, SCRIPT_ERR_OK);
     BOOST_CHECK_EQUAL(one_below_depth.remaining_budget, 0);
@@ -1458,7 +1596,7 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_stack_limits_are_enforced)
     CheckEval(OneOp(OP_NOP), {max_element}, {max_element}, 0);
 
     const EvalOutcome max_element_size{EvalTapscriptV2(OneOp(OP_SIZE), {max_element},
-                                                       varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
+                                                       InitialLifetimeCost({max_element}) + varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
     BOOST_REQUIRE(max_element_size.ok);
     BOOST_CHECK_EQUAL(max_element_size.error, SCRIPT_ERR_OK);
     BOOST_CHECK_EQUAL(max_element_size.remaining_budget, 0);
@@ -1919,7 +2057,7 @@ BOOST_AUTO_TEST_CASE(checksigfromstack)
     const uint64_t long_message_cost{signature_cost(long_message.size())};
     CheckError(script, {sig, long_message, pubkey}, long_message_cost - 1, SCRIPT_ERR_VAROP_COUNT);
     const EvalOutcome invalid_long_message{EvalTapscriptV2(
-        script, {sig, long_message, pubkey}, varops::FixedOpcodeCost() + long_message_cost)};
+        script, {sig, long_message, pubkey}, InitialLifetimeCost({sig, long_message, pubkey}) + varops::FixedOpcodeCost() + long_message_cost)};
     BOOST_CHECK(!invalid_long_message.ok);
     BOOST_CHECK_EQUAL(invalid_long_message.error, SCRIPT_ERR_SCHNORR_SIG);
     BOOST_CHECK_EQUAL(invalid_long_message.remaining_budget, 0);

@@ -3,7 +3,7 @@
 
 Run without arguments from any directory. Intermediate CSV/HTML files are
 retained under calibration-intermediate/ for inspection; the portable result is
-written to varop-calibration.json.
+written under data/varopsData. Set VAROPS_DATA_DIR for a different checkout layout.
 """
 
 import csv
@@ -16,17 +16,29 @@ import subprocess
 import sys
 import tempfile
 
+from plot_reduced_pilot import MODEL_ID, PRODUCER_ORDER
+
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 BUILD = ROOT / "build-varops-calibration"
-OUTPUT = HERE / "varop-calibration.json"
 INTERMEDIATE = HERE / "calibration-intermediate"
 REFERENCE_EPOCHS = 5
 PRIMITIVE_EPOCHS = 31
 SAMPLE_MS = 2
 COPY_SAMPLE_MS = 30
-TARGET_FRACTION = 0.9
+TARGET_FRACTION = 1.0
+
+
+def output_path():
+    configured = os.environ.get("VAROPS_DATA_DIR")
+    if configured:
+        data_dir = Path(configured).expanduser()
+    elif ROOT.parent.name == "gsr" and ROOT.parent.parent.name == "core":
+        data_dir = ROOT.parent.parent.parent / "data" / "varopsData"
+    else:
+        raise RuntimeError("Set VAROPS_DATA_DIR to the varopsData directory")
+    return data_dir / "primitive-calibration" / MODEL_ID / "varop-calibration.json"
 
 
 def run(*command):
@@ -75,11 +87,41 @@ def reference_rows(path):
     }
 
 
+def lifetime_checks(manifest, samples, fits, rate):
+    """Report held-out lifetimes against the fitted composition; never fit them."""
+    import statistics
+    from collections import defaultdict
+
+    observations = defaultdict(list)
+    for sample in samples:
+        observations[sample['probe']].append(float(sample['ns_per_execution']))
+
+    def charge(family, count, span):
+        fitted = fits['fits'][family]['under_penalty_100_fit']
+        return rate * (fitted['a_ns'] * count + fitted['b_ns'] * span)
+
+    checks = []
+    for row in manifest:
+        if not row['probe'].startswith('PRODUCER_CHECK/'):
+            continue
+        count, size, numeric = (int(row[k]) for k in ('items', 'bytes', 'normalize_bytes'))
+        cost = charge('PRODUCE', count, size)
+        if row['kind'] == 'numeric':
+            span = (numeric + 7) // 8 * 8
+            cost += charge('PRODUCE', 1, span) + charge('PREP', 1, span) + charge('NORMALIZE', 1, span)
+        measured = statistics.median(observations[row['probe']]) * rate
+        checks.append(dict(probe=row['probe'], predicted_varops=cost,
+                           measured_normalized_varops=measured, ratio=measured / cost))
+    return checks
+
+
 def main():
     if len(sys.argv) != 1:
         raise SystemExit("run_calibration.py takes no arguments")
+    output = output_path()
 
     run("cmake", "-S", ROOT, "-B", BUILD, "-DCMAKE_BUILD_TYPE=Release",
+        "-DAPPEND_CPPFLAGS=-DGSR_PRODUCER_LIFETIME_EXPERIMENT", "-DWITH_USDT=OFF",
         "-DBUILD_BENCH=ON", "-DBUILD_DAEMON=OFF", "-DBUILD_CLI=OFF",
         "-DBUILD_TESTS=OFF", "-DBUILD_GUI=OFF", "-DENABLE_WALLET=OFF")
     run("cmake", "--build", BUILD, "--target", "bench_varops",
@@ -93,18 +135,23 @@ def main():
     work.mkdir(exist_ok=True)
     reference_csv = work / "reference.csv"
     measurements_csv = work / "measurements.csv"
+    composition_csv = work / "opcode-composition.csv"
 
     # The case filter retains every pre-v2 baseline while limiting unrelated
     # v2 timing; the sample limit does not truncate those pre-v2 baselines.
     run(bench, "--case-filter", "OP_NOP", "--sample-budget-percent", "2",
-        "--epochs", str(REFERENCE_EPOCHS), "--silent", "--file", reference_csv)
+        "--exclude-experimental",
+        "--epochs", str(REFERENCE_EPOCHS), "--silent", "--file", reference_csv,
+        "--coverage-manifest", composition_csv)
     reference = reference_rows(reference_csv)
     run(primitives, "--reference-csv", reference_csv,
+        "--calibration-candidate",
         "--epochs", str(PRIMITIVE_EPOCHS), "--sample-ms", str(SAMPLE_MS),
         "--copy-sample-ms", str(COPY_SAMPLE_MS), "--percentile", "0.5",
         "--margin", "1", "--out", measurements_csv)
     run(sys.executable, HERE / "plot_reduced_pilot.py", work,
         "--sample-ms", str(SAMPLE_MS), "--binary", primitives,
+        "--producer-schedule",
         "--target-fraction", str(TARGET_FRACTION))
 
     fits = json.loads((work / "fits.json").read_text(encoding="utf-8"))
@@ -128,6 +175,17 @@ def main():
 
     artifact = {
         "schema": "varop-calibration-v1",
+        "model_id": MODEL_ID,
+        "primitive_order": PRODUCER_ORDER,
+        "producer_manifest": read_csv(work / "measurements.csv.produce.csv")[1],
+        "opcode_compositions": read_csv(composition_csv)[1],
+        "composition_rules": {
+            "NUMERIC_RESULT(n)": "PRODUCE(W(n)) + NORMALIZE(n)",
+            "initial_stack": "sum(PRODUCE(length(item))); once after immediate-success prescan",
+            "moves_and_drops": "no new production event; original production funds release",
+            "mul": "result and scratch prepaid at full spans; only NORMALIZE at output",
+            "divmod": "DIVCORE includes internal temporary storage; no extra scratch charge",
+        },
         "status": "single-machine evidence and provisional local fit; not an accepted consensus schedule",
         "machine": {
             "cpu": reference["metadata"].get("CPU"),
@@ -160,20 +218,22 @@ def main():
         },
         "benchmark_binary_sha256": sha256(bench),
     }
+    artifact['held_out_lifetime_checks'] = lifetime_checks(artifact['producer_manifest'], samples, fits, varops_per_ns)
     # Replace an earlier result only after every measurement and fit succeeds.
     pending = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=HERE,
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent,
                                          prefix=".varop-calibration-", suffix=".json",
                                          delete=False) as destination:
             pending = Path(destination.name)
             json.dump(artifact, destination, indent=2)
             destination.write("\n")
-        pending.replace(OUTPUT)
+        pending.replace(output)
     finally:
         if pending is not None:
             pending.unlink(missing_ok=True)
-    print(f"Calibration saved to {OUTPUT}")
+    print(f"Calibration saved to {output}")
 
 
 if __name__ == "__main__":
