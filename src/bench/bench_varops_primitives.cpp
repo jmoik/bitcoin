@@ -184,11 +184,11 @@ double ReadReference(std::istream& in)
 }
 
 struct Options {
-    size_t epochs{31};
-    double epoch_ms{2.0};
-    double copy_epoch_ms{0};
-    double percentile{0.95};
-    double margin{1.15};
+    size_t epochs{3};
+    double epoch_ms{5.0};
+    double copy_epoch_ms{30.0};
+    double percentile{0.5};
+    double margin{1.0};
     size_t max_bytes{4'000'000};
     size_t fixture_bytes{64U * 1024U * 1024U};
     double reference_sec{0};
@@ -1706,12 +1706,12 @@ void Help()
 {
     std::cout << "Usage: bench_varops_primitives (--reference-csv FILE | --pre-v2-seconds SECONDS | --max-diagnostic) [options]\n"
         "  --out FILE          Summary CSV (default dev/varops/primitive_costs.csv); raw epochs use FILE.samples.csv\n"
-        "  --epochs N          Measured epochs per fixture (default 31)\n"
-        "  --sample-ms MS      Target timed duration per epoch (default 2)\n"
-        "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default: --sample-ms)\n"
+        "  --epochs N          Measured epochs per fixture (default 3)\n"
+        "  --sample-ms MS      Target timed duration per epoch (default 5)\n"
+        "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default 30)\n"
         "  --calibration-candidate Collect the frozen PRODUCE/NORMALIZE model only\n"
-        "  --percentile P      Empirical quantile, 0..1 (default .95; NOT a confidence interval)\n"
-        "  --margin M          Multiplicative margin >=1 (default 1.15)\n"
+        "  --percentile P      Empirical quantile, 0..1 (default .5; NOT a confidence interval)\n"
+        "  --margin M          Multiplicative margin >=1 (default 1)\n"
         "  --max-bytes N       Maximum linear-probe payload (default 4000000)\n"
         "  --fixture-mib N     Maximum estimated prepared-state pool (default 64)\n"
         "  --portable-math     Exercise the existing Val64 portable-math test path\n"

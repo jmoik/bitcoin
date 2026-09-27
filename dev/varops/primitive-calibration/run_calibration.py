@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -25,8 +26,8 @@ HERE = Path(__file__).resolve().parent
 BUILD = ROOT / "build-varops-calibration"
 INTERMEDIATE = HERE / "calibration-intermediate"
 REFERENCE_EPOCHS = 5
-PRIMITIVE_EPOCHS = 31
-SAMPLE_MS = 2
+PRIMITIVE_EPOCHS = 3
+SAMPLE_MS = 5
 COPY_SAMPLE_MS = 30
 TARGET_FRACTION = 1.0
 
@@ -41,6 +42,22 @@ def output_path():
 def run(*command):
     print("+", " ".join(map(str, command)), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
+
+
+def schedule_options():
+    options = ["-DGSR_PRODUCER_LIFETIME_EXPERIMENT=ON"]
+    # Older runners appended this definition after clang-cl's `--`, where it
+    # becomes a filename. Migrate that cache entry without erasing other flags.
+    cache = BUILD / "CMakeCache.txt"
+    if cache.exists():
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            if line.startswith("APPEND_CPPFLAGS:STRING="):
+                flags = line.split("=", 1)[1]
+                cleaned = re.sub(r"(?<!\S)-DGSR_PRODUCER_LIFETIME_EXPERIMENT(?=\s|$)", "", flags).strip()
+                if cleaned != flags:
+                    options.append(f"-DAPPEND_CPPFLAGS={cleaned}")
+                break
+    return options
 
 
 def sha256(path):
@@ -119,11 +136,11 @@ def main():
     print(f"Calibration output: {output}", flush=True)
 
     run("cmake", "-S", ROOT, "-B", BUILD, "-DCMAKE_BUILD_TYPE=Release",
-        "-DAPPEND_CPPFLAGS=-DGSR_PRODUCER_LIFETIME_EXPERIMENT", "-DWITH_USDT=OFF",
+        *schedule_options(), "-DWITH_USDT=OFF",
         "-DBUILD_BENCH=ON", "-DBUILD_DAEMON=OFF", "-DBUILD_CLI=OFF",
         "-DBUILD_TESTS=OFF", "-DBUILD_GUI=OFF", "-DENABLE_WALLET=OFF")
     run("cmake", "--build", BUILD, "--target", "bench_varops",
-        "bench_varops_primitives", "-j", str(min(os.cpu_count() or 1, 4)))
+        "bench_varops_primitives", "-j", str(min(os.cpu_count() or 1, 8)))
     binary_suffix = ".exe" if os.name == "nt" else ""
     bench = BUILD / "bin" / f"bench_varops{binary_suffix}"
     primitives = BUILD / "bin" / f"bench_varops_primitives{binary_suffix}"

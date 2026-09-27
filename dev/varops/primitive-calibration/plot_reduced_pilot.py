@@ -497,7 +497,7 @@ def main():
     build = {}
     if cache.exists():
         for line in cache.read_text().splitlines():
-            if line.startswith(('CMAKE_BUILD_TYPE:', 'APPEND_CPPFLAGS:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
+            if line.startswith(('CMAKE_BUILD_TYPE:', 'APPEND_CPPFLAGS:', 'GSR_PRODUCER_LIFETIME_EXPERIMENT:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
                 key, value = line.split('=', 1)
                 build[key.split(':', 1)[0]] = value
     reference_seconds = float(headers['Reference_Script_Evaluation_Seconds'])
