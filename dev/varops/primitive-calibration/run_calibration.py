@@ -3,7 +3,8 @@
 
 Run without arguments from any directory. Intermediate CSV/HTML files are
 retained under calibration-intermediate/ for inspection; the portable result is
-written under data/varopsData. Set VAROPS_DATA_DIR for a different checkout layout.
+written under data/varopsData in the research workspace, or beside this script
+in other checkout layouts. No arguments or environment configuration required.
 """
 
 import csv
@@ -31,14 +32,10 @@ TARGET_FRACTION = 1.0
 
 
 def output_path():
-    configured = os.environ.get("VAROPS_DATA_DIR")
-    if configured:
-        data_dir = Path(configured).expanduser()
-    elif ROOT.parent.name == "gsr" and ROOT.parent.parent.name == "core":
+    if ROOT.parent.name == "gsr" and ROOT.parent.parent.name == "core":
         data_dir = ROOT.parent.parent.parent / "data" / "varopsData"
-    else:
-        raise RuntimeError("Set VAROPS_DATA_DIR to the varopsData directory")
-    return data_dir / "primitive-calibration" / MODEL_ID / "varop-calibration.json"
+        return data_dir / "primitive-calibration" / MODEL_ID / "varop-calibration.json"
+    return HERE / "varop-calibration.json"
 
 
 def run(*command):
@@ -119,6 +116,7 @@ def main():
     if len(sys.argv) != 1:
         raise SystemExit("run_calibration.py takes no arguments")
     output = output_path()
+    print(f"Calibration output: {output}", flush=True)
 
     run("cmake", "-S", ROOT, "-B", BUILD, "-DCMAKE_BUILD_TYPE=Release",
         "-DAPPEND_CPPFLAGS=-DGSR_PRODUCER_LIFETIME_EXPERIMENT", "-DWITH_USDT=OFF",
