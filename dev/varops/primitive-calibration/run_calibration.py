@@ -5,18 +5,23 @@ Run without arguments from any directory. Intermediate CSV/HTML files are
 retained under calibration-intermediate/ for inspection; the portable result is
 written under data/varopsData in the research workspace, or beside this script
 in other checkout layouts. No arguments or environment configuration required.
+
+Shorter epochs and samples give a quick run for checking a machine and
+estimating the full run's duration; the artifact records the settings and
+each stage's wall time.
 """
 
+import argparse
 import csv
 import hashlib
 import json
 import math
 import os
-import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 from plot_reduced_pilot import MODEL_ID, PRODUCER_ORDER
 
@@ -29,7 +34,9 @@ REFERENCE_EPOCHS = 5
 PRIMITIVE_EPOCHS = 7
 SAMPLE_MS = 10
 COPY_SAMPLE_MS = 100
-TARGET_FRACTION = 1.0
+# Fitting target: a full budget of fitted work takes 0.9× the pre-v2 reference;
+# 1.0× remains the hard limit for whole-script verification.
+TARGET_FRACTION = 0.9
 
 
 def output_path():
@@ -42,22 +49,6 @@ def output_path():
 def run(*command):
     print("+", " ".join(map(str, command)), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
-
-
-def schedule_options():
-    options = ["-DGSR_PRODUCER_LIFETIME_EXPERIMENT=ON"]
-    # Older runners appended this definition after clang-cl's `--`, where it
-    # becomes a filename. Migrate that cache entry without erasing other flags.
-    cache = BUILD / "CMakeCache.txt"
-    if cache.exists():
-        for line in cache.read_text(encoding="utf-8").splitlines():
-            if line.startswith("APPEND_CPPFLAGS:STRING="):
-                flags = line.split("=", 1)[1]
-                cleaned = re.sub(r"(?<!\S)-DGSR_PRODUCER_LIFETIME_EXPERIMENT(?=\s|$)", "", flags).strip()
-                if cleaned != flags:
-                    options.append(f"-DAPPEND_CPPFLAGS={cleaned}")
-                break
-    return options
 
 
 def sha256(path):
@@ -130,13 +121,32 @@ def lifetime_checks(manifest, samples, fits, rate):
 
 
 def main():
-    if len(sys.argv) != 1:
-        raise SystemExit("run_calibration.py takes no arguments")
-    output = output_path()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--reference-epochs", type=int, default=REFERENCE_EPOCHS)
+    parser.add_argument("--epochs", type=int, default=PRIMITIVE_EPOCHS, help="primitive epochs")
+    parser.add_argument("--sample-ms", type=float, default=SAMPLE_MS)
+    parser.add_argument("--copy-sample-ms", type=float, default=COPY_SAMPLE_MS)
+    parser.add_argument("--output", type=Path, default=None, help="artifact path")
+    parser.add_argument("--work-dir", type=Path, default=INTERMEDIATE, help="intermediate files")
+    args = parser.parse_args()
+    settings = {"reference_epochs": args.reference_epochs, "primitive_epochs": args.epochs,
+                "sample_ms": args.sample_ms, "copy_sample_ms": args.copy_sample_ms}
+    full = settings == {"reference_epochs": REFERENCE_EPOCHS, "primitive_epochs": PRIMITIVE_EPOCHS,
+                        "sample_ms": SAMPLE_MS, "copy_sample_ms": COPY_SAMPLE_MS}
+    output = (args.output or output_path()).resolve()
     print(f"Calibration output: {output}", flush=True)
+    stage_seconds = {}
+    started = time.monotonic()
+
+    def stage(name):
+        nonlocal started
+        now = time.monotonic()
+        stage_seconds[name] = now - started
+        print(f"  {name}: {stage_seconds[name]:.1f} s", flush=True)
+        started = now
 
     run("cmake", "-S", ROOT, "-B", BUILD, "-DCMAKE_BUILD_TYPE=Release",
-        *schedule_options(), "-DWITH_USDT=OFF",
+        "-DWITH_USDT=OFF", "-DENABLE_IPC=OFF",
         "-DBUILD_BENCH=ON", "-DBUILD_DAEMON=OFF", "-DBUILD_CLI=OFF",
         "-DBUILD_TESTS=OFF", "-DBUILD_GUI=OFF", "-DENABLE_WALLET=OFF")
     run("cmake", "--build", BUILD, "--target", "bench_varops",
@@ -145,9 +155,10 @@ def main():
     bench = BUILD / "bin" / f"bench_varops{binary_suffix}"
     primitives = BUILD / "bin" / f"bench_varops_primitives{binary_suffix}"
     run(primitives, "--self-test")
+    stage("build")
 
-    work = INTERMEDIATE
-    work.mkdir(exist_ok=True)
+    work = args.work_dir.resolve()
+    work.mkdir(parents=True, exist_ok=True)
     reference_csv = work / "reference.csv"
     measurements_csv = work / "measurements.csv"
     composition_csv = work / "opcode-composition.csv"
@@ -156,18 +167,21 @@ def main():
     # v2 timing; the sample limit does not truncate those pre-v2 baselines.
     run(bench, "--case-filter", "OP_NOP", "--sample-budget-percent", "2",
         "--exclude-experimental",
-        "--epochs", str(REFERENCE_EPOCHS), "--silent", "--file", reference_csv,
+        "--epochs", str(args.reference_epochs), "--silent", "--file", reference_csv,
         "--coverage-manifest", composition_csv)
     reference = reference_rows(reference_csv)
+    stage("reference")
     run(primitives, "--reference-csv", reference_csv,
         "--calibration-candidate",
-        "--epochs", str(PRIMITIVE_EPOCHS), "--sample-ms", str(SAMPLE_MS),
-        "--copy-sample-ms", str(COPY_SAMPLE_MS), "--percentile", "0.5",
+        "--epochs", str(args.epochs), "--sample-ms", str(args.sample_ms),
+        "--copy-sample-ms", str(args.copy_sample_ms), "--percentile", "0.5",
         "--margin", "1", "--out", measurements_csv)
+    stage("primitives")
     run(sys.executable, HERE / "plot_reduced_pilot.py", work,
-        "--sample-ms", str(SAMPLE_MS), "--binary", primitives,
+        "--sample-ms", str(args.sample_ms), "--binary", primitives,
         "--producer-schedule",
         "--target-fraction", str(TARGET_FRACTION))
+    stage("fit")
 
     fits = json.loads((work / "fits.json").read_text(encoding="utf-8"))
     measured_reference = fits["metadata"]["reference_script_seconds"]
@@ -198,10 +212,13 @@ def main():
             "NUMERIC_RESULT(n)": "PRODUCE(W(n)) + NORMALIZE(n)",
             "initial_stack": "sum(PRODUCE(length(item))); once after immediate-success prescan",
             "moves_and_drops": "no new production event; original production funds release",
-            "mul": "result and scratch prepaid at full spans; only NORMALIZE at output",
+            "mul": "MULCORE includes scratch storage; the result is produced at its full span before multiplication; only NORMALIZE at output",
             "divmod": "DIVCORE includes internal temporary storage; no extra scratch charge",
         },
-        "status": "single-machine evidence and provisional local fit; not an accepted consensus schedule",
+        "status": ("single-machine evidence and provisional local fit; not an accepted consensus schedule"
+                   if full else "quick run with shortened measurements; for checking the machine and estimating duration only"),
+        "measurement_settings": settings,
+        "stage_seconds": stage_seconds,
         "machine": {
             "cpu": reference["metadata"].get("CPU"),
             "architecture": reference["metadata"].get("Architecture"),

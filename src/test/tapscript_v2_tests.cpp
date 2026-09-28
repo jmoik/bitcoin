@@ -42,9 +42,7 @@ static constexpr uint64_t AMPLE_VAROPS_BUDGET{1'000'000'000};
 static uint64_t InitialLifetimeCost(const Stack& stack)
 {
     uint64_t cost{0};
-    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-        for (const auto& value : stack) cost += varops::CopyCost(value.size());
-    }
+    for (const auto& value : stack) cost += varops::CopyCost(value.size());
     return cost;
 }
 
@@ -103,14 +101,10 @@ static uint64_t LiteralPushCost(size_t size)
     return varops::FixedOpcodeCost() + varops::CopyCost(size);
 }
 
-static uint64_t MacroDefinitionCost(size_t body_size)
+/** Unrolling charge for the given substituted instructions and visited references. */
+static uint64_t MacroUnrollCharge(uint64_t substituted_instructions, uint64_t references_visited)
 {
-    return varops::MacroDecodeCost(body_size);
-}
-
-static uint64_t MacroCallCost(size_t body_size)
-{
-    return varops::FixedOpcodeCost() + MacroDefinitionCost(body_size);
+    return (substituted_instructions + references_visited) * varops::MacroUnrollCost();
 }
 
 class RecordingSignatureCreator final : public BaseSignatureCreator
@@ -163,7 +157,6 @@ static uint64_t EncodedExecutionCost(const CScript& script)
         if (width == 0) body_length = prefix;
         else for (unsigned int i{0}; i < width; ++i) body_length |= uint64_t{*pc++} << (8 * i);
         if (body_length > static_cast<uint64_t>(script.end() - pc)) return 0;
-        count += varops::MacroDecodeCost(body_length);
         pc += static_cast<CScript::difference_type>(body_length);
     }
     while (pc < script.end()) {
@@ -171,7 +164,6 @@ static uint64_t EncodedExecutionCost(const CScript& script)
         valtype data;
         if (!script.GetOp(pc, opcode, data)) return 0;
         count += varops::ExecutionCost(opcode);
-        count += data.size() * varops::COST_COPYING;
         if (opcode == OP_CALLMACRO) {
             if (pc == script.end()) return 0;
             const uint8_t prefix{*pc++};
@@ -183,18 +175,10 @@ static uint64_t EncodedExecutionCost(const CScript& script)
     return count;
 }
 
-static uint64_t InvokedBodyCost(const CScript& body)
+static void CheckEval(const CScript& script, const Stack& initial_stack, const Stack& expected_stack)
 {
-    return varops::FixedOpcodeCost() + varops::MacroDecodeCost(body.size()) + EncodedExecutionCost(body);
-}
-
-static void CheckEval(const CScript& script, const Stack& initial_stack, const Stack& expected_stack,
-                      uint64_t additional_cost, std::optional<uint64_t> direct_executions = std::nullopt)
-{
-    // These cases primarily check opcode semantics. Recover the observed cost
-    // and replay at its boundary; independent formula checks live in bench_varops.
-    (void)additional_cost;
-    (void)direct_executions;
+    // These cases check opcode semantics; independent formula checks live in
+    // bench_varops --verify-costs.
     constexpr uint64_t ample_budget{std::numeric_limits<uint64_t>::max()};
     const EvalOutcome probe{EvalTapscriptV2(script, initial_stack, ample_budget)};
     BOOST_CHECK_EQUAL(probe.error, SCRIPT_ERR_OK);
@@ -215,15 +199,23 @@ static void CheckEval(const CScript& script, const Stack& initial_stack, const S
     }
 }
 
-static void CheckError(const CScript& script, const Stack& initial_stack, uint64_t additional_budget,
-                       ScriptError expected_error, std::optional<uint64_t> direct_executions = std::nullopt)
+static void CheckError(const CScript& script, const Stack& initial_stack, ScriptError expected_error)
 {
-    uint64_t budget{additional_budget};
+    // Semantic-error tests are not intended to probe the accounting boundary.
+    uint64_t budget{std::numeric_limits<uint64_t>::max()};
     if (expected_error == SCRIPT_ERR_VAROP_COUNT) {
-        budget += direct_executions ? *direct_executions * varops::COST_PER_OPCODE : EncodedExecutionCost(script);
-    } else {
-        // Semantic-error tests are not intended to probe the accounting boundary.
-        budget = std::numeric_limits<uint64_t>::max();
+        // Check budget exhaustion at its exact boundary: the largest budget that
+        // still fails for lack of varops, while one more varop gets past every
+        // charge (to success or to a later semantic failure).
+        const auto exhausted = [&](uint64_t b) { return EvalTapscriptV2(script, initial_stack, b).error == SCRIPT_ERR_VAROP_COUNT; };
+        BOOST_REQUIRE(exhausted(0));
+        BOOST_REQUIRE(!exhausted(AMPLE_VAROPS_BUDGET));
+        uint64_t low{0}, high{AMPLE_VAROPS_BUDGET};
+        while (high - low > 1) {
+            const uint64_t mid{low + (high - low) / 2};
+            (exhausted(mid) ? low : high) = mid;
+        }
+        budget = low;
     }
     const EvalOutcome outcome{EvalTapscriptV2(script, initial_stack, budget)};
     BOOST_CHECK(!outcome.ok);
@@ -354,7 +346,7 @@ BOOST_AUTO_TEST_CASE(meta_opcodes_are_tapscript_v2_only_redefinitions)
     }
 }
 
-BOOST_AUTO_TEST_CASE(fragment_reference_executes_field_fragment)
+BOOST_AUTO_TEST_CASE(macro_reference_executes_field_arithmetic)
 {
     CScript body;
     body << OP_MUL << Num(13) << OP_MOD;
@@ -363,37 +355,38 @@ BOOST_AUTO_TEST_CASE(fragment_reference_executes_field_fragment)
     script << Num(7) << Num(11);
     AppendReference(script, 0);
 
-    const uint64_t cost{varops::MulCost(1, 1) + varops::ModCost(1, 1) + InvokedBodyCost(body)};
-    CheckEval(script, {}, {Num(12)}, cost);
+    CheckEval(script, {}, {Num(12)});
 }
 
-BOOST_AUTO_TEST_CASE(fragment_unrolls_to_inline_sequence)
+BOOST_AUTO_TEST_CASE(macro_unrolls_to_inline_sequence)
 {
     const CScript inline_script{CScript{} << OP_1 << OP_2 << OP_ADD << OP_3 << OP_4 << OP_ADD
                                           << OP_ADD << OP_10 << OP_EQUAL};
 
     const CScript body{OneOp(OP_ADD)};
-    CScript fragment_script;
-    AppendDefinition(fragment_script, body);
-    fragment_script << OP_1 << OP_2;
-    AppendReference(fragment_script, 0);
-    fragment_script << OP_3 << OP_4;
-    AppendReference(fragment_script, 0);
-    fragment_script << OP_ADD << OP_10 << OP_EQUAL;
+    CScript macro_script;
+    AppendDefinition(macro_script, body);
+    macro_script << OP_1 << OP_2;
+    AppendReference(macro_script, 0);
+    macro_script << OP_3 << OP_4;
+    AppendReference(macro_script, 0);
+    macro_script << OP_ADD << OP_10 << OP_EQUAL;
 
     constexpr uint64_t budget{1'000'000};
     const EvalOutcome inlined{EvalTapscriptV2(inline_script, {}, budget)};
-    const EvalOutcome fragmented{EvalTapscriptV2(fragment_script, {}, budget)};
+    const EvalOutcome macro{EvalTapscriptV2(macro_script, {}, budget)};
     BOOST_REQUIRE(inlined.ok);
-    BOOST_REQUIRE(fragmented.ok);
+    BOOST_REQUIRE(macro.ok);
     BOOST_CHECK(inlined.stack == Stack{Num(1)});
-    BOOST_CHECK(fragmented.stack == inlined.stack);
+    BOOST_CHECK(macro.stack == inlined.stack);
 
-    const uint64_t overhead{MacroDefinitionCost(body.size()) + 2 * MacroCallCost(body.size())};
-    BOOST_CHECK_EQUAL(inlined.remaining_budget - fragmented.remaining_budget, overhead);
+    // Declarations are free; each reference pays for itself and the
+    // instruction it substitutes.
+    const uint64_t overhead{MacroUnrollCharge(2, 2)};
+    BOOST_CHECK_EQUAL(inlined.remaining_budget - macro.remaining_budget, overhead);
 }
 
-BOOST_AUTO_TEST_CASE(nested_fragment_unrolls_to_inline_sequence)
+BOOST_AUTO_TEST_CASE(nested_macro_unrolls_to_inline_sequence)
 {
     const CScript inline_script{CScript{} << OP_3 << OP_DUP << OP_ADD << OP_6 << OP_EQUAL};
     const CScript inner{OneOp(OP_ADD)};
@@ -416,14 +409,17 @@ BOOST_AUTO_TEST_CASE(nested_fragment_unrolls_to_inline_sequence)
     BOOST_CHECK(inlined.stack == Stack{Num(1)});
     BOOST_CHECK(nested.stack == inlined.stack);
 
-    const uint64_t overhead{MacroDefinitionCost(inner.size()) + MacroDefinitionCost(outer.size()) +
-                            MacroCallCost(inner.size()) + MacroCallCost(outer.size())};
+    // One reference to the outer body substitutes two instructions and visits
+    // the nested reference.
+    const uint64_t overhead{MacroUnrollCharge(2, 2)};
     BOOST_CHECK_EQUAL(inlined.remaining_budget - nested.remaining_budget, overhead);
 }
 
 BOOST_AUTO_TEST_CASE(literal_push_copying_budget)
 {
-    for (const size_t size : {0U, 1U, 520U, 65'536U, 4'000'000U}) {
+    // The largest push whose script fits the unrolled size limit has a
+    // five-byte OP_PUSHDATA4 header.
+    for (const size_t size : {size_t{0}, size_t{1}, size_t{520}, size_t{65'536}, size_t{MAX_TAPSCRIPT_V2_UNROLLED_SIZE - 5}}) {
         const valtype value(size, 0x42);
         const CScript body{CScript{} << value};
         const uint64_t cost{LiteralPushCost(size)};
@@ -437,8 +433,7 @@ BOOST_AUTO_TEST_CASE(literal_push_copying_budget)
             CScript script;
             AppendDefinition(script, body);
             AppendReference(script, 0);
-            const uint64_t function_cost{MacroDefinitionCost(body.size()) +
-                                         MacroCallCost(body.size()) + cost};
+            const uint64_t function_cost{MacroUnrollCharge(1, 1) + cost};
             const auto function{EvalTapscriptV2(script, {}, function_cost)};
             BOOST_CHECK(function.ok);
             BOOST_CHECK_EQUAL(function.remaining_budget, 0);
@@ -448,7 +443,7 @@ BOOST_AUTO_TEST_CASE(literal_push_copying_budget)
     }
 }
 
-BOOST_AUTO_TEST_CASE(fragment_reference_shares_altstack)
+BOOST_AUTO_TEST_CASE(macro_reference_shares_altstack)
 {
     const CScript body{OneOp(OP_FROMALTSTACK)};
     CScript script;
@@ -456,60 +451,61 @@ BOOST_AUTO_TEST_CASE(fragment_reference_shares_altstack)
     script << Num(7) << OP_TOALTSTACK;
     AppendReference(script, 0);
 
-    CheckEval(script, {}, {Num(7)}, InvokedBodyCost(body));
+    CheckEval(script, {}, {Num(7)});
 }
 
-BOOST_AUTO_TEST_CASE(fragment_indices_and_compactsize_are_canonical)
+BOOST_AUTO_TEST_CASE(macro_indices_and_compactsize_are_canonical)
 {
     const CScript body{OneOp(OP_1)};
     CScript script;
     for (unsigned int i{0}; i < 253; ++i) AppendDefinition(script, CScript{});
     AppendDefinition(script, body);
     AppendReference(script, 253);
-    CheckEval(script, {}, {Num(1)}, InvokedBodyCost(body));
+    CheckEval(script, {}, {Num(1)});
 
     CScript immediate_is_not_opcode;
     for (unsigned int i{0}; i <= 0x50; ++i) AppendDefinition(immediate_is_not_opcode, CScript{});
     AppendReference(immediate_is_not_opcode, 0x50);
     immediate_is_not_opcode << OP_RETURN;
-    CheckError(immediate_is_not_opcode, {}, 0, SCRIPT_ERR_OP_RETURN);
+    CheckError(immediate_is_not_opcode, {}, SCRIPT_ERR_OP_RETURN);
 
     CScript noncanonical_index;
     AppendDefinition(noncanonical_index, body);
     noncanonical_index << OP_CALLMACRO;
     for (unsigned char byte : {0xfd, 0x00, 0x00}) noncanonical_index.push_back(byte);
-    CheckError(noncanonical_index, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(noncanonical_index, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript out_of_range;
     AppendDefinition(out_of_range, body);
     AppendReference(out_of_range, 1);
-    CheckError(out_of_range, {}, 0, SCRIPT_ERR_BAD_OPCODE);
-    CheckError(OneOp(OP_CALLMACRO), {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(out_of_range, {}, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(OneOp(OP_CALLMACRO), {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript noncanonical_length;
     noncanonical_length << OP_MACRO;
     for (unsigned char byte : {0xfd, 0x00, 0x00}) noncanonical_length.push_back(byte);
-    CheckError(noncanonical_length, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(noncanonical_length, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript truncated_body;
     truncated_body << OP_MACRO;
     truncated_body.push_back(0x02);
     truncated_body.push_back(OP_1);
-    CheckError(truncated_body, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(truncated_body, {}, SCRIPT_ERR_BAD_OPCODE);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_bodies_are_validated_when_referenced)
+BOOST_AUTO_TEST_CASE(macro_bodies_are_decoded_statically)
 {
+    // Every body is decoded before execution, whether or not it is referenced.
     const CScript malformed_body{OneOp(OP_PUSHDATA1)};
     CScript define_only;
     AppendDefinition(define_only, malformed_body);
     define_only << OP_1;
-    CheckEval(define_only, {}, {Num(1)}, 0);
+    CheckError(define_only, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript invoke_malformed;
     AppendDefinition(invoke_malformed, malformed_body);
     AppendReference(invoke_malformed, 0);
-    CheckError(invoke_malformed, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(invoke_malformed, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript conditional_body;
     conditional_body << OP_IF << OP_2 << OP_ELSE << OP_3 << OP_ENDIF;
@@ -517,26 +513,25 @@ BOOST_AUTO_TEST_CASE(fragment_bodies_are_validated_when_referenced)
     AppendDefinition(conditional, conditional_body);
     conditional << OP_1;
     AppendReference(conditional, 0);
-    CheckEval(conditional, {}, {Num(2)},
-              InvokedBodyCost(conditional_body) - varops::ExecutionCost(OP_3));
+    CheckEval(conditional, {}, {Num(2)});
 
     const CScript codeseparator_body{OneOp(OP_CODESEPARATOR)};
     CScript codeseparator;
     AppendDefinition(codeseparator, codeseparator_body);
     AppendReference(codeseparator, 0);
-    CheckEval(codeseparator, {}, {}, InvokedBodyCost(codeseparator_body));
+    CheckEval(codeseparator, {}, {});
 
     CScript nested_reference;
     AppendDefinition(nested_reference, OneOp(OP_CALLMACRO));
     AppendReference(nested_reference, 0);
-    CheckError(nested_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(nested_reference, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript self_body;
     AppendReference(self_body, 0);
     CScript self_reference;
     AppendDefinition(self_reference, self_body);
     AppendReference(self_reference, 0);
-    CheckError(self_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(self_reference, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript forward_body;
     AppendReference(forward_body, 1);
@@ -544,26 +539,26 @@ BOOST_AUTO_TEST_CASE(fragment_bodies_are_validated_when_referenced)
     AppendDefinition(forward_reference, forward_body);
     AppendDefinition(forward_reference, OneOp(OP_1));
     AppendReference(forward_reference, 0);
-    CheckError(forward_reference, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(forward_reference, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript unreferenced_forward;
     AppendDefinition(unreferenced_forward, forward_body);
     AppendDefinition(unreferenced_forward, OneOp(OP_1));
     unreferenced_forward << OP_1;
-    CheckEval(unreferenced_forward, {}, {Num(1)}, 0);
+    CheckError(unreferenced_forward, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript unbalanced;
     AppendDefinition(unbalanced, OneOp(OP_IF));
     unbalanced << OP_0 << OP_IF;
     AppendReference(unbalanced, 0);
     unbalanced << OP_ENDIF << OP_1;
-    CheckError(unbalanced, {}, 0, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
+    CheckError(unbalanced, {}, SCRIPT_ERR_UNBALANCED_CONDITIONAL);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_prescan_reuses_body_summary_and_preserves_order)
+BOOST_AUTO_TEST_CASE(macro_decoding_is_linear_and_in_serialized_order)
 {
-    // Re-decoding this body for every reference would process over 2 GB of
-    // pushed data before reaching the OP_SUCCESS in the main script.
+    // Decoding does not follow references: 8,192 references to a 256 kB body
+    // are decoded as 8,192 two-byte instructions.
     CScript body;
     body << valtype(256'000, 0x42) << OP_DROP;
     CScript repeated;
@@ -585,18 +580,17 @@ BOOST_AUTO_TEST_CASE(fragment_prescan_reuses_body_summary_and_preserves_order)
     AppendReference(failure_first, 0);
     failure_first << OP_RESERVED;
     error = SCRIPT_ERR_UNKNOWN_ERROR;
-    BOOST_CHECK(!CheckTapscriptOpSuccess(failure_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error).has_value());
-    BOOST_CHECK_EQUAL(EvalTapscriptV2(failure_first, {}, 1'000'000).error, SCRIPT_ERR_BAD_OPCODE);
+    BOOST_CHECK(CheckTapscriptOpSuccess(failure_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error) == std::optional<bool>{false});
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
 
-    CScript success_first;
-    AppendDefinition(success_first, malformed_body);
-    success_first << OP_RESERVED;
-    AppendReference(success_first, 0);
+    // The malformed body precedes the main script's OP_SUCCESS in serialized order.
+    CScript body_failure_first;
+    AppendDefinition(body_failure_first, malformed_body);
+    body_failure_first << OP_RESERVED;
+    AppendReference(body_failure_first, 0);
     error = SCRIPT_ERR_UNKNOWN_ERROR;
-    const auto earlier_success{CheckTapscriptOpSuccess(success_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
-    BOOST_REQUIRE(earlier_success.has_value());
-    BOOST_CHECK(*earlier_success);
-    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
+    BOOST_CHECK(CheckTapscriptOpSuccess(body_failure_first, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error) == std::optional<bool>{false});
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
 
     CScript success_before_malformed_body;
     success_before_malformed_body << OP_RESERVED << OP_PUSHDATA4;
@@ -610,7 +604,7 @@ BOOST_AUTO_TEST_CASE(fragment_prescan_reuses_body_summary_and_preserves_order)
     BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
 }
 
-BOOST_AUTO_TEST_CASE(nested_fragment_prescan_is_linear_and_preserves_order)
+BOOST_AUTO_TEST_CASE(nested_macro_decoding_is_linear_and_in_serialized_order)
 {
     CScript branching;
     AppendDefinition(branching, OneOp(OP_NOP));
@@ -653,11 +647,12 @@ BOOST_AUTO_TEST_CASE(nested_fragment_prescan_is_linear_and_preserves_order)
     AppendDefinition(nested_failure, outer_failure);
     AppendReference(nested_failure, 1);
     error = SCRIPT_ERR_UNKNOWN_ERROR;
-    BOOST_CHECK(!CheckTapscriptOpSuccess(nested_failure, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error).has_value());
+    BOOST_CHECK(CheckTapscriptOpSuccess(nested_failure, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error) == std::optional<bool>{false});
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
     BOOST_CHECK_EQUAL(EvalTapscriptV2(nested_failure, {}, 1'000'000).error, SCRIPT_ERR_BAD_OPCODE);
 }
 
-BOOST_AUTO_TEST_CASE(nested_fragment_depth_is_bounded_by_declarations)
+BOOST_AUTO_TEST_CASE(nested_macro_depth_is_bounded_by_declarations)
 {
     CScript script;
     AppendDefinition(script, OneOp(OP_1));
@@ -672,22 +667,22 @@ BOOST_AUTO_TEST_CASE(nested_fragment_depth_is_bounded_by_declarations)
     BOOST_CHECK(outcome.stack == Stack{Num(1)});
 }
 
-BOOST_AUTO_TEST_CASE(fragment_definitions_are_prefix_only)
+BOOST_AUTO_TEST_CASE(macro_declarations_are_prefix_only)
 {
     CScript script;
     AppendDefinition(script, OneOp(OP_1));
     script << OP_0 << OP_IF << OP_MACRO << OP_ENDIF << OP_1;
-    CheckError(script, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(script, {}, SCRIPT_ERR_BAD_OPCODE);
 
     CScript body_with_definition;
     body_with_definition << OP_MACRO << OP_0;
     CScript referenced;
     AppendDefinition(referenced, body_with_definition);
     AppendReference(referenced, 0);
-    CheckError(referenced, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(referenced, {}, SCRIPT_ERR_BAD_OPCODE);
 }
 
-BOOST_AUTO_TEST_CASE(inactive_fragment_charges_reference_and_conditional_control)
+BOOST_AUTO_TEST_CASE(inactive_macro_pays_unrolling_charge)
 {
     const CScript body{CScript{} << OP_0 << OP_IF << OP_1 << OP_ENDIF};
     CScript script;
@@ -695,14 +690,51 @@ BOOST_AUTO_TEST_CASE(inactive_fragment_charges_reference_and_conditional_control
     script << OP_0 << OP_IF;
     AppendReference(script, 0);
     script << OP_ENDIF << OP_1;
+    const CScript inline_script{CScript{} << OP_0 << OP_IF << OP_0 << OP_IF << OP_1 << OP_ENDIF << OP_ENDIF << OP_1};
 
-    const uint64_t body_control_cost{varops::ExecutionCost(OP_IF) + varops::ExecutionCost(OP_ENDIF)};
-    const uint64_t additional{varops::MacroDecodeCost(body.size()) + body_control_cost};
-    CheckEval(script, {}, {Num(1)}, additional);
-    CheckError(script, {}, additional - 1, SCRIPT_ERR_VAROP_COUNT);
+    // Conditional-control instructions pay their ordinary charge, as inline.
+    // Unrolling pays for the reference and its four substituted instructions.
+    const EvalOutcome inlined{EvalTapscriptV2(inline_script, {}, AMPLE_VAROPS_BUDGET)};
+    const EvalOutcome macro{EvalTapscriptV2(script, {}, AMPLE_VAROPS_BUDGET)};
+    BOOST_REQUIRE(inlined.ok);
+    BOOST_REQUIRE(macro.ok);
+    BOOST_CHECK(macro.stack == inlined.stack);
+    BOOST_CHECK_EQUAL(inlined.remaining_budget - macro.remaining_budget,
+                      MacroUnrollCharge(4, 1));
+    CheckError(script, {}, SCRIPT_ERR_VAROP_COUNT);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_conditionals_cross_boundaries)
+BOOST_AUTO_TEST_CASE(inactive_macro_body_instructions_pay_unrolling)
+{
+    // Every instruction substituted from a body pays one unrolling unit, even
+    // in an inactive branch; there is no size-dependent charge.
+    const auto charged = [](const CScript& body) {
+        CScript script;
+        AppendDefinition(script, body);
+        script << OP_0 << OP_IF;
+        AppendReference(script, 0);
+        script << OP_ENDIF << OP_1;
+        const EvalOutcome outcome{EvalTapscriptV2(script, {}, AMPLE_VAROPS_BUDGET)};
+        BOOST_REQUIRE(outcome.ok);
+        const uint64_t consumed{AMPLE_VAROPS_BUDGET - outcome.remaining_budget};
+        BOOST_CHECK_EQUAL(EvalTapscriptV2(script, {}, consumed - 1).error, SCRIPT_ERR_VAROP_COUNT);
+        return consumed;
+    };
+    const auto nops = [](size_t count) {
+        CScript body;
+        body.insert(body.end(), count, static_cast<unsigned char>(OP_NOP));
+        return body;
+    };
+    const uint64_t empty{charged(CScript{})};
+    for (const size_t count : {1U, 3U, 4U, 1000U}) {
+        BOOST_CHECK_EQUAL(charged(nops(count)) - empty, MacroUnrollCharge(count, 0));
+    }
+    // Inactive control opcodes also pay F as inline.
+    const CScript mixed{CScript{} << OP_NOP << OP_IF << OP_NOP << OP_ENDIF << OP_NOP};
+    BOOST_CHECK_EQUAL(charged(mixed) - empty, 2 * varops::FixedOpcodeCost() + MacroUnrollCharge(5, 0));
+}
+
+BOOST_AUTO_TEST_CASE(macro_conditionals_cross_boundaries)
 {
     const CScript opening{CScript{} << OP_IF << OP_DUP};
     CScript script;
@@ -710,8 +742,7 @@ BOOST_AUTO_TEST_CASE(fragment_conditionals_cross_boundaries)
     script << Num(9) << OP_1;
     AppendReference(script, 0);
     script << OP_ENDIF;
-    CheckEval(script, {}, {Num(9), Num(9)}, InvokedBodyCost(opening) +
-              varops::COST_COPYING * Num(9).size());
+    CheckEval(script, {}, {Num(9), Num(9)});
 
     const CScript flipping{CScript{} << OP_ELSE << OP_2};
     CScript inactive;
@@ -719,7 +750,7 @@ BOOST_AUTO_TEST_CASE(fragment_conditionals_cross_boundaries)
     inactive << OP_0 << OP_IF;
     AppendReference(inactive, 0);
     inactive << OP_ENDIF;
-    CheckEval(inactive, {}, {Num(2)}, InvokedBodyCost(flipping));
+    CheckEval(inactive, {}, {Num(2)});
 
     CScript nested_flipping;
     AppendReference(nested_flipping, 0);
@@ -729,10 +760,10 @@ BOOST_AUTO_TEST_CASE(fragment_conditionals_cross_boundaries)
     nested_inactive << OP_0 << OP_IF;
     AppendReference(nested_inactive, 1);
     nested_inactive << OP_ENDIF;
-    CheckEval(nested_inactive, {}, {Num(2)}, InvokedBodyCost(nested_flipping) + InvokedBodyCost(flipping));
+    CheckEval(nested_inactive, {}, {Num(2)});
 }
 
-BOOST_AUTO_TEST_CASE(fragment_signature_uses_callers_codeseparator)
+BOOST_AUTO_TEST_CASE(macro_signature_uses_callers_codeseparator)
 {
     const CScript body{OneOp(OP_CHECKSIG)};
     CScript script;
@@ -749,7 +780,7 @@ BOOST_AUTO_TEST_CASE(fragment_signature_uses_callers_codeseparator)
     BOOST_CHECK_EQUAL(checker.last_codeseparator_pos, 0);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_codeseparator_uses_unrolled_position)
+BOOST_AUTO_TEST_CASE(macro_codeseparator_uses_unrolled_position)
 {
     const CScript body{OneOp(OP_CODESEPARATOR)};
     CScript script;
@@ -794,26 +825,6 @@ BOOST_AUTO_TEST_CASE(fragment_codeseparator_uses_unrolled_position)
     BOOST_CHECK_EQUAL(skipped_checker.last_codeseparator_pos, 131);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_codeseparator_position_does_not_wrap)
-{
-    // 4096 references to 2^20 skipped opcodes place the next opcode beyond uint32.
-    CScript body;
-    body.insert(body.end(), 1 << 20, static_cast<unsigned char>(OP_NOP));
-    CScript script;
-    AppendDefinition(script, body);
-    script << OP_0 << OP_IF;
-    for (int i{0}; i < 4096; ++i) AppendReference(script, 0);
-    script << OP_ENDIF;
-
-    CScript without_separator{script};
-    without_separator << OP_1;
-    CheckEval(without_separator, {}, {Num(1)},
-              uint64_t{4096} * (varops::FixedOpcodeCost() + varops::MacroDecodeCost(body.size())));
-
-    script << OP_CODESEPARATOR << OP_1;
-    CheckError(script, {}, 0, SCRIPT_ERR_OP_CODESEPARATOR);
-}
-
 BOOST_AUTO_TEST_CASE(referenced_op_success_is_terminal)
 {
     CScript body;
@@ -852,7 +863,7 @@ BOOST_AUTO_TEST_CASE(referenced_op_success_is_terminal)
     BOOST_CHECK(outcome.ok);
 }
 
-BOOST_AUTO_TEST_CASE(witness_data_cannot_define_fragment_body)
+BOOST_AUTO_TEST_CASE(witness_data_cannot_define_macro_body)
 {
     CKey key;
     key.MakeNewKey(/*fCompressed=*/true);
@@ -893,7 +904,7 @@ BOOST_AUTO_TEST_CASE(witness_data_cannot_define_fragment_body)
     BOOST_CHECK_EQUAL(discouraged_error, SCRIPT_ERR_CHECKSIGVERIFY);
 }
 
-BOOST_AUTO_TEST_CASE(fragment_declarations_do_not_use_stack_limits)
+BOOST_AUTO_TEST_CASE(macro_declarations_do_not_use_stack_limits)
 {
     const valtype maximum_body(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x00);
     const valtype maximum_live_value(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
@@ -901,11 +912,11 @@ BOOST_AUTO_TEST_CASE(fragment_declarations_do_not_use_stack_limits)
     CScript define_maximum_body;
     AppendDefinition(define_maximum_body, CScript{maximum_body.begin(), maximum_body.end()});
     define_maximum_body << OP_1;
-    CheckEval(define_maximum_body, byte_limit_stack, {maximum_live_value, Num(1)}, 0);
+    CheckEval(define_maximum_body, byte_limit_stack, {maximum_live_value, Num(1)});
 
     CScript exceed_byte_limit{define_maximum_body};
     exceed_byte_limit << OP_SWAP << OP_DUP;
-    CheckError(exceed_byte_limit, byte_limit_stack, 0, SCRIPT_ERR_TOTAL_STACK_SIZE);
+    CheckError(exceed_byte_limit, byte_limit_stack, SCRIPT_ERR_TOTAL_STACK_SIZE);
 
     Stack entry_limit_stack(MAX_TAPSCRIPT_V2_STACK_SIZE - 1, valtype{});
     CScript exact_entry_limit;
@@ -918,7 +929,7 @@ BOOST_AUTO_TEST_CASE(fragment_declarations_do_not_use_stack_limits)
     CScript exceed_entry_limit;
     AppendDefinition(exceed_entry_limit, CScript{});
     exceed_entry_limit << OP_0 << OP_0;
-    CheckError(exceed_entry_limit, entry_limit_stack, 0, SCRIPT_ERR_STACK_SIZE);
+    CheckError(exceed_entry_limit, entry_limit_stack, SCRIPT_ERR_STACK_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(base_evalscript_rejects_tapscript_v2)
@@ -1022,7 +1033,6 @@ BOOST_AUTO_TEST_CASE(final_result_costs)
 
 BOOST_AUTO_TEST_CASE(producer_lifetime_accounting)
 {
-    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return;
     for (size_t size : {0U, 1U, 521U, 65536U}) {
         const Stack initial{valtype(size, 0x42)};
         const uint64_t creation{varops::CopyCost(size)};
@@ -1042,18 +1052,16 @@ BOOST_AUTO_TEST_CASE(producer_lifetime_accounting)
         const valtype zero;
         const Stack shrink_initial{initial.front(), zero};
         const uint64_t shrink_cost{creation + varops::CopyCost(0) + 2 * varops::FixedOpcodeCost() +
-                                   varops::PrepCost(0) + varops::ReadCost(0)};
+                                   varops::PrepCost(0) + varops::ReadCost(0) + varops::CopyCost(0)};
         const auto shrink{test::tapscript_v2::EvalTapscriptV2(CScript{} << OP_LEFT << OP_DROP, shrink_initial, shrink_cost)};
         BOOST_REQUIRE(shrink.ok);
         BOOST_CHECK_EQUAL(shrink.remaining_budget, 0);
     }
-    // Multiplication constructs both a full-span result and a scratch row.
-    // Their production is charged before the row kernel, not at final output size.
+    // Multiplication produces its full-span result before the multiplication,
+    // not at the final output size; MUL covers its scratch storage.
     const Stack operands{Num(2), Num(3)};
     const uint64_t preflight{2 * varops::CopyCost(1) + varops::FixedOpcodeCost() +
-                             2 * varops::PrepCost(1) + varops::CopyCost(16) +
-                             varops::PrepCost(16) + varops::CopyCost(16) +
-                             varops::MulRowCost(1) + varops::ArithCost(16)};
+                             2 * varops::PrepCost(1) + varops::MulCost(1, 1) + varops::CopyCost(16)};
     const uint64_t materialize{varops::OutputCost(1) - varops::CopyCost(8)};
     const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(OP_MUL), operands, preflight + materialize)};
     BOOST_REQUIRE(exact.ok);
@@ -1067,7 +1075,6 @@ BOOST_AUTO_TEST_CASE(producer_lifetime_accounting)
 
 BOOST_AUTO_TEST_CASE(producer_composition_boundaries)
 {
-    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return;
     const auto check = [](opcodetype opcode, const Stack& inputs, const valtype& output, uint64_t work) {
         const uint64_t total{InitialLifetimeCost(inputs) + varops::FixedOpcodeCost() + work};
         const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), inputs, total)};
@@ -1104,16 +1111,15 @@ BOOST_AUTO_TEST_CASE(producer_composition_boundaries)
     }
 }
 
-BOOST_AUTO_TEST_CASE(in_place_splice_costs)
+BOOST_AUTO_TEST_CASE(shortening_splice_costs)
 {
     for (const size_t size : {8U, 521U, 65536U, 3950000U}) {
         for (const size_t retained : {size_t{0}, size_t{1}, size / 2, size}) {
             const valtype offset{Num(retained)};
             for (const opcodetype opcode : {OP_LEFT, OP_RIGHT}) {
-                const uint64_t cost{(varops::PRODUCER_LIFETIME_EXPERIMENT ? varops::CopyCost(size) + varops::CopyCost(offset.size()) : 0) +
+                const uint64_t cost{varops::CopyCost(size) + varops::CopyCost(offset.size()) +
                                     varops::FixedOpcodeCost() + varops::PrepCost(offset.size()) +
-                                    varops::ReadCost(offset.size()) +
-                                    (opcode == OP_RIGHT ? varops::CopyCost(retained) - varops::CopyCost(0) : 0)};
+                                    varops::ReadCost(offset.size()) + varops::CopyCost(retained)};
                 const Stack initial{valtype(size, 0x42), offset};
                 const auto exact{test::tapscript_v2::EvalTapscriptV2(OneOp(opcode), initial, cost)};
                 BOOST_REQUIRE(exact.ok);
@@ -1130,118 +1136,88 @@ BOOST_AUTO_TEST_CASE(in_place_splice_costs)
 
 BOOST_AUTO_TEST_CASE(splice_opcodes_follow_bip441_byte_ranges)
 {
-    CheckEval(OneOp(OP_CAT), {Bytes("ab"), Bytes("cde")}, {Bytes("abcde")}, (2 + 3) * varops::COST_COPYING);
+    CheckEval(OneOp(OP_CAT), {Bytes("ab"), Bytes("cde")}, {Bytes("abcde")});
 
     CScript substr;
     substr << OP_SUBSTR;
-    CheckEval(substr, {Bytes("abcdef"), Num(2), Num(3)}, {Bytes("cde")},
-              varops::LengthConversionCost(1) + varops::LengthConversionCost(1) + 3 * varops::COST_COPYING);
+    CheckEval(substr, {Bytes("abcdef"), Num(2), Num(3)}, {Bytes("cde")});
     CheckError(substr, {Bytes("abcdef"), Num(2), Num(3)},
-               varops::LengthConversionCost(1) + varops::LengthConversionCost(1) + 3 * varops::COST_COPYING - 1,
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(substr, {Bytes("abcdef"), Num(9), Num(3)}, {Bytes({})},
-              varops::LengthConversionCost(1) + varops::LengthConversionCost(1));
-    CheckEval(substr, {Bytes("abcdef"), Num(6), Num(3)}, {Bytes({})},
-              varops::LengthConversionCost(1) + varops::LengthConversionCost(1));
-    CheckEval(substr, {Bytes("abcdef"), Num(4), Num(9)}, {Bytes("ef")},
-              varops::LengthConversionCost(1) + varops::LengthConversionCost(1) + 2 * varops::COST_COPYING);
-    CheckEval(substr, {Bytes("abcdef"), Num(2), LargerThanU64()}, {Bytes("cdef")},
-              varops::LengthConversionCost(1) + varops::LengthConversionCost(9) + 4 * varops::COST_COPYING);
-    CheckEval(substr, {Bytes("abcdef"), LargerThanU64(), LargerThanU64()}, {Bytes({})},
-              varops::LengthConversionCost(9) + varops::LengthConversionCost(9));
+    CheckEval(substr, {Bytes("abcdef"), Num(9), Num(3)}, {Bytes({})});
+    CheckEval(substr, {Bytes("abcdef"), Num(6), Num(3)}, {Bytes({})});
+    CheckEval(substr, {Bytes("abcdef"), Num(4), Num(9)}, {Bytes("ef")});
+    CheckEval(substr, {Bytes("abcdef"), Num(2), LargerThanU64()}, {Bytes("cdef")});
+    CheckEval(substr, {Bytes("abcdef"), LargerThanU64(), LargerThanU64()}, {Bytes({})});
 
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(0)}, {Bytes({})}, 0);
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(2)}, {Bytes("ab")}, varops::LengthConversionCost(1));
-    CheckError(OneOp(OP_LEFT), {Bytes("abcdef"), Num(2)}, varops::LengthConversionCost(1) - 1,
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(0)}, {Bytes({})});
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(2)}, {Bytes("ab")});
+    CheckError(OneOp(OP_LEFT), {Bytes("abcdef"), Num(2)},
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(9)}, {Bytes("abcdef")}, varops::LengthConversionCost(1));
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), LargerThanU64()}, {Bytes("abcdef")}, varops::LengthConversionCost(9));
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Bytes({0x02, 0x00, 0x00})}, {Bytes("ab")},
-              varops::LengthConversionCost(3));
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Num(9)}, {Bytes("abcdef")});
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), LargerThanU64()}, {Bytes("abcdef")});
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), Bytes({0x02, 0x00, 0x00})}, {Bytes("ab")});
 
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(0)}, {Bytes({})}, 0);
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(2)}, {Bytes("ef")},
-              varops::LengthConversionCost(1) + 2 * varops::COST_COPYING);
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(0)}, {Bytes({})});
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(2)}, {Bytes("ef")});
     CheckError(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(2)},
-               varops::LengthConversionCost(1) + 2 * varops::COST_COPYING - 1,
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(9)}, {Bytes("abcdef")},
-              varops::LengthConversionCost(1) + 6 * varops::COST_COPYING);
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), LargerThanU64()}, {Bytes("abcdef")},
-              varops::LengthConversionCost(9) + 6 * varops::COST_COPYING);
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Bytes({0x02, 0x00, 0x00})}, {Bytes("ef")},
-              varops::LengthConversionCost(3) + 2 * varops::COST_COPYING);
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Num(9)}, {Bytes("abcdef")});
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), LargerThanU64()}, {Bytes("abcdef")});
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), Bytes({0x02, 0x00, 0x00})}, {Bytes("ef")});
 }
 
 BOOST_AUTO_TEST_CASE(length_operands_charge_encoded_width_even_when_value_is_zero)
 {
     const valtype padded_zero{Bytes({0x00, 0x00, 0x00})};
-    const uint64_t padded_zero_cost{varops::LengthConversionCost(padded_zero.size())};
 
-    CheckEval(OneOp(OP_SUBSTR), {Bytes("abcdef"), padded_zero, padded_zero}, {Bytes({})},
-              padded_zero_cost + padded_zero_cost);
-    CheckError(OneOp(OP_SUBSTR), {Bytes("abcdef"), padded_zero, padded_zero},
-               padded_zero_cost + padded_zero_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_SUBSTR), {Bytes("abcdef"), padded_zero, padded_zero}, {Bytes({})});
+    CheckError(OneOp(OP_SUBSTR), {Bytes("abcdef"), padded_zero, padded_zero}, SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), padded_zero}, {Bytes({})}, padded_zero_cost);
-    CheckError(OneOp(OP_LEFT), {Bytes("abcdef"), padded_zero}, padded_zero_cost - 1,
+    CheckEval(OneOp(OP_LEFT), {Bytes("abcdef"), padded_zero}, {Bytes({})});
+    CheckError(OneOp(OP_LEFT), {Bytes("abcdef"), padded_zero},
                SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), padded_zero}, {Bytes({})}, padded_zero_cost);
-    CheckError(OneOp(OP_RIGHT), {Bytes("abcdef"), padded_zero}, padded_zero_cost - 1,
+    CheckEval(OneOp(OP_RIGHT), {Bytes("abcdef"), padded_zero}, {Bytes({})});
+    CheckError(OneOp(OP_RIGHT), {Bytes("abcdef"), padded_zero},
                SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), padded_zero}, {Bytes({0x12, 0x34})},
-              padded_zero_cost + 2 * varops::COST_COPYING);
-    CheckError(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), padded_zero},
-               padded_zero_cost + 2 * varops::COST_COPYING - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), padded_zero}, {Bytes({0x12, 0x34})});
+    CheckError(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), padded_zero}, SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), padded_zero}, {Bytes({0x12, 0x34})},
-              padded_zero_cost + 2 * varops::COST_COPYING);
-    CheckError(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), padded_zero},
-               padded_zero_cost + 2 * varops::COST_COPYING - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), padded_zero}, {Bytes({0x12, 0x34})});
+    CheckError(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), padded_zero}, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(restored_bit_opcodes_preserve_non_arithmetic_width)
 {
-    CheckEval(OneOp(OP_INVERT), {Bytes({0x00, 0xff})}, {Bytes({0xff, 0x00})}, varops::InvertCost(2));
-    CheckEval(OneOp(OP_AND), {Bytes({0xff, 0xff}), Bytes({0x0f})}, {Bytes({0x0f, 0x00})}, varops::AndCost(2, 1));
-    CheckEval(OneOp(OP_OR), {Bytes({0x00, 0x00}), Bytes({0x00})}, {Bytes({0x00, 0x00})}, varops::OrCost(2, 1));
-    CheckEval(OneOp(OP_XOR), {Bytes({0x01, 0x00}), Bytes({0x01})}, {Bytes({0x00, 0x00})}, varops::XorCost(2, 1));
+    CheckEval(OneOp(OP_INVERT), {Bytes({0x00, 0xff})}, {Bytes({0xff, 0x00})});
+    CheckEval(OneOp(OP_AND), {Bytes({0xff, 0xff}), Bytes({0x0f})}, {Bytes({0x0f, 0x00})});
+    CheckEval(OneOp(OP_OR), {Bytes({0x00, 0x00}), Bytes({0x00})}, {Bytes({0x00, 0x00})});
+    CheckEval(OneOp(OP_XOR), {Bytes({0x01, 0x00}), Bytes({0x01})}, {Bytes({0x00, 0x00})});
 
     CScript invert_then_add;
     invert_then_add << OP_INVERT << OP_1ADD;
-    CheckEval(invert_then_add, {Bytes({0x00})}, {Bytes({0x00, 0x01})},
-              varops::InvertCost(1) + varops::AddCost(1, 1));
+    CheckEval(invert_then_add, {Bytes({0x00})}, {Bytes({0x00, 0x01})});
 }
 
 BOOST_AUTO_TEST_CASE(restored_shift_opcodes_are_raw_bitshifts)
 {
-    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), Num(0)}, {Bytes({0x12, 0x34})},
-              2 * varops::COST_COPYING);
-    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(1)}, {Bytes({0x02, 0x00})},
-              varops::LengthConversionCost(1) + 1 * varops::COST_COPYING + varops::UnalignedUpShiftCost(1, 0));
+    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x12, 0x34}), Num(0)}, {Bytes({0x12, 0x34})});
+    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(1)}, {Bytes({0x02, 0x00})});
     CheckError(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(1)},
-               varops::LengthConversionCost(1) + 1 * varops::COST_COPYING + varops::UnalignedUpShiftCost(1, 0) - 1,
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(OneOp(OP_LSHIFT), {Bytes({}), Num(1)}, {Bytes({0x00})}, varops::LengthConversionCost(1));
-    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(8)}, {Bytes({0x00, 0x01})},
-              varops::LengthConversionCost(1) + 1 * varops::COST_FAST + 1 * varops::COST_COPYING);
+    CheckEval(OneOp(OP_LSHIFT), {Bytes({}), Num(1)}, {Bytes({0x00})});
+    CheckEval(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(8)}, {Bytes({0x00, 0x01})});
     CheckError(OneOp(OP_LSHIFT), {Bytes({0x01}), Num(8)},
-               varops::LengthConversionCost(1) + 1 * varops::COST_FAST + 1 * varops::COST_COPYING - 1,
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), Num(0)}, {Bytes({0x12, 0x34})},
-              2 * varops::COST_COPYING);
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x02, 0x00}), Num(1)}, {Bytes({0x01, 0x00})},
-              varops::LengthConversionCost(1) + 2 * varops::COST_COPYING);
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), Num(0)}, {Bytes({0x12, 0x34})});
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x02, 0x00}), Num(1)}, {Bytes({0x01, 0x00})});
     CheckError(OneOp(OP_RSHIFT), {Bytes({0x02, 0x00}), Num(1)},
-               varops::LengthConversionCost(1) + 2 * varops::COST_COPYING - 1,
                SCRIPT_ERR_VAROP_COUNT);
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({}), Num(1)}, {Bytes({})}, varops::LengthConversionCost(1));
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({0xff}), Num(8)}, {Bytes({})}, varops::LengthConversionCost(1));
-    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), LargerThanU64()}, {Bytes({})},
-              varops::LengthConversionCost(9));
-    CheckError(OneOp(OP_LSHIFT), {Bytes({0x01}), LargerThanU64()}, 0, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({}), Num(1)}, {Bytes({})});
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({0xff}), Num(8)}, {Bytes({})});
+    CheckEval(OneOp(OP_RSHIFT), {Bytes({0x12, 0x34}), LargerThanU64()}, {Bytes({})});
+    CheckError(OneOp(OP_LSHIFT), {Bytes({0x01}), LargerThanU64()}, SCRIPT_ERR_STACK_ELEMENT_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_costed_opcodes_reject_missing_stack_elements)
@@ -1302,47 +1278,69 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_costed_opcodes_reject_missing_stack_elements)
              std::pair{OP_RSHIFT, Stack{Bytes("a")}},
          }) {
         BOOST_TEST_CONTEXT("opcode " << static_cast<int>(opcode)) {
-            CheckError(OneOp(opcode), stack, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+            CheckError(OneOp(opcode), stack, SCRIPT_ERR_INVALID_STACK_OPERATION);
         }
     }
 }
 
 BOOST_AUTO_TEST_CASE(bip342_restricted_opcodes_remain_restricted_in_tapscript_v2)
 {
-    CheckError(OneOp(OP_RETURN), {}, 0, SCRIPT_ERR_OP_RETURN);
-    CheckError(OneOp(OP_CHECKMULTISIG), {}, 0, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
-    CheckError(OneOp(OP_CHECKMULTISIGVERIFY), {}, 0, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
+    CheckError(OneOp(OP_RETURN), {}, SCRIPT_ERR_OP_RETURN);
+    CheckError(OneOp(OP_CHECKMULTISIG), {}, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
+    CheckError(OneOp(OP_CHECKMULTISIGVERIFY), {}, SCRIPT_ERR_TAPSCRIPT_CHECKMULTISIG);
 }
 
 BOOST_AUTO_TEST_CASE(restored_multiply_divide_and_modulo_opcodes)
 {
-    CheckEval(OneOp(OP_2MUL), {Bytes({0x80})}, {Bytes({0x00, 0x01})}, varops::TwoMulCost(1));
-    CheckEval(OneOp(OP_2DIV), {Bytes({0x01})}, {Bytes({})}, varops::TwoDivCost(1));
+    CheckEval(OneOp(OP_2MUL), {Bytes({0x80})}, {Bytes({0x00, 0x01})});
+    CheckEval(OneOp(OP_2DIV), {Bytes({0x01})}, {Bytes({})});
 
-    CheckEval(OneOp(OP_MUL), {Bytes({0xff, 0xff}), Bytes({0x02})}, {Bytes({0xfe, 0xff, 0x01})}, varops::MulCost(2, 1));
-    CheckEval(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x7b})}, varops::DivCost(2, 1));
-    CheckEval(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x2d})}, varops::ModCost(2, 1));
+    CheckEval(OneOp(OP_MUL), {Bytes({0xff, 0xff}), Bytes({0x02})}, {Bytes({0xfe, 0xff, 0x01})});
+    CheckEval(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x7b})});
+    CheckEval(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x2d})});
 
     for (const valtype& divisor : {Bytes({}), Bytes({0x00, 0x00})}) {
-        CheckError(OneOp(OP_DIV), {Bytes({0x01}), divisor}, varops::DivCost(1, divisor.size()), SCRIPT_ERR_DIVIDE_BY_ZERO);
-        CheckError(OneOp(OP_MOD), {Bytes({0x01}), divisor}, varops::ModCost(1, divisor.size()), SCRIPT_ERR_DIVIDE_BY_ZERO);
+        CheckError(OneOp(OP_DIV), {Bytes({0x01}), divisor}, SCRIPT_ERR_DIVIDE_BY_ZERO);
+        CheckError(OneOp(OP_MOD), {Bytes({0x01}), divisor}, SCRIPT_ERR_DIVIDE_BY_ZERO);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(divmod_charge_is_not_reduced_by_zero_padding)
+{
+    constexpr uint64_t ample_budget{std::numeric_limits<uint64_t>::max()};
+    const auto consumed{[&](opcodetype opcode, const valtype& dividend, const valtype& divisor) {
+        const EvalOutcome outcome{EvalTapscriptV2(OneOp(opcode), {dividend, divisor}, ample_budget)};
+        BOOST_CHECK(outcome.ok);
+        return ample_budget - outcome.remaining_budget;
+    }};
+    const valtype dividend(4096, 0xff);
+    const valtype divisor(2048, 0x7f);
+    valtype padded_divisor{divisor};
+    padded_divisor.resize(dividend.size(), 0);
+    for (const opcodetype opcode : {OP_DIV, OP_MOD}) {
+        BOOST_TEST_CONTEXT(GetOpName(opcode))
+        {
+            const uint64_t minimal{consumed(opcode, dividend, divisor)};
+            BOOST_CHECK_GE(minimal, varops::DivCoreCost(varops::DivSteps(512, 256), 256));
+            BOOST_CHECK_GE(consumed(opcode, dividend, padded_divisor), minimal);
+        }
     }
 }
 
 BOOST_AUTO_TEST_CASE(extended_arithmetic_is_unsigned_and_normalized)
 {
-    CheckEval(OneOp(OP_1ADD), {Bytes({0xff})}, {Bytes({0x00, 0x01})}, varops::AddCost(1, 1));
-    CheckEval(OneOp(OP_1SUB), {Bytes({0x01})}, {Bytes({})}, varops::SubCost(1, 1));
-    CheckEval(OneOp(OP_ADD), {Bytes({0x01, 0x00, 0x00}), Bytes({})}, {Bytes({0x01})}, varops::AddCost(3, 0));
-    CheckEval(OneOp(OP_SUB), {Bytes({0x00, 0x01}), Bytes({0x01})}, {Bytes({0xff})}, varops::SubCost(2, 1));
+    CheckEval(OneOp(OP_1ADD), {Bytes({0xff})}, {Bytes({0x00, 0x01})});
+    CheckEval(OneOp(OP_1SUB), {Bytes({0x01})}, {Bytes({})});
+    CheckEval(OneOp(OP_ADD), {Bytes({0x01, 0x00, 0x00}), Bytes({})}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_SUB), {Bytes({0x00, 0x01}), Bytes({0x01})}, {Bytes({0xff})});
 
-    CheckError(OneOp(OP_1SUB), {Bytes({})}, varops::SubCost(0, 1), SCRIPT_ERR_SUB_UNDERFLOW);
-    CheckError(OneOp(OP_1SUB), {Bytes({0x00})}, varops::SubCost(1, 1), SCRIPT_ERR_SUB_UNDERFLOW);
-    CheckError(OneOp(OP_SUB), {Bytes({0x01}), Bytes({0x02})}, varops::SubCost(1, 1), SCRIPT_ERR_SUB_UNDERFLOW);
-    CheckError(OneOp(OP_SUB), {Bytes({0x00}), Bytes({0x01})}, varops::SubCost(1, 1), SCRIPT_ERR_SUB_UNDERFLOW);
+    CheckError(OneOp(OP_1SUB), {Bytes({})}, SCRIPT_ERR_SUB_UNDERFLOW);
+    CheckError(OneOp(OP_1SUB), {Bytes({0x00})}, SCRIPT_ERR_SUB_UNDERFLOW);
+    CheckError(OneOp(OP_SUB), {Bytes({0x01}), Bytes({0x02})}, SCRIPT_ERR_SUB_UNDERFLOW);
+    CheckError(OneOp(OP_SUB), {Bytes({0x00}), Bytes({0x01})}, SCRIPT_ERR_SUB_UNDERFLOW);
 
-    CheckEval(OneOp(OP_MIN), {Bytes({0x01, 0x00}), Bytes({0x02})}, {Bytes({0x01})}, varops::MinMaxCost(2, 1));
-    CheckEval(OneOp(OP_MAX), {Bytes({0x01, 0x00}), Bytes({0x02})}, {Bytes({0x02})}, varops::MinMaxCost(2, 1));
+    CheckEval(OneOp(OP_MIN), {Bytes({0x01, 0x00}), Bytes({0x02})}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_MAX), {Bytes({0x01, 0x00}), Bytes({0x02})}, {Bytes({0x02})});
 }
 
 BOOST_AUTO_TEST_CASE(add_small_operand_matches_general_add)
@@ -1356,17 +1354,15 @@ BOOST_AUTO_TEST_CASE(add_small_operand_matches_general_add)
                 valtype right(short_size, 0);
                 if (!right.empty()) right[0] = 1;
                 Val64 a{valtype{left}}, b{valtype{right}};
-                uint64_t cost{0};
-                Val64::OpAdd(a, b, cost);
+                Val64::OpAdd(a, b);
                 const valtype expected{a.MoveToValtype()};
-                BOOST_CHECK_EQUAL(cost, varops::AddCost(long_size, short_size));
-                CheckEval(OneOp(OP_ADD), {left, right}, {expected}, cost);
-                CheckEval(OneOp(OP_ADD), {right, left}, {expected}, cost);
+                CheckEval(OneOp(OP_ADD), {left, right}, {expected});
+                CheckEval(OneOp(OP_ADD), {right, left}, {expected});
             }
         }
     }
     CheckEval(OneOp(OP_ADD), {valtype(8, 0xff), valtype(8, 0xff)},
-              {Bytes({0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01})}, varops::AddCost(8, 8));
+              {Bytes({0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01})});
 }
 
 BOOST_AUTO_TEST_CASE(checksigadd_failure_normalizes_numeric_operand)
@@ -1435,34 +1431,28 @@ BOOST_AUTO_TEST_CASE(checksigadd_enforces_numeric_result_boundaries)
 
 BOOST_AUTO_TEST_CASE(bip440_costed_legacy_ops_use_unsigned_values)
 {
-    CheckEval(OneOp(OP_EQUAL), {Bytes("same"), Bytes("same")}, {Bytes({0x01})}, 4 * varops::COST_FAST);
-    CheckEval(OneOp(OP_EQUAL), {Bytes("a"), Bytes("bb")}, {Bytes({})}, 0);
-    CheckEval(OneOp(OP_VERIFY), {Bytes({0x00, 0x01})}, {}, varops::LengthConversionCost(2));
-    CheckError(OneOp(OP_VERIFY), {Bytes({})}, 0, SCRIPT_ERR_VERIFY);
-    CheckError(OneOp(OP_VERIFY), {Bytes({0x00, 0x00})}, varops::CompareZeroCost(2), SCRIPT_ERR_VERIFY);
+    CheckEval(OneOp(OP_EQUAL), {Bytes("same"), Bytes("same")}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_EQUAL), {Bytes("a"), Bytes("bb")}, {Bytes({})});
+    CheckEval(OneOp(OP_VERIFY), {Bytes({0x00, 0x01})}, {});
+    CheckError(OneOp(OP_VERIFY), {Bytes({})}, SCRIPT_ERR_VERIFY);
+    CheckError(OneOp(OP_VERIFY), {Bytes({0x00, 0x00})}, SCRIPT_ERR_VERIFY);
 
-    CheckEval(OneOp(OP_NOT), {Bytes({0x00, 0x00})}, {Bytes({0x01})}, varops::CompareZeroCost(2));
-    CheckEval(OneOp(OP_0NOTEQUAL), {Bytes({0x00, 0x01})}, {Bytes({0x01})}, varops::CompareZeroCost(2));
-    CheckEval(OneOp(OP_NUMEQUAL), {Bytes({0x01}), Bytes({0x01, 0x00, 0x00})}, {Bytes({0x01})}, varops::ComparisonCost(1, 3));
-    CheckEval(OneOp(OP_BOOLAND), {Bytes({0x01, 0x00}), Bytes({})}, {Bytes({})}, varops::BoolAndCost(2, 0));
+    CheckEval(OneOp(OP_NOT), {Bytes({0x00, 0x00})}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_0NOTEQUAL), {Bytes({0x00, 0x01})}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_NUMEQUAL), {Bytes({0x01}), Bytes({0x01, 0x00, 0x00})}, {Bytes({0x01})});
+    CheckEval(OneOp(OP_BOOLAND), {Bytes({0x01, 0x00}), Bytes({})}, {Bytes({})});
 
-    CheckEval(OneOp(OP_PICK), {Bytes("bottom"), Bytes("top"), Bytes({0x01, 0x00, 0x00})}, {Bytes("bottom"), Bytes("top"), Bytes("bottom")},
-              varops::LengthConversionCost(3) + 6 * varops::COST_COPYING);
-    CheckEval(OneOp(OP_ROLL), {Bytes("bottom"), Bytes("top"), Bytes({0x01, 0x00, 0x00})}, {Bytes("top"), Bytes("bottom")},
-              varops::LengthConversionCost(3) + 1 * varops::COST_ROLL);
+    CheckEval(OneOp(OP_PICK), {Bytes("bottom"), Bytes("top"), Bytes({0x01, 0x00, 0x00})}, {Bytes("bottom"), Bytes("top"), Bytes("bottom")});
+    CheckEval(OneOp(OP_ROLL), {Bytes("bottom"), Bytes("top"), Bytes({0x01, 0x00, 0x00})}, {Bytes("top"), Bytes("bottom")});
 }
 
 BOOST_AUTO_TEST_CASE(costed_legacy_ops_report_exact_semantic_failures)
 {
-    CheckError(OneOp(OP_EQUALVERIFY), {Bytes("ab"), Bytes("ac")},
-               2 * varops::COST_FAST, SCRIPT_ERR_EQUALVERIFY);
-    CheckError(OneOp(OP_NUMEQUALVERIFY), {Bytes({0x01}), Bytes({0x02})},
-               varops::ComparisonCost(1, 1), SCRIPT_ERR_NUMEQUALVERIFY);
+    CheckError(OneOp(OP_EQUALVERIFY), {Bytes("ab"), Bytes("ac")}, SCRIPT_ERR_EQUALVERIFY);
+    CheckError(OneOp(OP_NUMEQUALVERIFY), {Bytes({0x01}), Bytes({0x02})}, SCRIPT_ERR_NUMEQUALVERIFY);
 
-    CheckError(OneOp(OP_PICK), {Bytes("only"), Num(1)},
-               varops::LengthConversionCost(1), SCRIPT_ERR_INVALID_STACK_OPERATION);
-    CheckError(OneOp(OP_ROLL), {Bytes("only"), Bytes({0xff})},
-               varops::LengthConversionCost(1), SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(OneOp(OP_PICK), {Bytes("only"), Num(1)}, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(OneOp(OP_ROLL), {Bytes("only"), Bytes({0xff})}, SCRIPT_ERR_INVALID_STACK_OPERATION);
 }
 
 BOOST_AUTO_TEST_CASE(locktime_sequence_operands_must_fit_transaction_fields)
@@ -1536,8 +1526,8 @@ BOOST_AUTO_TEST_CASE(hash_opcodes_follow_bip441_limits)
     const valtype large(MAX_SCRIPT_ELEMENT_SIZE + 1, 0x42);
     const valtype maximum(MAX_SCRIPT_ELEMENT_SIZE, 0x42);
 
-    CheckError(OneOp(OP_SHA1), {large}, 0, SCRIPT_ERR_HASH_OPERAND_SIZE);
-    CheckError(OneOp(OP_RIPEMD160), {large}, 0, SCRIPT_ERR_HASH_OPERAND_SIZE);
+    CheckError(OneOp(OP_SHA1), {large}, SCRIPT_ERR_HASH_OPERAND_SIZE);
+    CheckError(OneOp(OP_RIPEMD160), {large}, SCRIPT_ERR_HASH_OPERAND_SIZE);
 
     for (const opcodetype opcode : {OP_RIPEMD160, OP_SHA1, OP_SHA256, OP_HASH160, OP_HASH256}) {
         const size_t digest_size{opcode == OP_RIPEMD160 || opcode == OP_SHA1 || opcode == OP_HASH160 ? 20U : 32U};
@@ -1549,7 +1539,7 @@ BOOST_AUTO_TEST_CASE(hash_opcodes_follow_bip441_limits)
         BOOST_CHECK_EQUAL(outcome.remaining_budget, 0);
         BOOST_REQUIRE_EQUAL(outcome.stack.size(), 1);
         BOOST_CHECK_EQUAL(outcome.stack[0].size(), digest_size);
-        CheckError(OneOp(opcode), {maximum}, hash_cost - varops::FixedOpcodeCost() - 1,
+        CheckError(OneOp(opcode), {maximum},
                    SCRIPT_ERR_VAROP_COUNT);
     }
 
@@ -1566,17 +1556,17 @@ BOOST_AUTO_TEST_CASE(hash_opcodes_follow_bip441_limits)
 BOOST_AUTO_TEST_CASE(tapscript_v2_stack_limits_are_enforced)
 {
     Stack max_count_stack(MAX_TAPSCRIPT_V2_STACK_SIZE, Bytes({}));
-    CheckEval(OneOp(OP_NOP), max_count_stack, max_count_stack, 0);
-    CheckError(OneOp(OP_1), max_count_stack, 0, SCRIPT_ERR_STACK_SIZE);
-    CheckError(OneOp(OP_DUP), max_count_stack, 0, SCRIPT_ERR_STACK_SIZE);
-    CheckError(OneOp(OP_DEPTH), max_count_stack, 0, SCRIPT_ERR_STACK_SIZE);
+    CheckEval(OneOp(OP_NOP), max_count_stack, max_count_stack);
+    CheckError(OneOp(OP_1), max_count_stack, SCRIPT_ERR_STACK_SIZE);
+    CheckError(OneOp(OP_DUP), max_count_stack, SCRIPT_ERR_STACK_SIZE);
+    CheckError(OneOp(OP_DEPTH), max_count_stack, SCRIPT_ERR_STACK_SIZE);
 
     Stack one_below_max_count(MAX_TAPSCRIPT_V2_STACK_SIZE - 1, Bytes({}));
-    CheckError(OneOp(OP_2DUP), one_below_max_count, 0, SCRIPT_ERR_STACK_SIZE);
-    CheckError(OneOp(OP_2OVER), one_below_max_count, 0, SCRIPT_ERR_STACK_SIZE);
+    CheckError(OneOp(OP_2DUP), one_below_max_count, SCRIPT_ERR_STACK_SIZE);
+    CheckError(OneOp(OP_2OVER), one_below_max_count, SCRIPT_ERR_STACK_SIZE);
 
     Stack two_below_max_count(MAX_TAPSCRIPT_V2_STACK_SIZE - 2, Bytes({}));
-    CheckError(OneOp(OP_3DUP), two_below_max_count, 0, SCRIPT_ERR_STACK_SIZE);
+    CheckError(OneOp(OP_3DUP), two_below_max_count, SCRIPT_ERR_STACK_SIZE);
 
     const EvalOutcome one_below_depth{EvalTapscriptV2(OneOp(OP_DEPTH), one_below_max_count,
                                                       InitialLifetimeCost(one_below_max_count) + varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
@@ -1589,11 +1579,10 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_stack_limits_are_enforced)
     Stack max_count_true_top(MAX_TAPSCRIPT_V2_STACK_SIZE, Bytes({}));
     max_count_true_top.back() = Bytes({0x01});
     CheckError(OneOp(OP_IFDUP), max_count_true_top,
-               varops::CompareZeroCost(1) + varops::COST_COPYING,
                SCRIPT_ERR_STACK_SIZE);
 
     const valtype max_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
-    CheckEval(OneOp(OP_NOP), {max_element}, {max_element}, 0);
+    CheckEval(OneOp(OP_NOP), {max_element}, {max_element});
 
     const EvalOutcome max_element_size{EvalTapscriptV2(OneOp(OP_SIZE), {max_element},
                                                        InitialLifetimeCost({max_element}) + varops::FixedOpcodeCost() + varops::ScalarOutputCost())};
@@ -1604,13 +1593,13 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_stack_limits_are_enforced)
     BOOST_CHECK(max_element_size.stack.back() == Bytes({0x00, 0x09, 0x3d}));
 
     const valtype too_large_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE + 1, 0x01);
-    CheckError(OneOp(OP_NOP), {too_large_element}, 0, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    CheckError(OneOp(OP_NOP), {too_large_element}, SCRIPT_ERR_STACK_ELEMENT_SIZE);
 
     const valtype four_mb(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x02);
-    CheckEval(OneOp(OP_NOP), {four_mb, four_mb}, {four_mb, four_mb}, 0);
-    CheckError(OneOp(OP_NOP), {four_mb, four_mb, Bytes({0x01})}, 0, SCRIPT_ERR_TOTAL_STACK_SIZE);
-    CheckEval(OneOp(OP_DUP), {four_mb}, {four_mb, four_mb}, four_mb.size() * varops::COST_COPYING);
-    CheckError(OneOp(OP_DUP), {Bytes({0x01}), four_mb}, four_mb.size() * varops::COST_COPYING,
+    CheckEval(OneOp(OP_NOP), {four_mb, four_mb}, {four_mb, four_mb});
+    CheckError(OneOp(OP_NOP), {four_mb, four_mb, Bytes({0x01})}, SCRIPT_ERR_TOTAL_STACK_SIZE);
+    CheckEval(OneOp(OP_DUP), {four_mb}, {four_mb, four_mb});
+    CheckError(OneOp(OP_DUP), {Bytes({0x01}), four_mb},
                SCRIPT_ERR_TOTAL_STACK_SIZE);
 }
 
@@ -1682,37 +1671,44 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_witness_initial_stack_limits_are_enforced)
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_pushes_use_the_expanded_stack_element_limit)
 {
-    const valtype max_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
-    CScript max_push;
-    max_push << max_element;
-    EvalOutcome outcome{VerifyTapscriptV2(max_push, {}, AMPLE_VAROPS_BUDGET)};
+    // Every script is subject to the unrolled size limit, which leaves room
+    // for pushes up to the limit less a five-byte OP_PUSHDATA4 header.
+    const valtype largest_element(MAX_TAPSCRIPT_V2_UNROLLED_SIZE - 5, 0x01);
+    CScript largest_push;
+    largest_push << largest_element;
+    BOOST_REQUIRE_EQUAL(largest_push.size(), MAX_TAPSCRIPT_V2_UNROLLED_SIZE);
+    EvalOutcome outcome{VerifyTapscriptV2(largest_push, {}, AMPLE_VAROPS_BUDGET)};
     BOOST_CHECK(outcome.ok);
     BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_OK);
 
-    const valtype too_large_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE + 1, 0x01);
-    CScript too_large_push;
-    too_large_push << too_large_element;
-    outcome = VerifyTapscriptV2(too_large_push, {}, 0);
+    // A push of the largest stack element is therefore rejected, before
+    // execution, by the size limit.
+    const valtype max_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
+    CScript max_push;
+    max_push << max_element;
+    outcome = VerifyTapscriptV2(max_push, {}, 0);
     BOOST_CHECK(!outcome.ok);
-    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_PUSH_SIZE);
+    BOOST_CHECK_EQUAL(outcome.error, SCRIPT_ERR_SCRIPT_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_skipped_branches_validate_pushes)
 {
-    const valtype max_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
-    CScript max_skipped_push;
-    max_skipped_push << OP_0 << OP_IF << max_element << OP_ENDIF;
-    CheckEval(max_skipped_push, {}, {}, 0, 3);
+    // OP_0 OP_IF <push> OP_ENDIF exactly at the unrolled size limit.
+    const valtype largest_element(MAX_TAPSCRIPT_V2_UNROLLED_SIZE - 8, 0x01);
+    CScript largest_skipped_push;
+    largest_skipped_push << OP_0 << OP_IF << largest_element << OP_ENDIF;
+    BOOST_REQUIRE_EQUAL(largest_skipped_push.size(), MAX_TAPSCRIPT_V2_UNROLLED_SIZE);
+    CheckEval(largest_skipped_push, {}, {});
 
     const valtype too_large_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE + 1, 0x01);
     CScript oversized_skipped_push;
     oversized_skipped_push << OP_0 << OP_IF << too_large_element << OP_ENDIF;
-    CheckError(oversized_skipped_push, {}, 0, SCRIPT_ERR_PUSH_SIZE);
+    CheckError(oversized_skipped_push, {}, SCRIPT_ERR_SCRIPT_SIZE);
 
     CScript truncated_skipped_push;
     truncated_skipped_push << OP_0 << OP_IF;
     truncated_skipped_push.push_back(static_cast<unsigned char>(OP_PUSHDATA4));
-    CheckError(truncated_skipped_push, {}, 0, SCRIPT_ERR_BAD_OPCODE);
+    CheckError(truncated_skipped_push, {}, SCRIPT_ERR_BAD_OPCODE);
 }
 
 BOOST_AUTO_TEST_CASE(restored_ops_enforce_stack_element_limit_edges)
@@ -1720,58 +1716,50 @@ BOOST_AUTO_TEST_CASE(restored_ops_enforce_stack_element_limit_edges)
     const valtype max_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
     const valtype half_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / 2, 0x01);
 
-    CheckEval(OneOp(OP_CAT), {half_element, half_element}, {max_element},
-              MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE * varops::COST_COPYING);
+    CheckEval(OneOp(OP_CAT), {half_element, half_element}, {max_element});
 
     CheckError(OneOp(OP_CAT), {max_element, Bytes({0x01})},
-               (max_element.size() + 1) * varops::COST_COPYING,
                SCRIPT_ERR_STACK_ELEMENT_SIZE);
 
     const valtype one_byte_below_max(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE - 1, 0x01);
     valtype byte_shifted_to_max(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0x01);
     byte_shifted_to_max.front() = 0x00;
-    CheckEval(OneOp(OP_LSHIFT), {one_byte_below_max, Num(8)}, {byte_shifted_to_max},
-              varops::LengthConversionCost(1) + varops::COST_FAST +
-                  one_byte_below_max.size() * varops::COST_COPYING);
+    CheckEval(OneOp(OP_LSHIFT), {one_byte_below_max, Num(8)}, {byte_shifted_to_max});
 
-    CheckError(OneOp(OP_LSHIFT), {max_element, Num(1)}, 0, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    CheckError(OneOp(OP_LSHIFT), {max_element, Num(1)}, SCRIPT_ERR_STACK_ELEMENT_SIZE);
 
     const valtype max_ff_element(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, 0xff);
-    CheckError(OneOp(OP_1ADD), {max_ff_element}, varops::AddCost(max_ff_element.size(), 1),
+    CheckError(OneOp(OP_1ADD), {max_ff_element},
                SCRIPT_ERR_STACK_ELEMENT_SIZE);
-    CheckError(OneOp(OP_2MUL), {max_ff_element}, varops::TwoMulCost(max_ff_element.size()),
+    CheckError(OneOp(OP_2MUL), {max_ff_element},
                SCRIPT_ERR_STACK_ELEMENT_SIZE);
 }
 
 BOOST_AUTO_TEST_CASE(varops_budget_must_cover_exact_bip_cost)
 {
-    CheckEval(OneOp(OP_CAT), {Bytes("a"), Bytes("b")}, {Bytes("ab")}, 2 * varops::COST_COPYING);
-    CheckError(OneOp(OP_CAT), {Bytes("a"), Bytes("b")}, 2 * varops::COST_COPYING - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_CAT), {Bytes("a"), Bytes("b")}, {Bytes("ab")});
+    CheckError(OneOp(OP_CAT), {Bytes("a"), Bytes("b")}, SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_MUL), {Bytes({0xff}), Bytes({0xff})}, {Bytes({0x01, 0xfe})}, varops::MulCost(1, 1));
-    CheckError(OneOp(OP_MUL), {Bytes({0xff}), Bytes({0xff})}, varops::MulCost(1, 1) - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_MUL), {Bytes({0xff}), Bytes({0xff})}, {Bytes({0x01, 0xfe})});
+    CheckError(OneOp(OP_MUL), {Bytes({0xff}), Bytes({0xff})}, SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x7b})}, varops::DivCost(2, 1));
-    CheckError(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, varops::DivCost(2, 1) - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x7b})});
+    CheckError(OneOp(OP_DIV), {Bytes({0x39, 0x30}), Bytes({0x64})}, SCRIPT_ERR_VAROP_COUNT);
 
-    CheckEval(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x2d})}, varops::ModCost(2, 1));
-    CheckError(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, varops::ModCost(2, 1) - 1, SCRIPT_ERR_VAROP_COUNT);
-    CheckError(OneOp(OP_MOD), {Bytes({0x01}), Bytes({})}, varops::ModCost(1, 0) - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, {Bytes({0x2d})});
+    CheckError(OneOp(OP_MOD), {Bytes({0x39, 0x30}), Bytes({0x64})}, SCRIPT_ERR_VAROP_COUNT);
+    CheckError(OneOp(OP_MOD), {Bytes({0x01}), Bytes({})}, SCRIPT_ERR_VAROP_COUNT);
 
     const valtype empty_sig{};
     const valtype nonempty_sig{Bytes({0x01})};
     const valtype nonminimal_one{Bytes({0x01, 0x00})};
     const valtype xonly_pubkey(32, 0x02);
     const valtype unknown_pubkey(33, 0x02);
-    const uint64_t empty_checksigadd_cost{varops::ChecksigAddIncrementCost(nonminimal_one.size())};
-    CheckEval(OneOp(OP_CHECKSIGADD), {empty_sig, nonminimal_one, xonly_pubkey}, {Bytes({0x01})}, empty_checksigadd_cost);
-    CheckError(OneOp(OP_CHECKSIGADD), {empty_sig, nonminimal_one, xonly_pubkey}, empty_checksigadd_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_CHECKSIGADD), {empty_sig, nonminimal_one, xonly_pubkey}, {Bytes({0x01})});
+    CheckError(OneOp(OP_CHECKSIGADD), {empty_sig, nonminimal_one, xonly_pubkey}, SCRIPT_ERR_VAROP_COUNT);
 
-    const uint64_t nonempty_checksigadd_cost{
-        varops::SigcheckCost(OP_CHECKSIGADD) +
-        varops::ChecksigAddIncrementCost(nonminimal_one.size())};
-    CheckEval(OneOp(OP_CHECKSIGADD), {nonempty_sig, nonminimal_one, unknown_pubkey}, {Bytes({0x02})}, nonempty_checksigadd_cost);
-    CheckError(OneOp(OP_CHECKSIGADD), {nonempty_sig, nonminimal_one, unknown_pubkey}, nonempty_checksigadd_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(OneOp(OP_CHECKSIGADD), {nonempty_sig, nonminimal_one, unknown_pubkey}, {Bytes({0x02})});
+    CheckError(OneOp(OP_CHECKSIGADD), {nonempty_sig, nonminimal_one, unknown_pubkey}, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(signature_varops_charge_depends_on_nonempty_signature)
@@ -1881,7 +1869,9 @@ BOOST_AUTO_TEST_CASE(op_success_redefinitions_are_checked_before_execution)
         malformed_before << opcode;
         error = SCRIPT_ERR_UNKNOWN_ERROR;
         const std::optional<bool> before_result{CheckTapscriptOpSuccess(malformed_before, SCRIPT_VERIFY_NONE, SigVersion::TAPSCRIPT_V2, &error)};
-        BOOST_CHECK(!before_result.has_value());
+        // Static decoding fails at the malformed instruction before reaching OP_SUCCESSx.
+        BOOST_CHECK(before_result == std::optional<bool>{false});
+        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_BAD_OPCODE);
         const EvalOutcome before_outcome{VerifyTapscriptV2WithFlags(
             malformed_before, {}, TAPSCRIPT_V2_SCRIPT_VERIFY_FLAGS, 0)};
         BOOST_CHECK(!before_outcome.ok);
@@ -1984,22 +1974,22 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_conditionals_require_minimal_inputs)
 {
     CScript if_script;
     if_script << OP_IF << OP_2 << OP_ELSE << OP_3 << OP_ENDIF;
-    CheckEval(if_script, {Bytes({0x01})}, {Bytes({0x02})}, 0, 4);
-    CheckEval(if_script, {Bytes({})}, {Bytes({0x03})}, 0, 4);
-    CheckError(if_script, {Bytes({0x02})}, 0, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
-    CheckError(if_script, {Bytes({0x00, 0x00})}, 0, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
+    CheckEval(if_script, {Bytes({0x01})}, {Bytes({0x02})});
+    CheckEval(if_script, {Bytes({})}, {Bytes({0x03})});
+    CheckError(if_script, {Bytes({0x02})}, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
+    CheckError(if_script, {Bytes({0x00, 0x00})}, SCRIPT_ERR_TAPSCRIPT_MINIMALIF);
 
     CScript notif_script;
     notif_script << OP_NOTIF << OP_2 << OP_ELSE << OP_3 << OP_ENDIF;
-    CheckEval(notif_script, {Bytes({})}, {Bytes({0x02})}, 0, 4);
-    CheckEval(notif_script, {Bytes({0x01})}, {Bytes({0x03})}, 0, 4);
+    CheckEval(notif_script, {Bytes({})}, {Bytes({0x02})});
+    CheckEval(notif_script, {Bytes({0x01})}, {Bytes({0x03})});
 }
 
 BOOST_AUTO_TEST_CASE(unexecuted_branches_do_not_charge_or_execute_costed_ops)
 {
     CScript skipped_then_else;
     skipped_then_else << OP_0 << OP_IF << OP_CAT << OP_MUL << OP_SHA256 << OP_ELSE << OP_2 << OP_ENDIF;
-    CheckEval(skipped_then_else, {}, {Bytes({0x02})}, 0, 5);
+    CheckEval(skipped_then_else, {}, {Bytes({0x02})});
 }
 
 BOOST_AUTO_TEST_CASE(tapscript_v2_standard_verify_uses_unmetered_overload)
@@ -2031,38 +2021,37 @@ BOOST_AUTO_TEST_CASE(checksigfromstack)
         return varops::Sha256Cost(message_size) + varops::Sha256Cost(96) +
                varops::SignatureCost() + varops::ScalarOutputCost();
     };
-    const uint64_t sigcheck_cost{signature_cost(message.size())};
 
-    CheckEval(script, {sig, message, pubkey}, {Bytes({0x01})}, sigcheck_cost);
+    CheckEval(script, {sig, message, pubkey}, {Bytes({0x01})});
 
     valtype wrong_message{message};
     wrong_message.front() ^= 1;
-    CheckError(script, {sig, wrong_message, pubkey}, sigcheck_cost, SCRIPT_ERR_SCHNORR_SIG);
-    CheckError(script, {valtype(63, 0x01), message, pubkey}, sigcheck_cost, SCRIPT_ERR_SCHNORR_SIG_SIZE);
-    CheckEval(script, {{}, message, pubkey}, {{}}, 0);
-    CheckError(script, {{}, message, {}}, 0, SCRIPT_ERR_PUBKEYTYPE);
-    CheckError(script, {sig, message}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {sig, wrong_message, pubkey}, SCRIPT_ERR_SCHNORR_SIG);
+    CheckError(script, {valtype(63, 0x01), message, pubkey}, SCRIPT_ERR_SCHNORR_SIG_SIZE);
+    CheckEval(script, {{}, message, pubkey}, {{}});
+    CheckError(script, {{}, message, {}}, SCRIPT_ERR_PUBKEYTYPE);
+    CheckError(script, {sig, message}, SCRIPT_ERR_INVALID_STACK_OPERATION);
 
     const valtype unknown_pubkey(33, 0x02);
-    CheckEval(script, {sig, message, unknown_pubkey}, {Bytes({0x01})}, sigcheck_cost);
+    CheckEval(script, {sig, message, unknown_pubkey}, {Bytes({0x01})});
     const EvalOutcome discouraged{EvalTapscriptV2WithFlagsAndChecker(
         script, {sig, message, unknown_pubkey}, SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE,
         BaseSignatureChecker{}, AMPLE_VAROPS_BUDGET)};
     BOOST_CHECK(!discouraged.ok);
     BOOST_CHECK_EQUAL(discouraged.error, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
 
-    CheckError(script, {sig, message, pubkey}, sigcheck_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckError(script, {sig, message, pubkey}, SCRIPT_ERR_VAROP_COUNT);
 
     const valtype long_message(4096, 0x42);
     const uint64_t long_message_cost{signature_cost(long_message.size())};
-    CheckError(script, {sig, long_message, pubkey}, long_message_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckError(script, {sig, long_message, pubkey}, SCRIPT_ERR_VAROP_COUNT);
     const EvalOutcome invalid_long_message{EvalTapscriptV2(
         script, {sig, long_message, pubkey}, InitialLifetimeCost({sig, long_message, pubkey}) + varops::FixedOpcodeCost() + long_message_cost)};
     BOOST_CHECK(!invalid_long_message.ok);
     BOOST_CHECK_EQUAL(invalid_long_message.error, SCRIPT_ERR_SCHNORR_SIG);
     BOOST_CHECK_EQUAL(invalid_long_message.remaining_budget, 0);
-    CheckEval(script, {sig, long_message, unknown_pubkey}, {Bytes({0x01})}, long_message_cost);
-    CheckEval(script, {{}, long_message, pubkey}, {{}}, 0);
+    CheckEval(script, {sig, long_message, unknown_pubkey}, {Bytes({0x01})});
+    CheckEval(script, {{}, long_message, pubkey}, {{}});
 }
 
 BOOST_AUTO_TEST_CASE(tweakadd)
@@ -2105,10 +2094,9 @@ BOOST_AUTO_TEST_CASE(tweakadd)
             "c6713b2ac2495d1a879dc136abc06129a7bf355da486cd25f757e0a5f6f40f74",
         },
     });
-    const uint64_t tweak_cost{varops::TweakCost() + varops::CopyCost(32)};
 
     for (const auto& vector : vectors) {
-        CheckEval(script, {HexBytes(vector.tweak), HexBytes(vector.pubkey)}, {HexBytes(vector.expected)}, tweak_cost);
+        CheckEval(script, {HexBytes(vector.tweak), HexBytes(vector.pubkey)}, {HexBytes(vector.expected)});
     }
 
     const valtype generator{HexBytes(vectors[0].pubkey)};
@@ -2118,16 +2106,16 @@ BOOST_AUTO_TEST_CASE(tweakadd)
     const valtype curve_order{HexBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")};
     const valtype curve_order_minus_one{HexBytes("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140")};
 
-    CheckEval(script, {Bytes({0xaa}), one_tweak, generator}, {Bytes({0xaa}), two_g}, tweak_cost);
-    CheckError(script, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
-    CheckError(script, {one_tweak}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
-    CheckError(script, {valtype(31), generator}, 0, SCRIPT_ERR_TWEAKADD);
-    CheckError(script, {zero_tweak, valtype(31)}, 0, SCRIPT_ERR_TWEAKADD);
-    CheckError(script, {curve_order, generator}, tweak_cost, SCRIPT_ERR_TWEAKADD);
-    CheckError(script, {one_tweak, valtype(32)}, tweak_cost, SCRIPT_ERR_TWEAKADD);
-    CheckError(script, {curve_order_minus_one, generator}, tweak_cost, SCRIPT_ERR_TWEAKADD);
-    CheckError(script, {curve_order, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
-    CheckError(script, {one_tweak, generator}, tweak_cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(script, {Bytes({0xaa}), one_tweak, generator}, {Bytes({0xaa}), two_g});
+    CheckError(script, {}, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {one_tweak}, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {valtype(31), generator}, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {zero_tweak, valtype(31)}, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order, generator}, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {one_tweak, valtype(32)}, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order_minus_one, generator}, SCRIPT_ERR_TWEAKADD);
+    CheckError(script, {curve_order, generator}, SCRIPT_ERR_VAROP_COUNT);
+    CheckError(script, {one_tweak, generator}, SCRIPT_ERR_VAROP_COUNT);
 }
 
 BOOST_AUTO_TEST_CASE(byterev)
@@ -2135,17 +2123,16 @@ BOOST_AUTO_TEST_CASE(byterev)
     const CScript script{OneOp(OP_BYTEREV)};
     const valtype value{Bytes({0x00, 0x01, 0x02, 0x80, 0xff, 0x00, 0x42, 0x7f, 0x03})};
     const valtype reversed{value.rbegin(), value.rend()};
-    const uint64_t cost{varops::ByteReverseCost(value.size())};
 
-    CheckEval(script, {value}, {reversed}, cost);
-    CheckEval(script, {{}}, {{}}, 0);
-    CheckEval(script, {Bytes({0x42})}, {Bytes({0x42})}, varops::ByteReverseCost(1));
-    CheckError(script, {}, 0, SCRIPT_ERR_INVALID_STACK_OPERATION);
-    CheckError(script, {value}, cost - 1, SCRIPT_ERR_VAROP_COUNT);
+    CheckEval(script, {value}, {reversed});
+    CheckEval(script, {{}}, {{}});
+    CheckEval(script, {Bytes({0x42})}, {Bytes({0x42})});
+    CheckError(script, {}, SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckError(script, {value}, SCRIPT_ERR_VAROP_COUNT);
 
     CScript involution;
     involution << OP_BYTEREV << OP_BYTEREV;
-    CheckEval(involution, {value}, {value}, 2 * cost);
+    CheckEval(involution, {value}, {value});
 
     // TapBranch orders its fixed-size child hashes lexicographically. Reversing
     // them makes restored little-endian numeric comparison produce that order.
@@ -2155,9 +2142,8 @@ BOOST_AUTO_TEST_CASE(byterev)
     higher.front() = 0x02;
     CScript tapbranch_order;
     tapbranch_order << OP_SWAP << OP_BYTEREV << OP_SWAP << OP_BYTEREV << OP_LESSTHAN;
-    const uint64_t ordering_cost{2 * varops::ByteReverseCost(32) + varops::ComparisonCost(32, 32)};
-    CheckEval(tapbranch_order, {lower, higher}, {Bytes({0x01})}, ordering_cost);
-    CheckEval(tapbranch_order, {higher, lower}, {{}}, ordering_cost);
+    CheckEval(tapbranch_order, {lower, higher}, {Bytes({0x01})});
+    CheckEval(tapbranch_order, {higher, lower}, {{}});
 }
 
 BOOST_AUTO_TEST_CASE(taproot_script_signing_propagates_leaf_sigversion)
@@ -2228,9 +2214,9 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_and_signtransaction_use_transaction_wide_
     tx.vout.emplace_back(50'000, CScript{} << OP_TRUE);
 
     const CTransaction tx_const{tx};
-    // The BIP441 multiply/accumulate core alone is enough to cross the shared budget twice.
-    const uint64_t limbs{varops::detail::WordSize(operand_size) / 8};
-    const uint64_t per_input_cost{limbs * (varops::MulRowCost(limbs) + varops::ArithCost(8 * (limbs + 1)))};
+    // The BIP441 MUL term alone is enough to cross the shared budget twice.
+    const uint64_t limbs{varops::WordSpan(operand_size) / 8};
+    const uint64_t per_input_cost{varops::MulCost(limbs, limbs)};
     const uint64_t tx_budget{varops::TxBudget(GetTransactionWeight(tx_const))};
     BOOST_REQUIRE_LT(per_input_cost, tx_budget);
     BOOST_REQUIRE_LT(tx_budget, 2 * per_input_cost);
@@ -2280,8 +2266,8 @@ BOOST_AUTO_TEST_CASE(tapscript_v2_psbt_single_input_over_finalized_budget_is_rej
     tx.vin[0].scriptWitness = witness;
     tx.vout.emplace_back(50'000, CScript{} << OP_TRUE);
 
-    const uint64_t limbs{varops::detail::WordSize(operand_size) / 8};
-    const uint64_t input_cost{limbs * (varops::MulRowCost(limbs) + varops::ArithCost(8 * (limbs + 1)))};
+    const uint64_t limbs{varops::WordSpan(operand_size) / 8};
+    const uint64_t input_cost{varops::MulCost(limbs, limbs)};
     const uint64_t finalized_budget{varops::TxBudget(GetTransactionWeight(CTransaction{tx}))};
     BOOST_REQUIRE_GT(input_cost, finalized_budget);
 

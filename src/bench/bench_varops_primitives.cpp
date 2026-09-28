@@ -21,11 +21,13 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <ctime>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <initializer_list>
@@ -200,7 +202,11 @@ struct Options {
     bool prep_only{false};
     bool arith_only{false};
     bool div_only{false};
+    bool mul_only{false};
+    bool div_batch_diagnostic{false};
+    std::string div_batch_case;
     bool hash_only{false};
+    bool fixed_only{false};
     bool items_only{false};
     bool copy_only{false};
     bool storage_only{false};
@@ -559,6 +565,13 @@ int main()
 #include <util/translation.h>
 #include <util/string.h>
 
+#ifdef _WIN32
+#include <compat/compat.h>
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
+
 const TranslateFn G_TRANSLATION_FUN{nullptr};
 
 namespace primitive_bench {
@@ -722,21 +735,54 @@ Sample ScriptSample(Runner& runner,const std::string& label,const CScript& scrip
     });
 }
 
-// F: common evaluator overhead anchored by NOPs, including parsing/prescan.
-// Entry/finalization is amortized by long scripts, not priced again per opcode.
+// F: common evaluator overhead of instructions that pay only F, including
+// parsing/prescan. Entry/finalization is amortized by long scripts, not priced
+// again per opcode. Each F/<group>/<n> script executes n charged instructions
+// before its final OP_1; F/skipped/<n> skips n uncharged NOPs as a diagnostic.
 void EstimateFixed(Runner& r)
 {
     BaseSignatureChecker checker;
     std::vector<Point> observations;
+    const auto repeat = [](CScript& script, std::initializer_list<opcodetype> unit, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            for (const opcodetype opcode : unit) script << opcode;
+        }
+    };
+    const std::array<opcodetype, 8> upgradable{OP_NOP1, OP_NOP4, OP_NOP5, OP_NOP6, OP_NOP7, OP_NOP8, OP_NOP9, OP_NOP10};
     for (size_t n : {256U, 1024U, 4096U, 16384U}) {
-        CScript script;
-        for (size_t i = 0; i < n; ++i) script << OP_NOP;
-        script << OP_1;
-        auto sample = ScriptSample(r, "F/nop/" + std::to_string(n), script, {}, checker);
-        observations.push_back({1, double(n + 1), std::move(sample)});
+        std::vector<std::pair<std::string, CScript>> scripts;
+        CScript nop, nops, separator, toggle, pairs, nested;
+        repeat(nop, {OP_NOP}, n);
+        for (size_t i = 0; i < n; ++i) nops << upgradable[i % upgradable.size()];
+        repeat(separator, {OP_CODESEPARATOR}, n);
+        // Condition push, IF and ENDIF are three of the n charged instructions.
+        toggle << OP_1 << OP_IF;
+        repeat(toggle, {OP_ELSE}, n - 3);
+        toggle << OP_ENDIF;
+        // Inactive IF/ENDIF pay F without popping; the trailing active NOP completes n.
+        pairs << OP_0 << OP_IF;
+        repeat(pairs, {OP_IF, OP_ENDIF}, (n - 4) / 2);
+        pairs << OP_ENDIF << OP_NOP;
+        nested << OP_0 << OP_IF;
+        repeat(nested, {OP_IF}, (n - 4) / 2);
+        repeat(nested, {OP_ENDIF}, (n - 4) / 2 + 1);
+        nested << OP_NOP;
+        for (auto& [group, script] : std::initializer_list<std::pair<std::string, CScript*>>{
+                 {"nop", &nop}, {"upgradable-nop", &nops}, {"codeseparator", &separator},
+                 {"else", &toggle}, {"inactive-if-pairs", &pairs}, {"inactive-if-nested", &nested}}) {
+            *script << OP_1;
+            auto sample = ScriptSample(r, "F/" + group + "/" + std::to_string(n), *script, {}, checker);
+            observations.push_back({1, double(n + 1), std::move(sample)});
+        }
+        CScript skipped;
+        skipped << OP_0 << OP_IF;
+        repeat(skipped, {OP_NOP}, n);
+        skipped << OP_ENDIF << OP_1;
+        ScriptSample(r, "F/skipped/" + std::to_string(n), skipped, {}, checker);
     }
     r.LinearRate("F", "execution", observations,
-                 "metered NOP scripts; parsing/prescan included, entry/finalization amortized");
+                 "metered F-only scripts (NOP, upgradable NOPs, CODESEPARATOR, ELSE, inactive IF/ENDIF); "
+                 "parsing/prescan included, entry/finalization amortized");
 }
 
 // COPY times copied-value creation; RELEASE times buffer destruction separately.
@@ -1104,6 +1150,26 @@ void EstimateProducer(Runner& r)
             });
         }
         if (r.options.growth_only) continue;
+        // Worst-case allocator: every value lands on freshly mapped pages, so each
+        // lifetime pays the page faults, kernel zeroing and unmapping. Warm reuse is
+        // the stack mode above; this bounds allocators that return large blocks to the OS.
+        if (n >= 16384) {
+            cycle("PRODUCE/fresh-pages/" + std::to_string(n), "produce", 1, n, 0, [&] {
+#ifdef _WIN32
+                void* pages{VirtualAlloc(nullptr, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)};
+                Require(pages != nullptr, "fresh-page allocation failed");
+                std::memcpy(pages, source.data(), n);
+                Observe(pages);
+                VirtualFree(pages, 0, MEM_RELEASE);
+#else
+                void* pages{mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)};
+                Require(pages != MAP_FAILED, "fresh-page allocation failed");
+                std::memcpy(pages, source.data(), n);
+                Observe(pages);
+                munmap(pages, n);
+#endif
+            });
+        }
         // Source and result are both funded: never attribute freeing a 4 MB
         // source to the size of a one-byte result.
         const size_t source_size{std::min<size_t>(3'998'900, r.options.max_bytes)};
@@ -1328,8 +1394,8 @@ void EstimateStorage(Runner& r)
         if (n != 0) run("final", CScript{} << OP_NOP, {source});
     }
 
-    // Macro metadata, call frames and inactive-span summaries are different
-    // allocations from value buffers; retain them as complete-script controls.
+    // Macro declarations and call frames are different allocations from value
+    // buffers; retain them as complete-script controls.
     for (size_t definitions : {1U, 8U, 128U}) {
         const CScript body{CScript{} << OP_0 << OP_IF << OP_1 << OP_ENDIF};
         CScript script;
@@ -1456,14 +1522,14 @@ void EstimateBit(Runner& r)
     std::vector<Point> p;
     for(size_t n:Sizes(r.options,1)) {
         auto invert=r.Repeated("BIT/invert/"+std::to_string(n),[&]{return std::make_unique<Val64>(Pattern(n));},[](auto& v,size_t){
-            uint64_t ignored=0; Val64::OpInvert(*v,ignored); Observe(ignored);
+            Val64::OpInvert(*v); Observe(*v);
         });
         p.push_back({1,double(W(n)),std::move(invert)});
         auto reverse=r.Repeated("BIT/reverse/"+std::to_string(n),[&]{return Pattern(n);},[](auto& v,size_t){std::reverse(v.begin(),v.end());});
         p.push_back({1,double(n),std::move(reverse)});
         struct State { Val64 a,b; explicit State(size_t n):a(Pattern(n,1)),b(Pattern(n,2)){} };
         auto xor_sample=r.Repeated("BIT/xor/"+std::to_string(n),[&]{return std::make_unique<State>(n);},[](auto& s,size_t){
-            uint64_t ignored=0; Val64::OpXor(s->a,s->b,ignored); Observe(ignored);
+            Val64::OpXor(s->a,s->b); Observe(s->a);
         });
         p.push_back({1,double(W(n)),std::move(xor_sample)});
         for(size_t shift:std::array<size_t,3>{1,7,63}) {
@@ -1500,25 +1566,102 @@ void EstimateMove(Runner& r)
 
 // DIVCORE includes normalization and temporary storage in the prepared DIV/MOD
 // call. Fresh operands prevent repetition from measuring an already divided value.
+void DivisionBatchDiagnostic(const Options& options)
+{
+    std::ofstream out(options.output);
+    Require(out.good(), "cannot open batch diagnostic output");
+    out << "operation,batch,state,epoch,wall_ns,cpu_ns\n" << std::setprecision(17);
+    const Bytes a{Pattern(65 * 8, 17)};
+    Bytes b{Pattern(64 * 8, 22)};
+    b.back() = 0x40;
+    struct CapacityProbe : Val64 {
+        using Val64::Val64;
+        size_t Capacity() const { return m_bytes.capacity(); }
+    };
+    Bytes expected;
+    for (bool spare : {false, true}) {
+        Bytes bytes{a};
+        if (spare) bytes.reserve(bytes.size() + 8);
+        CapacityProbe dividend{std::move(bytes)};
+        Val64 divisor{Bytes{b}};
+        const size_t before{dividend.Capacity()};
+        Require(Val64::OpDiv(dividend, divisor), "capacity control failed");
+        std::cerr << "  Dividend capacity: " << (spare ? "spare" : "tight")
+                  << ' ' << before << " -> " << dividend.Capacity() << " bytes\n";
+        auto result = dividend.MoveToValtype();
+        if (!spare) expected = result;
+        else Require(result == expected, "capacity changed division result");
+    }
+    struct State {
+        Val64 a, b;
+        State(Bytes x, Bytes y, bool spare) : b(std::move(y))
+        {
+            if (spare) x.reserve(x.size() + 8);
+            a = Val64(std::move(x));
+        }
+    };
+    Bytes disturbance(64 * 1024 * 1024, 1);
+    for (const std::string op : {"DIV", "MUL"}) {
+        for (size_t count : {1U, 64U, 256U, 1024U, 4096U, 16384U, 21977U}) {
+            for (const std::string mode : {"forward", "reverse", "disturbed", "spare-forward", "spare-disturbed", "spare-reverse"}) {
+                if (!options.div_batch_case.empty() && (op != "DIV" || count != 4096 || mode != options.div_batch_case)) continue;
+                std::cerr << "  Batch diagnostic: " << op << '/' << count << '/' << mode << '\n';
+                for (size_t epoch = 0; epoch < options.epochs; ++epoch) {
+                    std::vector<std::unique_ptr<State>> states;
+                    states.reserve(count);
+                    for (size_t i = 0; i < count; ++i) states.push_back(std::make_unique<State>(a, b, mode.starts_with("spare-")));
+                    if (mode == "disturbed" || mode == "spare-disturbed") {
+                        for (size_t i = 0; i < disturbance.size(); i += 64) ++disturbance[i];
+                        Observe(disturbance);
+                    }
+                    const auto cpu_start = std::clock();
+                    const auto start = Clock::now();
+                    for (size_t i = 0; i < count; ++i) {
+                        auto& state = *states[mode.ends_with("reverse") ? count - 1 - i : i];
+                        if (op == "DIV") {
+                            if (!Val64::OpDiv(state.a, state.b)) throw std::runtime_error("diagnostic division failed");
+                        } else {
+                            auto result = Val64::OpMul(state.a, state.b);
+                            Observe(result);
+                        }
+                        Observe(state.a);
+                    }
+                    const auto end = Clock::now();
+                    const auto cpu_end = std::clock();
+                    out << op << ',' << count << ',' << mode << ',' << epoch << ','
+                        << std::chrono::duration<double, std::nano>(end - start).count() / count << ','
+                        << (cpu_end - cpu_start) * (1e9 / CLOCKS_PER_SEC) / count << '\n';
+                }
+            }
+        }
+    }
+    Require(out.good(), "batch diagnostic write failed");
+}
+
 void EstimateDivision(Runner& r)
 {
     size_t fixtures{0};
     for (size_t bw : {1U, 2U, 3U, 4U, 8U, 16U, 32U, 64U, 128U, 256U, 1024U}) {
-        std::vector<size_t> dividends{std::max(size_t{1}, bw - 1), bw, bw + 1, 2 * bw, 4 * bw, bw + 32};
+        // bw + 1024 gives many quotient rows at every divisor width, which identifies the per-row term.
+        std::vector<size_t> dividends{std::max(size_t{1}, bw - 1), bw, bw + 1, 2 * bw, 4 * bw, bw + 32, bw + 1024};
         std::sort(dividends.begin(), dividends.end());
         dividends.erase(std::unique(dividends.begin(), dividends.end()), dividends.end());
         for (size_t aw : dividends) {
             if (std::max(aw, bw) * 8 > r.options.max_bytes) continue;
             for (uint64_t seed : {17U, 127U}) {
-                for (const std::string pattern : {"normalized", "top-clear", "top-one"}) {
+                for (const std::string pattern : {"normalized", "top-clear", "top-one", "padded"}) {
                     Bytes a{Pattern(aw * 8, seed)}, b{Pattern(bw * 8, seed + 5)};
                     if (pattern == "normalized") {
                         b.back() |= 0x80;
                     } else if (pattern == "top-clear") {
                         b.back() = 0x40;
-                    } else {
+                    } else if (pattern == "top-one") {
                         std::fill(b.end() - 8, b.end(), 0);
                         b[b.size() - 8] = 1;
+                    } else {
+                        // Names and DIVCORE features use the trimmed divisor width.
+                        b.back() |= 0x80;
+                        b.resize(std::max(aw, bw) * 8, 0);
                     }
                     for (bool modulo : {false, true}) {
                         struct State { Val64 a, b; State(Bytes x, Bytes y) : a(std::move(x)), b(std::move(y)) {} };
@@ -1546,8 +1689,59 @@ void EstimateDivision(Runner& r)
            0, 0, "diagnostic_no_fit"});
 }
 
-// MUL measures production MultiplySpan rows; DIVCORE bundles the complete
-// prepared DIV/MOD call. Adding MUL to the latter would double-count work.
+// MULCORE times the complete prepared OP_MUL call, like DIVCORE for division:
+// schoolbook rows over u longer-operand limbs and v shorter-operand limbs,
+// including the result and scratch allocation. Operand preparation happens
+// before timing; the product is kept alive until after timing, so its release
+// and final byte conversion stay with PRODUCE and NORMALIZE.
+void EstimateMultiplication(Runner& r)
+{
+    const size_t max_limbs{r.options.max_bytes / 8};
+    // Cap single products so the largest fixtures stay near the full-budget scale.
+    constexpr size_t MAX_CELLS{size_t{1} << 28};
+    size_t fixtures{0};
+    for (size_t v : {1U, 2U, 3U, 4U, 8U, 16U, 32U, 64U, 128U, 256U, 1024U, 4096U, 16384U}) {
+        std::vector<size_t> rows;
+        for (size_t factor : {1U, 2U, 4U, 16U, 128U, 1024U, 8192U, 65536U}) rows.push_back(v * factor);
+        rows.push_back(v + 1);
+        rows.push_back(max_limbs);
+        std::sort(rows.begin(), rows.end());
+        rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+        for (size_t u : rows) {
+            if (u < v || u > max_limbs || u * v > MAX_CELLS) continue;
+            for (const std::string pattern : {"ones", "random"}) {
+                Bytes a, b;
+                if (pattern == "ones") {
+                    // All-ones limbs maximize every carry chain.
+                    a.assign(u * 8, 0xff);
+                    b.assign(v * 8, 0xff);
+                } else {
+                    a = Pattern(u * 8, 17 + u);
+                    b = Pattern(v * 8, 29 + v);
+                }
+                struct State {
+                    Val64 a, b, product;
+                    State(const Bytes& x, const Bytes& y) : a(Bytes{x}), b(Bytes{y}) {}
+                };
+                const std::string name{"MULCORE/" + std::to_string(u) + "/" + std::to_string(v) + "/" + pattern};
+                r.Measure(name, r.PoolLimit(2 * (u + v) * 8 + (v + 1) * 8 + 256), [&](size_t count) {
+                    std::vector<std::unique_ptr<State>> states;
+                    states.reserve(count);
+                    for (size_t i{0}; i < count; ++i) states.push_back(std::make_unique<State>(a, b));
+                    return states;
+                }, [&](auto& states, size_t count) {
+                    for (size_t i{0}; i < count; ++i) states[i]->product = Val64::OpMul(states[i]->a, states[i]->b);
+                });
+                if (++fixtures % 25 == 0) std::cerr << "  MULCORE: " << fixtures << " fixtures measured\n";
+            }
+        }
+    }
+    r.Add({"MULCORE", "trial", "prepared complete OP_MUL across longer and shorter limb counts",
+           0, 0, "diagnostic_no_fit"});
+}
+
+// Legacy primitives: MUL measures production MultiplySpan rows; DIVCORE bundles
+// the complete prepared DIV/MOD call. The candidate schedule uses MULCORE instead.
 void EstimateMulDiv(Runner& r)
 {
     std::vector<Point> mul;
@@ -1719,6 +1913,8 @@ void Help()
     std::cout << "Usage: bench_varops_primitives (--reference-csv FILE | --pre-v2-seconds SECONDS | --max-diagnostic) [options]\n"
         "  --out FILE          Summary CSV (default dev/varops/primitive_costs.csv); raw epochs use FILE.samples.csv\n"
         "  --epochs N          Measured epochs per fixture (default 7)\n"
+        "  --div-batch-diagnostic Fixed-batch DIV and full-MUL memory-state controls; raw timings only\n"
+        "  --div-batch-case MODE Focus diagnostic on DIV/4096 with forward, reverse or spare-reverse traversal\n"
         "  --sample-ms MS      Target timed duration per epoch (default 10)\n"
         "  --copy-sample-ms MS Target duration for COPY/producer lifetime fixtures (default 100)\n"
         "  --calibration-candidate Collect the frozen PRODUCE/NORMALIZE model only\n"
@@ -1737,7 +1933,9 @@ void Help()
     "  --growth-seed N     Shuffle growth-only fixture order reproducibly (default 1)\n"
     "  --arith-only        Run only the separately measured ADD/SUB kernel audit\n"
     "  --div-only          Run only the prepared DIV/MOD size and normalization sweep\n"
+    "  --mul-only          Run only the prepared complete OP_MUL sweep (MULCORE)\n"
     "  --hash-only         Run only the hash primitive probes\n"
+    "  --fixed-only        Run only the F probes (F-only instruction groups and skipped NOPs)\n"
     "  --items-only        Run only the OP_TX SELECT probes\n"
     "  --max-diagnostic    Time OP_MAX's copy, compare, trim, and buffer lifetimes\n"
     "  --self-test         Check estimator and production helper fixtures, then exit\n";
@@ -1774,17 +1972,22 @@ Options Parse(int argc,char** argv)
         else if(arg=="--arith-only") o.arith_only=true;
         else if(arg=="--calibration-candidate") o.calibration_candidate=true;
         else if(arg=="--div-only") o.div_only=true;
+        else if(arg=="--mul-only") o.mul_only=true;
+        else if(arg=="--div-batch-diagnostic") o.div_batch_diagnostic=true;
+        else if(arg=="--div-batch-case") { o.div_batch_diagnostic=true; o.div_batch_case=value(); }
         else if(arg=="--hash-only") o.hash_only=true;
+        else if(arg=="--fixed-only") o.fixed_only=true;
         else if(arg=="--items-only") o.items_only=true;
         else if(arg=="--self-test") o.self_test=true;
         else throw std::runtime_error("unknown option: "+arg);
     }
-    Require(int(o.prep_only) + int(o.copy_only) + int(o.storage_only) + int(o.produce_only) + int(o.arith_only) + int(o.div_only) + int(o.hash_only) + int(o.items_only) + int(o.max_diagnostic) <= 1,
+    Require(int(o.prep_only) + int(o.copy_only) + int(o.storage_only) + int(o.produce_only) + int(o.arith_only) + int(o.div_only) + int(o.mul_only) + int(o.hash_only) + int(o.fixed_only) + int(o.items_only) + int(o.max_diagnostic) + int(o.div_batch_diagnostic) <= 1,
             "choose only one focused probe group");
     Require(!o.calibration_candidate || !(o.prep_only || o.copy_only || o.storage_only || o.produce_only ||
-            o.arith_only || o.div_only || o.hash_only || o.items_only || o.max_diagnostic),
+            o.arith_only || o.div_only || o.mul_only || o.hash_only || o.fixed_only || o.items_only || o.max_diagnostic || o.div_batch_diagnostic),
             "candidate collection cannot be combined with a focused probe");
     Require(o.epochs>=1 && o.epochs<=1000,"epochs must be 1..1000");
+    Require(o.div_batch_case.empty() || o.div_batch_case == "forward" || o.div_batch_case == "reverse" || o.div_batch_case == "spare-reverse", "unknown division batch case");
     Require(o.epoch_ms>0 && o.epoch_ms<=1000,"sample-ms must be >0 and <=1000");
     if (o.copy_epoch_ms == 0) o.copy_epoch_ms = o.epoch_ms;
     Require(o.copy_epoch_ms>0 && o.copy_epoch_ms<=1000,"copy-sample-ms must be >0 and <=1000");
@@ -1796,7 +1999,7 @@ Options Parse(int argc,char** argv)
         std::ifstream in(o.reference_csv);Require(in.good(),"cannot open reference CSV");
         o.reference_sec=ReadReference(in);
     }
-    if(!o.self_test && !o.max_diagnostic) Require(o.reference_sec>0,"supply --reference-csv or --pre-v2-seconds from same-machine bench_varops");
+    if(!o.self_test && !o.max_diagnostic && !o.div_batch_diagnostic) Require(o.reference_sec>0,"supply --reference-csv or --pre-v2-seconds from same-machine bench_varops");
     return o;
 }
 
@@ -1844,8 +2047,7 @@ void MeasureMaxDiagnostic(const Options& options)
                                 phases[2] += std::chrono::duration<double, std::nano>(t3 - t2).count();
                                 phases[3] += std::chrono::duration<double, std::nano>(t4 - t3).count();
                             } else {
-                                uint64_t ignored_cost{0};
-                                Val64::OpMax(left, right, ignored_cost);
+                                Val64::OpMax(left, right);
                                 phases[2] += std::chrono::duration<double, std::nano>(Clock::now() - t2).count();
                             }
                             const auto t4{Clock::now()};
@@ -1925,9 +2127,9 @@ int main(int argc,char** argv)
         }
         std::cerr<<"Reference: "<<options.reference_sec<<" s (Script evaluation only).\n"
                  <<"Empirical percentile: "<<options.percentile<<"; safety multiplier: "<<options.margin<<".\n";
+        if (options.div_batch_diagnostic) { DivisionBatchDiagnostic(options); return 0; }
         Runner runner(options);Crypto crypto;
         if (options.calibration_candidate) {
-            Require(varops::PRODUCER_LIFETIME_EXPERIMENT, "candidate collection requires the producer-lifetime build");
             EstimateFixed(runner);
             EstimateProducer(runner);
             EstimateRepresentation(runner, false);
@@ -1935,7 +2137,8 @@ int main(int argc,char** argv)
             EstimateArithmetic(runner);
             EstimateBit(runner);
             EstimateMove(runner);
-            EstimateMulDiv(runner);
+            EstimateMultiplication(runner);
+            EstimateDivision(runner);
             EstimateHashes(runner, crypto);
             EstimateSignatures(runner, crypto);
             runner.Save();
@@ -1972,8 +2175,20 @@ int main(int argc,char** argv)
             std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
             return 0;
         }
+        if (options.fixed_only) {
+            EstimateFixed(runner);
+            runner.Save();
+            std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
+            return 0;
+        }
         if (options.hash_only) {
             EstimateHashes(runner, crypto);
+            runner.Save();
+            std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
+            return 0;
+        }
+        if (options.mul_only) {
+            EstimateMultiplication(runner);
             runner.Save();
             std::cerr << "Wrote " << options.output << " and " << options.output << ".samples.csv\n";
             return 0;

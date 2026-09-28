@@ -3,7 +3,6 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 #include <script/val64.h>
-#include <script/varops.h>
 #include <test/util/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
@@ -49,141 +48,104 @@ BOOST_AUTO_TEST_CASE(unsigned_minimal_encoding)
 
 BOOST_AUTO_TEST_CASE(length_conversion_reads_full_little_endian_value)
 {
-    uint64_t cost{0};
 
     Val64 with_trailing_zeroes{ValFromBytes(Bytes({0xff, 0x00, 0x00}))};
-    BOOST_CHECK_EQUAL(with_trailing_zeroes.ToU64Ceil(300, cost), 255);
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(3));
+    BOOST_CHECK_EQUAL(with_trailing_zeroes.ToU64Ceil(300), 255);
 
-    cost = 0;
     Val64 capped_by_max{ValFromBytes(Bytes({0x05}))};
-    BOOST_CHECK_EQUAL(capped_by_max.ToU64Ceil(4, cost), 4);
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(1));
+    BOOST_CHECK_EQUAL(capped_by_max.ToU64Ceil(4), 4);
 
-    cost = 0;
     Val64 larger_than_u64{ValFromBytes(Bytes({0, 0, 0, 0, 0, 0, 0, 0, 1}))};
-    BOOST_CHECK_EQUAL(larger_than_u64.ToU64Ceil(1000, cost), 1000);
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(9));
+    BOOST_CHECK_EQUAL(larger_than_u64.ToU64Ceil(1000), 1000);
 
-    cost = 0;
     Val64 padded_u64_max{ValFromBytes(Bytes({0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00}))};
-    BOOST_CHECK_EQUAL(padded_u64_max.ToU64Ceil(UINT64_MAX, cost), UINT64_MAX);
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(9));
+    BOOST_CHECK_EQUAL(padded_u64_max.ToU64Ceil(UINT64_MAX), UINT64_MAX);
 }
 
 BOOST_AUTO_TEST_CASE(arithmetic_operations_normalize_results)
 {
-    uint64_t cost{0};
 
     Val64 add_a{ValFromBytes(Bytes({0xff}))};
     Val64 add_b{ValFromBytes(Bytes({0x01}))};
-    Val64::OpAdd(add_a, add_b, cost);
+    Val64::OpAdd(add_a, add_b);
     BOOST_CHECK(MoveOut(add_a) == Bytes({0x00, 0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::AddCost(1, 1));
 
-    cost = 0;
     Val64 add_with_zeroes{ValFromBytes(Bytes({0x01, 0x00, 0x00}))};
     Val64 zero{ValFromBytes(Bytes({}))};
-    Val64::OpAdd(add_with_zeroes, zero, cost);
+    Val64::OpAdd(add_with_zeroes, zero);
     BOOST_CHECK(MoveOut(add_with_zeroes) == Bytes({0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::AddCost(3, 0));
 
-    cost = 0;
     Val64 sub_a{ValFromBytes(Bytes({0x00, 0x01}))};
     Val64 sub_b{ValFromBytes(Bytes({0x01}))};
-    BOOST_CHECK(Val64::OpSub(sub_a, sub_b, cost));
+    BOOST_CHECK(Val64::OpSub(sub_a, sub_b));
     BOOST_CHECK(MoveOut(sub_a) == Bytes({0xff}));
-    BOOST_CHECK_EQUAL(cost, varops::SubCost(2, 1));
 
-    cost = 0;
     Val64 sub_to_zero{ValFromBytes(Bytes({0x01}))};
     Val64 one{ValFromBytes(Bytes({0x01}))};
-    BOOST_CHECK(Val64::OpSub(sub_to_zero, one, cost));
+    BOOST_CHECK(Val64::OpSub(sub_to_zero, one));
     BOOST_CHECK(MoveOut(sub_to_zero) == Bytes({}));
 
-    cost = 0;
     Val64 underflow{ValFromBytes(Bytes({}))};
-    BOOST_CHECK(!Val64::Op1Sub(underflow, cost));
-    BOOST_CHECK_EQUAL(cost, varops::SubCost(0, 1));
+    BOOST_CHECK(!Val64::Op1Sub(underflow));
 }
 
 BOOST_AUTO_TEST_CASE(one_add_and_one_sub_cross_word_boundaries)
 {
-    uint64_t cost{0};
 
     Val64 carry_from_full_word{ValFromBytes(Bytes({0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}))};
-    Val64::Op1Add(carry_from_full_word, cost);
+    Val64::Op1Add(carry_from_full_word);
     BOOST_CHECK(MoveOut(carry_from_full_word) == Bytes({0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::AddCost(8, 1));
 
-    cost = 0;
     Val64 borrow_from_next_word{ValFromBytes(Bytes({0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}))};
-    BOOST_CHECK(Val64::Op1Sub(borrow_from_next_word, cost));
+    BOOST_CHECK(Val64::Op1Sub(borrow_from_next_word));
     BOOST_CHECK(MoveOut(borrow_from_next_word) == Bytes({0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}));
-    BOOST_CHECK_EQUAL(cost, varops::SubCost(9, 1));
 }
 
 BOOST_AUTO_TEST_CASE(bit_operations_preserve_operand_width)
 {
-    uint64_t cost{0};
 
     Val64 inverted{ValFromBytes(Bytes({0x00, 0xff}))};
-    Val64::OpInvert(inverted, cost);
+    Val64::OpInvert(inverted);
     BOOST_CHECK(MoveOut(inverted) == Bytes({0xff, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::InvertCost(2));
 
-    cost = 0;
     Val64 and_a{ValFromBytes(Bytes({0xff, 0xff}))};
     Val64 and_b{ValFromBytes(Bytes({0x0f}))};
-    Val64::OpAnd(and_a, and_b, cost);
+    Val64::OpAnd(and_a, and_b);
     BOOST_CHECK(MoveOut(and_a) == Bytes({0x0f, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::AndCost(2, 1));
 
-    cost = 0;
     Val64 or_a{ValFromBytes(Bytes({0x00, 0x00}))};
     Val64 or_b{ValFromBytes(Bytes({0x00}))};
-    Val64::OpOr(or_a, or_b, cost);
+    Val64::OpOr(or_a, or_b);
     BOOST_CHECK(MoveOut(or_a) == Bytes({0x00, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::OrCost(2, 1));
 
-    cost = 0;
     Val64 xor_a{ValFromBytes(Bytes({0x01, 0x00}))};
     Val64 xor_b{ValFromBytes(Bytes({0x01}))};
-    Val64::OpXor(xor_a, xor_b, cost);
+    Val64::OpXor(xor_a, xor_b);
     BOOST_CHECK(MoveOut(xor_a) == Bytes({0x00, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::XorCost(2, 1));
 }
 
 BOOST_AUTO_TEST_CASE(bitshift_operations_preserve_width)
 {
-    uint64_t cost{0};
 
     Val64 upshift_one_bit{ValFromBytes(Bytes({0x01}))};
     Val64 one_bit{ValFromBytes(Bytes({0x01}))};
-    BOOST_CHECK(Val64::OpUpShift(upshift_one_bit, one_bit, 10, cost));
+    BOOST_CHECK(Val64::OpUpShift(upshift_one_bit, one_bit, 10));
     BOOST_CHECK(MoveOut(upshift_one_bit) == Bytes({0x02, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(1) + 1 * varops::COST_COPYING + varops::UnalignedUpShiftCost(1, 0));
 
-    cost = 0;
     Val64 upshift_one_byte{ValFromBytes(Bytes({0x01}))};
     Val64 eight_bits{ValFromBytes(Bytes({0x08}))};
-    BOOST_CHECK(Val64::OpUpShift(upshift_one_byte, eight_bits, 10, cost));
+    BOOST_CHECK(Val64::OpUpShift(upshift_one_byte, eight_bits, 10));
     BOOST_CHECK(MoveOut(upshift_one_byte) == Bytes({0x00, 0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(1) + 1 * varops::COST_FAST + 1 * varops::COST_COPYING);
 
-    cost = 0;
     Val64 downshift_one_bit{ValFromBytes(Bytes({0x02, 0x00}))};
     Val64 one_bit_down{ValFromBytes(Bytes({0x01}))};
-    Val64::OpDownShift(downshift_one_bit, one_bit_down, cost);
+    Val64::OpDownShift(downshift_one_bit, one_bit_down);
     BOOST_CHECK(MoveOut(downshift_one_bit) == Bytes({0x01, 0x00}));
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(1) + 2 * varops::COST_COPYING);
 
-    cost = 0;
     Val64 downshift_past_end{ValFromBytes(Bytes({0xff}))};
     Val64 many_bits{ValFromBytes(Bytes({0x08}))};
-    Val64::OpDownShift(downshift_past_end, many_bits, cost);
+    Val64::OpDownShift(downshift_past_end, many_bits);
     BOOST_CHECK(MoveOut(downshift_past_end) == Bytes({}));
-    BOOST_CHECK_EQUAL(cost, varops::LengthConversionCost(1));
 }
 
 BOOST_AUTO_TEST_CASE(multiply_divide_and_modulo_are_unsigned_and_normalized)
@@ -215,49 +177,37 @@ BOOST_AUTO_TEST_CASE(multiply_divide_and_modulo_are_unsigned_and_normalized)
 
 BOOST_AUTO_TEST_CASE(numeric_comparison_treats_trailing_zeroes_as_equal)
 {
-    uint64_t cost{0};
     Val64 one_minimal{ValFromBytes(Bytes({0x01}))};
     Val64 one_wide{ValFromBytes(Bytes({0x01, 0x00, 0x00}))};
-    BOOST_CHECK_EQUAL(one_minimal.Compare(one_wide, cost), 0);
-    BOOST_CHECK_EQUAL(cost, varops::ComparisonCost(1, 3));
+    BOOST_CHECK_EQUAL(one_minimal.Compare(one_wide), 0);
 
-    cost = 0;
     Val64 high_bit{ValFromBytes(Bytes({0x00, 0x80}))};
     Val64 smaller{ValFromBytes(Bytes({0xff, 0x7f}))};
-    BOOST_CHECK_EQUAL(high_bit.Compare(smaller, cost), 1);
-    BOOST_CHECK_EQUAL(cost, varops::ComparisonCost(2, 2));
+    BOOST_CHECK_EQUAL(high_bit.Compare(smaller), 1);
 }
 
 BOOST_AUTO_TEST_CASE(min_and_max_normalize_equal_numeric_values)
 {
-    uint64_t cost{0};
 
     Val64 min_a{ValFromBytes(Bytes({0x01, 0x00, 0x00}))};
     Val64 min_b{ValFromBytes(Bytes({0x01}))};
-    Val64::OpMin(min_a, min_b, cost);
+    Val64::OpMin(min_a, min_b);
     BOOST_CHECK(MoveOut(min_a) == Bytes({0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(3, 1));
 
-    cost = 0;
     Val64 max_a{ValFromBytes(Bytes({0x01, 0x00, 0x00}))};
     Val64 max_b{ValFromBytes(Bytes({0x01}))};
-    Val64::OpMax(max_a, max_b, cost);
+    Val64::OpMax(max_a, max_b);
     BOOST_CHECK(MoveOut(max_a) == Bytes({0x01}));
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(3, 1));
 
-    cost = 0;
     Val64 min_selects_second{ValFromBytes(Bytes({0x05}))};
     Val64 smaller_second{ValFromBytes(Bytes({0x03, 0x00}))};
-    Val64::OpMin(min_selects_second, smaller_second, cost);
+    Val64::OpMin(min_selects_second, smaller_second);
     BOOST_CHECK(MoveOut(min_selects_second) == Bytes({0x03}));
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(1, 2));
 
-    cost = 0;
     Val64 max_selects_second{ValFromBytes(Bytes({0x03}))};
     Val64 larger_second{ValFromBytes(Bytes({0x05, 0x00}))};
-    Val64::OpMax(max_selects_second, larger_second, cost);
+    Val64::OpMax(max_selects_second, larger_second);
     BOOST_CHECK(MoveOut(max_selects_second) == Bytes({0x05}));
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(1, 2));
 
     // The operands share a high nonzero limb, but differ in the low limb.
     valtype low(17, 0);
@@ -267,23 +217,17 @@ BOOST_AUTO_TEST_CASE(min_and_max_normalize_equal_numeric_values)
     high[0] = 2;
     Val64 min_first{ValFromBytes(low)};
     Val64 min_second{ValFromBytes(high)};
-    cost = 0;
-    Val64::OpMin(min_first, min_second, cost);
+    Val64::OpMin(min_first, min_second);
     BOOST_CHECK(MoveOut(min_first) == low);
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(17, 17));
     Val64 max_first{ValFromBytes(low)};
     Val64 max_second{ValFromBytes(high)};
-    cost = 0;
-    Val64::OpMax(max_first, max_second, cost);
+    Val64::OpMax(max_first, max_second);
     BOOST_CHECK(MoveOut(max_first) == high);
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(17, 17));
 
     Val64 zero_padded{ValFromBytes(valtype(17, 0))};
     Val64 zero_short{ValFromBytes(Bytes({0}))};
-    cost = 0;
-    Val64::OpMax(zero_padded, zero_short, cost);
+    Val64::OpMax(zero_padded, zero_short);
     BOOST_CHECK(MoveOut(zero_padded).empty());
-    BOOST_CHECK_EQUAL(cost, varops::MinMaxCost(17, 1));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

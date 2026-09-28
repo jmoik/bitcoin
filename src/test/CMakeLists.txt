@@ -111,6 +111,7 @@ add_executable(test_bitcoin
   system_ram_tests.cpp
   system_tests.cpp
   tapscript_v2_json_tests.cpp
+  tapscript_v2_macro_tests.cpp
   tapscript_v2_tests.cpp
   testnet4_miner_tests.cpp
   threadpool_tests.cpp
@@ -158,6 +159,7 @@ target_json_data_sources(test_bitcoin
   data/script_tests.json
   data/sighash.json
   data/siphash.json
+  data/tapscript_v2_macros.json
   data/tapscript_v2_restored_ops.json
   data/tapscript_v2_varops.json
   data/tx_invalid.json

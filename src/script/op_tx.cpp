@@ -12,6 +12,7 @@
 #include <serialize.h>
 #include <span.h>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -85,6 +86,8 @@ enum class ValueEncoding : uint8_t {
     UINT64,
     FIXED_BYTES,
     VAR_BYTES,
+    //! Witness item count: charged in both formats, emitted only by COLLATE.
+    COLLATED_COUNT,
 };
 
 struct ResultValue {
@@ -96,6 +99,7 @@ struct ResultValue {
     static ResultValue Uint64(uint64_t value) { return {ValueEncoding::UINT64, value, {}}; }
     static ResultValue FixedBytes(std::span<const unsigned char> value) { return {ValueEncoding::FIXED_BYTES, 0, value}; }
     static ResultValue VarBytes(std::span<const unsigned char> value) { return {ValueEncoding::VAR_BYTES, 0, value}; }
+    static ResultValue CollatedCount(uint64_t value) { return {ValueEncoding::COLLATED_COUNT, value, {}}; }
 };
 
 OpTxResult SetError(ScriptError* ret, ScriptError error)
@@ -234,20 +238,20 @@ std::optional<uint64_t> SumAmounts(std::span<const CTxOut> outputs)
     return total;
 }
 
-std::pair<uint64_t, uint64_t> GetTransactionSizes(const ScriptTransactionData& tx, uint64_t& visited_items)
+std::pair<uint64_t, uint64_t> GetTransactionSizes(const ScriptTransactionData& tx, uint64_t& scanned_items)
 {
     uint64_t stripped_size{sizeof(uint32_t) + GetSizeOfCompactSize(tx.inputs.size()) +
                            GetSizeOfCompactSize(tx.outputs.size()) + sizeof(uint32_t)};
     bool has_witness{false};
     uint64_t witness_size{0};
     for (const CTxIn& input : tx.inputs) {
-        visited_items += 1 + input.scriptWitness.stack.size();
+        scanned_items += 1 + input.scriptWitness.stack.size();
         stripped_size += GetSerializeSize(input);
         has_witness |= !input.scriptWitness.IsNull();
         witness_size += GetSerializeSize(input.scriptWitness.stack);
     }
     for (const CTxOut& output : tx.outputs) {
-        ++visited_items;
+        ++scanned_items;
         stripped_size += GetSerializeSize(output);
     }
     const uint64_t total_size{stripped_size + (has_witness ? 2 + witness_size : 0)};
@@ -273,7 +277,10 @@ size_t SemanticSize(const ResultValue& value)
     case ValueEncoding::FIXED_BYTES:
     case ValueEncoding::VAR_BYTES:
         return value.bytes.size();
+    case ValueEncoding::COLLATED_COUNT:
+        break;
     }
+    assert(false);
     return 0;
 }
 
@@ -288,6 +295,8 @@ size_t CollatedSize(const ResultValue& value)
         return value.bytes.size();
     case ValueEncoding::VAR_BYTES:
         return GetSizeOfCompactSize(value.bytes.size()) + value.bytes.size();
+    case ValueEncoding::COLLATED_COUNT:
+        return GetSizeOfCompactSize(value.number);
     }
     return 0;
 }
@@ -327,7 +336,10 @@ void AppendSemantic(valtype& output, const ResultValue& value)
     case ValueEncoding::VAR_BYTES:
         output.insert(output.end(), value.bytes.begin(), value.bytes.end());
         return;
+    case ValueEncoding::COLLATED_COUNT:
+        break;
     }
+    assert(false);
 }
 
 void AppendCollated(valtype& output, const ResultValue& value)
@@ -346,18 +358,25 @@ void AppendCollated(valtype& output, const ResultValue& value)
         AppendCompactSize(output, value.bytes.size());
         output.insert(output.end(), value.bytes.begin(), value.bytes.end());
         return;
+    case ValueEncoding::COLLATED_COUNT:
+        AppendCompactSize(output, value.number);
+        return;
     }
 }
 
-bool PlanResults(std::vector<ResultValue>& values, uint64_t& visited_items,
+bool IsNumeric(const ResultValue& value)
+{
+    return value.encoding == ValueEncoding::UINT32 || value.encoding == ValueEncoding::UINT64;
+}
+
+bool PlanResults(std::vector<ResultValue>& values, uint64_t& scanned_items,
                  const Selector& selector, const ScriptTransactionData& tx,
                  const ScriptExecutionData& execdata)
 {
-    visited_items += uint64_t{selector.inputs.count} + selector.outputs.count;
     if (selector.globals & TX_VERSION) values.push_back(ResultValue::Uint32(static_cast<uint32_t>(tx.version)));
     if (selector.globals & TX_LOCKTIME) values.push_back(ResultValue::Uint32(tx.lock_time));
     if (selector.tx_weight) {
-        const auto [stripped_size, total_size]{GetTransactionSizes(tx, visited_items)};
+        const auto [stripped_size, total_size]{GetTransactionSizes(tx, scanned_items)};
         const uint64_t weight{stripped_size * 3 + total_size};
         if (weight > std::numeric_limits<uint32_t>::max()) return false;
         values.push_back(ResultValue::Uint32(weight));
@@ -368,7 +387,7 @@ bool PlanResults(std::vector<ResultValue>& values, uint64_t& visited_items,
         const auto total{SumAmounts(tx.spent_outputs.first(tx.inputs.size()))};
         if (!total) return false;
         values.push_back(ResultValue::Uint64(*total));
-        visited_items += tx.inputs.size();
+        scanned_items += tx.inputs.size();
     }
 
     for (uint32_t offset{0}; offset < selector.inputs.count; ++offset) {
@@ -391,7 +410,8 @@ bool PlanResults(std::vector<ResultValue>& values, uint64_t& visited_items,
             values.push_back(ResultValue::Uint32(input.scriptWitness.stack.size()));
         }
         if (selector.input_fields & INPUT_WITNESS_ITEMS) {
-            visited_items += input.scriptWitness.stack.size();
+            // BIP144 witness serialization keeps collated input boundaries.
+            values.push_back(ResultValue::CollatedCount(input.scriptWitness.stack.size()));
             for (const valtype& item : input.scriptWitness.stack) {
                 values.push_back(ResultValue::VarBytes(item));
             }
@@ -403,7 +423,7 @@ bool PlanResults(std::vector<ResultValue>& values, uint64_t& visited_items,
         const auto total{SumAmounts(tx.outputs)};
         if (!total) return false;
         values.push_back(ResultValue::Uint64(*total));
-        visited_items += tx.outputs.size();
+        scanned_items += tx.outputs.size();
     }
     for (uint32_t offset{0}; offset < selector.outputs.count; ++offset) {
         const CTxOut& output{tx.outputs[selector.outputs.start + offset]};
@@ -487,13 +507,20 @@ OpTxResult EvalOpTx(ValtypeStack& stack, const ValtypeStack& altstack,
     }
 
     std::vector<ResultValue> values;
-    uint64_t visited_items{0};
-    if (!PlanResults(values, visited_items, selector, *tx, execdata)) {
+    uint64_t scanned_items{0};
+    if (!PlanResults(values, scanned_items, selector, *tx, execdata)) {
         return SetError(serror, SCRIPT_ERR_TX_CONTEXT);
     }
-    const size_t output_count{selector.collate ? 1 : values.size()};
+    // k counts every planned value, including each witness item count, and
+    // every record scanned for an aggregate field.
+    cost_meter.Add(varops::TxSelectCost(values.size() + scanned_items));
+    size_t output_count{selector.collate ? 1U : 0U};
     size_t total_output_size{0};
     for (const ResultValue& value : values) {
+        if (!selector.collate) {
+            if (value.encoding == ValueEncoding::COLLATED_COUNT) continue;
+            ++output_count;
+        }
         const size_t value_size{selector.collate ? CollatedSize(value) : SemanticSize(value)};
         if (!selector.collate && value_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
             return SetError(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
@@ -502,9 +529,15 @@ OpTxResult EvalOpTx(ValtypeStack& stack, const ValtypeStack& altstack,
             return SetError(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
         }
         total_output_size += value_size;
+        if (!selector.collate) {
+            cost_meter.Add(IsNumeric(value) ? varops::ScalarOutputCost() : varops::CopyCost(value_size));
+        }
     }
-    if (selector.collate && total_output_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
-        return SetError(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+    if (selector.collate) {
+        if (total_output_size > MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) {
+            return SetError(serror, SCRIPT_ERR_STACK_ELEMENT_SIZE);
+        }
+        cost_meter.Add(varops::CopyCost(total_output_size));
     }
 
     if (stack.size() > MAX_TAPSCRIPT_V2_STACK_SIZE ||
@@ -520,14 +553,6 @@ OpTxResult EvalOpTx(ValtypeStack& stack, const ValtypeStack& altstack,
     }
     const size_t base_bytes{stack.GetTotalSize() + altstack.GetTotalSize()};
     if (total_output_size > MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE - base_bytes) return SetError(serror, SCRIPT_ERR_TOTAL_STACK_SIZE);
-    // Charge every traversed record, including aggregate-field scans, and
-    // then the bytes materialized in result items.
-    cost_meter.Add(varops::TxSelectCost(visited_items));
-    // SELECT covers result-entry creation; only COPY's byte term remains.
-    cost_meter.Add(varops::CopyCost(total_output_size) - varops::CopyCost(0));
-    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-        cost_meter.Add(output_count * varops::CopyCost(0));
-    }
     if (!cost_meter.Spend(varops_budget)) return SetError(serror, SCRIPT_ERR_VAROP_COUNT);
 
     std::vector<valtype> outputs;
@@ -540,6 +565,7 @@ OpTxResult EvalOpTx(ValtypeStack& stack, const ValtypeStack& altstack,
         outputs.push_back(std::move(output));
     } else {
         for (const ResultValue& value : values) {
+            if (value.encoding == ValueEncoding::COLLATED_COUNT) continue;
             valtype output;
             output.reserve(SemanticSize(value));
             AppendSemantic(output, value);

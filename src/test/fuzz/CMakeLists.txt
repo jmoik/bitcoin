@@ -128,6 +128,7 @@ add_executable(fuzz
   threadpool.cpp
   tapscript_v2_budget_accounting.cpp
   tapscript_v2_eval_invariants.cpp
+  tapscript_v2_macro_equivalence.cpp
   tapscript_v2_signature_timelock.cpp
   tapscript_v2_stack_programs.cpp
   tapscript_v2_stack_resource_limits.cpp

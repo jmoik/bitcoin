@@ -74,6 +74,25 @@ BOOST_AUTO_TEST_CASE(valtype_stack_const_copy_word_capacity)
     }
 }
 
+BOOST_AUTO_TEST_CASE(valtype_stack_move_bounds_retained_capacity)
+{
+    for (size_t size : {size_t{0}, size_t{1}, size_t{8}, size_t{9}, size_t{4096}}) {
+        for (size_t capacity : {size, 2 * size + 8, 2 * size + 16, 4 * size + 64, size_t{1} << 20}) {
+            const size_t word_span{(size + 7) / 8 * 8};
+            valtype element(size, 0x5a);
+            element.reserve(capacity);
+            const size_t moved_capacity{element.capacity()};
+            ValtypeStack stack;
+            stack.push_back(std::move(element));
+            BOOST_CHECK(stack.back() == valtype(size, 0x5a));
+            BOOST_CHECK_LE(stack.back().capacity(), 2 * word_span);
+            // Values within the bound keep their buffer.
+            if (moved_capacity <= 2 * word_span) BOOST_CHECK_EQUAL(stack.back().capacity(), moved_capacity);
+            CheckAccounting(stack, size, size);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(valtype_stack_erase_boundaries)
 {
     ValtypeStack stack{std::vector<valtype>{
@@ -167,6 +186,27 @@ BOOST_AUTO_TEST_CASE(valtype_stack_reordering_preserves_accounting)
     swap_stack.Swap(-3, -1);
     BOOST_CHECK(swap_stack.GetStack() == swapped);
     CheckAccounting(swap_stack, 6, 3);
+}
+
+BOOST_AUTO_TEST_CASE(valtype_stack_reserve_grows_geometrically)
+{
+    // Stack opcodes reserve one or a few more items before copying an
+    // element. Growing to exactly that size would move the whole stack on
+    // every push.
+    ValtypeStack stack;
+    size_t reallocations{0};
+    for (size_t i{0}; i < 32'768; ++i) {
+        const size_t capacity{stack.GetStack().capacity()};
+        stack.reserve(stack.size() + 1);
+        stack.push_back(valtype{});
+        reallocations += stack.GetStack().capacity() != capacity;
+    }
+    BOOST_CHECK_LE(reallocations, 17U);
+
+    // Reserving within the capacity keeps element references valid.
+    const size_t capacity{stack.GetStack().capacity()};
+    stack.reserve(capacity);
+    BOOST_CHECK_EQUAL(stack.GetStack().capacity(), capacity);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

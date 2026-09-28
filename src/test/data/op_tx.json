@@ -20,7 +20,7 @@
       "outputs": [
         "02"
       ],
-      "varops": 3618
+      "varops": 6267
     }
   },
   {
@@ -44,7 +44,7 @@
       "outputs": [
         "44332211"
       ],
-      "varops": 3624
+      "varops": 6267
     }
   },
   {
@@ -100,7 +100,7 @@
         "816618983e663b6cee876c0c11845bc1314cafb3bcf93f9ab0442b05facaba63",
         "07"
       ],
-      "varops": 11926
+      "varops": 93875
     }
   },
   {
@@ -122,9 +122,9 @@
     "expected": {
       "success": true,
       "outputs": [
-        "030000000d0c0b0ad001000002000000bb0b000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f44332211e903000000000000015401510403020100000000fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e088776655d2070000000000000255560252530807060500000000020000005f1b000000000000bb0b0000000000000157a40f000000000000025859010000000250aa0a51525354555657ab00bde4baef7293288da208426f4d9eb05edb6351facbbbcbabe2f8f2cdcbee27fd1941c2808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f816618983e663b6cee876c0c11845bc1314cafb3bcf93f9ab0442b05facaba6307000000"
+        "030000000d0c0b0ad001000002000000bb0b000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f44332211e90300000000000001540151040302010000000000fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e088776655d207000000000000025556025253080706050000000000020000005f1b000000000000bb0b0000000000000157a40f000000000000025859010000000250aa0a51525354555657ab00bde4baef7293288da208426f4d9eb05edb6351facbbbcbabe2f8f2cdcbee27fd1941c2808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f816618983e663b6cee876c0c11845bc1314cafb3bcf93f9ab0442b05facaba6307000000"
       ],
-      "varops": 12066
+      "varops": 35434
     }
   },
   {
@@ -154,7 +154,7 @@
       "outputs": [
         "fc505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050fdfd0051515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151515151"
       ],
-      "varops": 4634
+      "varops": 10053
     }
   },
   {
@@ -179,7 +179,7 @@
         "02",
         "01"
       ],
-      "varops": 3620
+      "varops": 8934
     }
   },
   {
@@ -204,7 +204,7 @@
         "581b",
         "8813"
       ],
-      "varops": 4914
+      "varops": 8934
     }
   },
   {
@@ -231,7 +231,7 @@
         "8813",
         "7017"
       ],
-      "varops": 6212
+      "varops": 14268
     }
   },
   {
@@ -261,7 +261,7 @@
         "fdffffff",
         "51"
       ],
-      "varops": 4918
+      "varops": 10771
     }
   },
   {
@@ -294,7 +294,7 @@
         "8813",
         "7017"
       ],
-      "varops": 6212
+      "varops": 14268
     }
   },
   {
@@ -321,7 +321,7 @@
         "7017",
         "00143333333333333333333333333333333333333333"
       ],
-      "varops": 4960
+      "varops": 13585
     }
   },
   {
@@ -345,7 +345,7 @@
       "outputs": [
         "020000008813000000000000015170170000000000001600143333333333333333333333333333333333333333"
       ],
-      "varops": 4996
+      "varops": 8740
     }
   },
   {
@@ -369,7 +369,7 @@
       "outputs": [
         ""
       ],
-      "varops": 3616
+      "varops": 5845
     }
   },
   {
@@ -393,7 +393,7 @@
       "outputs": [
         "00"
       ],
-      "varops": 3618
+      "varops": 5852
     }
   },
   {
@@ -417,7 +417,7 @@
       "outputs": [
         "ffffffff"
       ],
-      "varops": 3624
+      "varops": 6267
     }
   },
   {
@@ -441,7 +441,7 @@
       "outputs": [
         "02"
       ],
-      "varops": 3618
+      "varops": 6267
     }
   },
   {
@@ -465,7 +465,7 @@
       "outputs": [
         "5555555555555555555555555555555555555555555555555555555555555555"
       ],
-      "varops": 3680
+      "varops": 6069
     }
   },
   {
@@ -494,7 +494,7 @@
         "401f",
         "7017"
       ],
-      "varops": 4914
+      "varops": 8934
     }
   },
   {
@@ -518,7 +518,7 @@
       "outputs": [
         "02000000443322110200000000feffffff00fdffffff02000000881300000000000001517017000000000000160014333333333333333333333333333333333333333300000000"
       ],
-      "varops": 6338
+      "varops": 14082
     }
   },
   {
@@ -542,7 +542,7 @@
       "outputs": [
         "020000004433221102000000fefffffffdffffff0200000088130000000000000151701700000000000016001433333333333333333333333333333333333333330000000000"
       ],
-      "varops": 6336
+      "varops": 13430
     }
   },
   {
@@ -561,13 +561,13 @@
     "id": "default_exact_budget",
     "comment": "A two-byte default-output amount succeeds at its exact varops budget.",
     "selector": "000000010001",
-    "available_varops": 4265,
+    "available_varops": 6267,
     "expected": {
       "success": true,
       "outputs": [
         "8813"
       ],
-      "varops": 4265
+      "varops": 6267
     }
   },
   {
@@ -586,7 +586,7 @@
     "id": "default_budget_exhausted",
     "comment": "The same amount fails one varop below its complete prepaid cost.",
     "selector": "000000010001",
-    "available_varops": 4264,
+    "available_varops": 6266,
     "expected": {
       "success": false,
       "error": "varops_exhausted"
@@ -608,13 +608,13 @@
     "id": "templatehash_like_collated_annex_exact_budget",
     "comment": "The TemplateHash-like collated selection with an annex succeeds at its exact varops budget.",
     "selector": "005703222003",
-    "available_varops": 6342,
+    "available_varops": 13451,
     "expected": {
       "success": true,
       "outputs": [
         "020000004433221102000000fefffffffdffffff020000008813000000000000015170170000000000001600143333333333333333333333333333333333333333000000000350aabb"
       ],
-      "varops": 6342
+      "varops": 13451
     }
   },
   {
@@ -644,7 +644,7 @@
       "outputs": [
         "02"
       ],
-      "varops": 3618
+      "varops": 6267
     },
     "initial_altstack": [
       {
@@ -713,7 +713,7 @@
       "outputs": [
         "1111111111111111111111111111111111111111111111111111111111111111"
       ],
-      "varops": 4325
+      "varops": 6069
     },
     "initial_altstack": [
       {
@@ -782,7 +782,7 @@
           "count": 4000000
         }
       ],
-      "varops": 8003616
+      "varops": 28005845
     }
   },
   {
@@ -914,7 +914,7 @@
       "outputs": [
         "002a2bb7d243724fadc9e1f630948478944c9c8eebcc8fe8a3017d93ef137cfb"
       ],
-      "varops": 3680
+      "varops": 6069
     }
   },
   {
@@ -959,7 +959,7 @@
       "outputs": [
         "146874be3ba4a78da3f32d7b93b2852e2afa5d85eea02167514ee50004b9dc11"
       ],
-      "varops": 3680
+      "varops": 6069
     }
   },
   {
@@ -1209,7 +1209,7 @@
       "outputs": [
         "581b"
       ],
-      "varops": 4265
+      "varops": 6267
     }
   },
   {
@@ -1415,7 +1415,7 @@
       "outputs": [
         "ffffffff"
       ],
-      "varops": 3624
+      "varops": 6267
     }
   },
   {
@@ -1439,7 +1439,7 @@
       "outputs": [
         ""
       ],
-      "varops": 3616
+      "varops": 6267
     }
   },
   {
@@ -1491,7 +1491,7 @@
         "bb0b",
         "a40f"
       ],
-      "varops": 5563
+      "varops": 11601
     }
   },
   {
@@ -1534,14 +1534,14 @@
     "id": "amount_totals_exact_budget",
     "comment": "Input and output total amounts succeed at the exact varops budget.",
     "selector": "00a000000000",
-    "available_varops": 6204,
+    "available_varops": 11514,
     "expected": {
       "success": true,
       "outputs": [
         "983a",
         "f82a"
       ],
-      "varops": 6204
+      "varops": 11514
     }
   },
   {
@@ -1560,7 +1560,7 @@
     "id": "amount_totals_budget_exhausted",
     "comment": "Input and output total amounts produce no results when the budget is one varop too small.",
     "selector": "00a000000000",
-    "available_varops": 6203,
+    "available_varops": 11513,
     "expected": {
       "success": false,
       "error": "varops_exhausted"
@@ -1587,7 +1587,7 @@
       "outputs": [
         "02000000983a00000000000002000000f82a000000000000"
       ],
-      "varops": 6244
+      "varops": 10528
     }
   },
   {
@@ -1652,7 +1652,7 @@
       "outputs": [
         "2302"
       ],
-      "varops": 8135
+      "varops": 10782
     }
   },
   {
@@ -1676,7 +1676,7 @@
       "outputs": [
         "23020000"
       ],
-      "varops": 8139
+      "varops": 10388
     }
   },
   {
@@ -1702,7 +1702,7 @@
         "aa",
         "bbbb"
       ],
-      "varops": 5559
+      "varops": 11423
     }
   },
   {
@@ -1719,14 +1719,38 @@
       "codesep_pos": 0
     },
     "id": "all_input_witness_collated",
-    "comment": "COLLATE emits each input's witness count followed by its length-prefixed items.",
+    "comment": "COLLATE emits each input's selected witness count, then the witness in BIP144 serialization: a CompactSize item count followed by length-prefixed items.",
     "selector": "00010020c000",
     "expected": {
       "success": true,
       "outputs": [
-        "0200000001aa02bbbb0100000001cc"
+        "020000000201aa02bbbb010000000101cc"
       ],
-      "varops": 6871
+      "varops": 9834
+    }
+  },
+  {
+    "spending_tx": "0200000000010211111111111111111111111111111111111111111111111111111111111111110100000000feffffff2222222222222222222222222222222222222222222222222222222222222222020000000151fdffffff0288130000000000000151701700000000000016001433333333333333333333333333333333333333330201aa02bbbb0101cc44332211",
+    "spent_outputs": [
+      "581b0000000000002251204444444444444444444444444444444444444444444444444444444444444444",
+      "401f0000000000000151"
+    ],
+    "input_index": 0,
+    "context": {
+      "annex": "50aabb",
+      "tapscript": "ab00bd",
+      "control_block": "c25555555555555555555555555555555555555555555555555555555555555555",
+      "codesep_pos": 0
+    },
+    "id": "all_input_witness_items_only_collated",
+    "comment": "Without INPUT_WITNESS_ITEM_COUNT, each witness's CompactSize item count still preserves input boundaries.",
+    "selector": "000100208000",
+    "expected": {
+      "success": true,
+      "outputs": [
+        "0201aa02bbbb0101cc"
+      ],
+      "varops": 8488
     }
   },
   {
@@ -1748,7 +1772,7 @@
     "expected": {
       "success": true,
       "outputs": [],
-      "varops": 4261
+      "varops": 4245
     }
   },
   {
@@ -1765,14 +1789,14 @@
       "codesep_pos": 7
     },
     "id": "empty_witness_items_collated",
-    "comment": "Selecting witness items from an input with an empty witness emits one empty collated result.",
+    "comment": "Selecting witness items from an input with an empty witness emits its CompactSize item count of zero.",
     "selector": "000100108000",
     "expected": {
       "success": true,
       "outputs": [
-        ""
+        "00"
       ],
-      "varops": 4261
+      "varops": 5852
     }
   },
   {
@@ -1797,7 +1821,7 @@
         "aa",
         "50aabb"
       ],
-      "varops": 5559
+      "varops": 8763
     }
   },
   {
@@ -1905,7 +1929,7 @@
       "success": false,
       "error": "varops_exhausted"
     },
-    "available_varops": 4260
+    "available_varops": 4244
   },
   {
     "spending_tx": "0200000000010211111111111111111111111111111111111111111111111111111111111111110100000000feffffff2222222222222222222222222222222222222222222222222222222222222222020000000151fdffffff028813000000000000015170170000000000001600143333333333333333333333333333333333333333020002bbbb0101cc44332211",
@@ -1929,9 +1953,9 @@
         "",
         "bbbb"
       ],
-      "varops": 5555
+      "varops": 8749
     },
-    "available_varops": 5555
+    "available_varops": 8749
   },
   {
     "spending_tx": "0200000000010211111111111111111111111111111111111111111111111111111111111111110100000000feffffff2222222222222222222222222222222222222222222222222222222222222222020000000151fdffffff028813000000000000015170170000000000001600143333333333333333333333333333333333333333020002bbbb0101cc44332211",
@@ -1953,6 +1977,6 @@
       "success": false,
       "error": "varops_exhausted"
     },
-    "available_varops": 5554
+    "available_varops": 8748
   }
 ]

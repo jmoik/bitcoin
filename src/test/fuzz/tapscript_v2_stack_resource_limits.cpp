@@ -33,12 +33,14 @@ void CheckAltstackCopyLimit(FuzzedDataProvider& provider)
     Stack stack{value, Bytes(first_size, 0x22), Bytes(second_size, 0x33)};
     CScript script;
     script << OP_TOALTSTACK << OP_TOALTSTACK << OP_DUP;
-    const uint64_t cost{CopyCost(value_size)};
+    const uint64_t before_dup{InitialStackCost(stack) + 2 * MovingCost(1)};
+    const uint64_t cost{before_dup + CopyingCost({value_size})};
 
     if (final_total <= MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE) {
         CheckExactEval(script, stack, {value, value}, cost);
     } else {
-        CheckEvalErrorBudget(script, stack, cost, SCRIPT_ERR_TOTAL_STACK_SIZE, cost);
+        // DUP's F is spent; the size limit fails before its production is charged.
+        CheckEvalErrorBudget(script, stack, cost, SCRIPT_ERR_TOTAL_STACK_SIZE, cost - before_dup - F());
     }
 }
 
@@ -62,7 +64,8 @@ void CheckDeepRoll(FuzzedDataProvider& provider)
     const Bytes selected{expected.front()};
     expected.erase(expected.begin());
     expected.push_back(selected);
-    CheckExactEval(script, stack, expected, RollCost(encoded.size(), depth));
+    CheckExactEval(script, stack, expected,
+                   InitialStackCost(stack) + CopyingCost({encoded.size()}) + RollCost(encoded.size(), depth));
 }
 
 void CheckCombinedElementCount(FuzzedDataProvider& provider)
@@ -91,8 +94,11 @@ void CheckCombinedElementCount(FuzzedDataProvider& provider)
     for (size_t i{0}; i < moved_count; ++i)
         script << OP_FROMALTSTACK;
 
+    const uint64_t moves{InitialStackCost(stack) + moved_count * MovingCost(1)};
     if (initial_count + growth > MAX_TAPSCRIPT_V2_STACK_SIZE) {
-        CheckEvalErrorBudget(script, stack, 0, SCRIPT_ERR_STACK_SIZE, 0);
+        // The growing opcode's F is spent; the count limit fails before its copies are charged.
+        constexpr uint64_t budget{1'000'000'000};
+        CheckEvalErrorBudget(script, stack, budget, SCRIPT_ERR_STACK_SIZE, budget - moves - F());
         return;
     }
 
@@ -100,7 +106,10 @@ void CheckCombinedElementCount(FuzzedDataProvider& provider)
     Stack expected{stack.begin(), moved_begin};
     expected.insert(expected.end(), growth, Bytes{});
     expected.insert(expected.end(), moved_begin, stack.end());
-    CheckExactEval(script, stack, expected, 0);
+    const uint64_t growth_cost{growth == 0 ? F() :
+                               growth == 1 ? CopyingCost({0}) :
+                               growth == 2 ? CopyingCost({0, 0}) : CopyingCost({0, 0, 0})};
+    CheckExactEval(script, stack, expected, moves + growth_cost + moved_count * MovingCost(1));
 }
 } // namespace
 

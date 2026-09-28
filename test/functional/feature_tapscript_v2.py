@@ -83,6 +83,7 @@ from test_framework.script import (
     OP_CALLMACRO,
     OP_LSHIFT,
     OP_MUL,
+    OP_NOP,
     OP_PICK,
     OP_PUSHDATA1,
     OP_RETURN,
@@ -115,21 +116,20 @@ MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4_000_000
 MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 8_000_000
 
 VAROPS_BUDGET_PER_WEIGHT = 10_000
-VAROPS_COST_F = 382
-VAROPS_COST_PREP_FIXED = 233
+VAROPS_COST_F = 350
+VAROPS_COST_PREP_FIXED = 300
 VAROPS_COST_PREP_BYTE = 1
-VAROPS_COST_OUTPUT_FIXED = 1209
-VAROPS_COST_OUTPUT_BYTE = 4
-VAROPS_COST_RELEASE_FIXED = 963
-VAROPS_COST_RELEASE_BYTE = 3
-VAROPS_COST_READ_FIXED = 89
-VAROPS_COST_READ_BYTE = 3
-VAROPS_COST_BIT_FIXED = 74
-VAROPS_COST_BIT_BYTE = 1
-VAROPS_COST_MUL_ROW_FIXED = 34
-VAROPS_COST_MUL_ROW_CELL = 14
-VAROPS_COST_ARITH_FIXED = 51
-VAROPS_COST_ARITH_BYTE = 4
+VAROPS_COST_PRODUCE_FIXED = 1600
+VAROPS_COST_PRODUCE_BYTE = 7
+VAROPS_COST_NORMALIZE_FIXED = 350
+VAROPS_COST_NORMALIZE_BYTE = 2
+VAROPS_COST_READ_FIXED = 200
+VAROPS_COST_READ_BYTE = 4
+VAROPS_COST_BIT_FIXED = 100
+VAROPS_COST_BIT_BYTE = 2
+VAROPS_COST_MUL_FIXED = 1450
+VAROPS_COST_MUL_ROW = 41
+VAROPS_COST_MUL_CELL = 42
 VERSIONBITS_PERIOD = 144
 
 
@@ -149,12 +149,13 @@ def prep_cost(size):
     return VAROPS_COST_PREP_FIXED + VAROPS_COST_PREP_BYTE * word_size(size)
 
 
+def produce_cost(size):
+    return VAROPS_COST_PRODUCE_FIXED + VAROPS_COST_PRODUCE_BYTE * size
+
+
 def output_cost(size):
-    return VAROPS_COST_OUTPUT_FIXED + VAROPS_COST_OUTPUT_BYTE * word_size(size)
-
-
-def release_cost(size):
-    return 0 if size == 0 else VAROPS_COST_RELEASE_FIXED + VAROPS_COST_RELEASE_BYTE * word_size(size)
+    return (produce_cost(word_size(size))
+            + VAROPS_COST_NORMALIZE_FIXED + VAROPS_COST_NORMALIZE_BYTE * word_size(size))
 
 
 def read_cost(size):
@@ -163,18 +164,23 @@ def read_cost(size):
 
 def mul_core_cost(size):
     limbs = word_size(size) // 8
-    return limbs * (
-        VAROPS_COST_MUL_ROW_FIXED + VAROPS_COST_MUL_ROW_CELL * limbs
-        + VAROPS_COST_ARITH_FIXED + VAROPS_COST_ARITH_BYTE * 8 * (limbs + 1)
-    )
+    return VAROPS_COST_MUL_FIXED + VAROPS_COST_MUL_ROW * limbs + VAROPS_COST_MUL_CELL * limbs * limbs
 
 
 def mul_cost(size):
-    return VAROPS_COST_F + 2 * prep_cost(size) + mul_core_cost(size) + output_cost(2 * size)
+    # The full result span is produced before multiplication; MUL covers its scratch.
+    result_span = 2 * word_size(size)
+    return (VAROPS_COST_F + 2 * prep_cost(size) + produce_cost(result_span) + mul_core_cost(size)
+            + output_cost(2 * size) - produce_cost(word_size(2 * size)))
 
 
 def final_check_cost(size):
     return prep_cost(size) + read_cost(size)
+
+
+def initial_cost(values):
+    # Witness values have no producing opcode, so their production is prepaid.
+    return sum(produce_cost(len(value)) for value in values)
 
 
 def flip_leaf_version(ctx):
@@ -454,7 +460,7 @@ def tapscript_v2_spenders():
         exact_element_shift,
         b"\x01",
         exact_element_shift,
-        b"pad" * 1800,
+        b"pad" * 2200,
     ]
     exact_total_script = CScript([
         OP_DROP,
@@ -540,7 +546,7 @@ def byterev_spenders():
     return spenders
 
 
-def fragment_spenders():
+def macro_spenders():
     sec = generate_privkey()
     pub = compute_xonly_pubkey(sec)[0]
     body = CScript([OP_DUP, OP_ADD])
@@ -553,6 +559,20 @@ def fragment_spenders():
     nested_valid_script = CScript(define(nested_valid_body) +
                                   define(CScript([OP_CALLMACRO, 0])) +
                                   bytes([OP_CALLMACRO, 1]) + bytes(CScript([6, OP_EQUAL])))
+    # Static decoding: an unreferenced body is ignored if well-formed and
+    # invalidates the script if malformed.
+    unreferenced_script = CScript(define(CScript([OP_DROP])) + define(body) + bytes([OP_CALLMACRO, 1]) +
+                                  bytes(CScript([6, OP_EQUAL])))
+    malformed_unreferenced_script = CScript(define(bytes([OP_PUSHDATA1])) + define(body) + bytes([OP_CALLMACRO, 1]) +
+                                            bytes(CScript([6, OP_EQUAL])))
+    # Unrolled size limit: body i references body i-1 twice, so a reference to
+    # body n unrolls to 2**n copies of body 0. Twenty-two doublings of OP_NOP
+    # unroll to 4,194,304 bytes, over the 4,000,000-byte limit.
+    def doubling_script(levels):
+        script = define(CScript([OP_NOP]))
+        for i in range(1, levels + 1):
+            script += define(bytes([OP_CALLMACRO, i - 1, OP_CALLMACRO, i - 1]))
+        return CScript(script + bytes([OP_CALLMACRO, levels]) + bytes(CScript([OP_1])))
     boundary_body = CScript([OP_IF, OP_DUP])
     boundary_script = CScript(define(boundary_body) + bytes(CScript([OP_1])) + invoke +
                               bytes(CScript([OP_ENDIF, OP_ADD, 6, OP_EQUAL])))
@@ -561,11 +581,15 @@ def fragment_spenders():
         ("nested", nested_script, LEAF_VERSION_TAPSCRIPT_V2),
         ("nested_valid", nested_valid_script, LEAF_VERSION_TAPSCRIPT_V2),
         ("boundary", boundary_script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("unreferenced", unreferenced_script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("malformed_unreferenced", malformed_unreferenced_script, LEAF_VERSION_TAPSCRIPT_V2),
+        ("doubling_small", doubling_script(4), LEAF_VERSION_TAPSCRIPT_V2),
+        ("doubling_over_limit", doubling_script(22), LEAF_VERSION_TAPSCRIPT_V2),
     ])
     spenders = []
     add_spender(
         spenders,
-        "v2/fragment",
+        "v2/macro",
         tap=tap,
         leaf="function",
         inputs=[b"\x03"],
@@ -574,7 +598,7 @@ def fragment_spenders():
     )
     add_spender(
         spenders,
-        "v2/fragment-conditional-boundary",
+        "v2/macro-conditional-boundary",
         tap=tap,
         leaf="boundary",
         inputs=[b"\x03"],
@@ -583,12 +607,30 @@ def fragment_spenders():
     )
     add_spender(
         spenders,
-        "v2/fragment-nested",
+        "v2/macro-nested",
         tap=tap,
         leaf="nested_valid",
         inputs=[b"\x03"],
         failure={"inputs": [b"\x04"]},
         **ERR_EVAL_FALSE,
+    )
+    add_spender(
+        spenders,
+        "v2/macro-static-decoding",
+        tap=tap,
+        leaf="unreferenced",
+        inputs=[b"\x03"],
+        failure={"leaf": "malformed_unreferenced"},
+        err_msg="Opcode missing or not understood",
+    )
+    add_spender(
+        spenders,
+        "v2/macro-unrolled-size",
+        tap=tap,
+        leaf="doubling_small",
+        inputs=[],
+        failure={"leaf": "doubling_over_limit"},
+        err_msg="Script is too big",
     )
     return spenders
 
@@ -935,8 +977,8 @@ class TapScriptV2Test(TaprootTest):
         self.log.info("Tapscript v2 OP_BYTEREV tests")
         self.test_spenders(self.nodes[0], byterev_spenders(), input_counts=[1])
 
-        self.log.info("Tapscript v2 static fragment tests")
-        self.test_spenders(self.nodes[0], fragment_spenders(), input_counts=[1])
+        self.log.info("Tapscript v2 reusable macro tests")
+        self.test_spenders(self.nodes[0], macro_spenders(), input_counts=[1])
 
         self.log.info("Tapscript v2 OP_TX tests")
         self.test_spenders(self.nodes[0], op_tx_spenders(), input_counts=[1])
@@ -1427,7 +1469,7 @@ class TapScriptV2Test(TaprootTest):
             make_budget_spender("v2/shared_budget_rejected_second_expensive", expensive_script),
             make_budget_spender("v2/mixed_budget_expensive", expensive_script),
             make_budget_spender("v1/no_v2_funding", CScript([OP_DROP] * 600 + [OP_1]),
-                                version=0xc0, inputs=[b"\x01" * 80] * 600),
+                                version=0xc0, inputs=[b"\x01" * 100] * 600),
         ]
         funded, host_spk, host_pubkey = self.fund_spenders(spenders)
 
@@ -1452,8 +1494,9 @@ class TapScriptV2Test(TaprootTest):
         rejected_tx = make_spend_tx(rejected_funded)
         assert_equal(accepted_tx.get_weight(), rejected_tx.get_weight())
 
-        # BIP 441's multiply/accumulate work alone brackets the shared budget.
-        expensive_input_cost = mul_core_cost(operand_size)
+        # The expensive input's witness production, multiplication and drops bracket the shared budget.
+        expensive_input_cost = (initial_cost([padding, operand, operand]) + mul_cost(operand_size)
+                                + 2 * VAROPS_COST_F)
         tx_weight = accepted_tx.get_weight()
         tx_budget = tx_weight * VAROPS_BUDGET_PER_WEIGHT
 
@@ -1564,8 +1607,8 @@ class TapScriptV2Test(TaprootTest):
         for operand_size in range(20_000, 40_000, 64):
             spender = make_costly_spender(operand_size)
             spend_tx = make_spend_tx(COutPoint(0, 0), dummy_output, spender, fee=50_000)
-            script_cost = (mul_cost(operand_size) + VAROPS_COST_F + release_cost(2 * operand_size)
-                           + shift_cost)
+            script_cost = (initial_cost([final_value, final_shift, b"\xff" * operand_size, b"\xff" * operand_size])
+                           + mul_cost(operand_size) + VAROPS_COST_F + shift_cost)
             tx_budget = spend_tx.get_weight() * VAROPS_BUDGET_PER_WEIGHT
             if script_cost < tx_budget < script_cost + final_cost:
                 selected_operand_size = operand_size
@@ -1576,8 +1619,9 @@ class TapScriptV2Test(TaprootTest):
         funded, host_spk, host_pubkey = self.fund_spenders([spender])
         outpoint, output, funded_spender = funded[0]
         spend_tx = make_spend_tx(outpoint, output, funded_spender, fee=50_000)
-        script_cost = (mul_cost(selected_operand_size) + VAROPS_COST_F + release_cost(2 * selected_operand_size)
-                       + shift_cost)
+        selected_operand = b"\xff" * selected_operand_size
+        script_cost = (initial_cost([final_value, final_shift, selected_operand, selected_operand])
+                       + mul_cost(selected_operand_size) + VAROPS_COST_F + shift_cost)
         tx_budget = spend_tx.get_weight() * VAROPS_BUDGET_PER_WEIGHT
         assert script_cost < tx_budget < script_cost + final_cost
 

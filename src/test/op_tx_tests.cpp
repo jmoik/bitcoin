@@ -171,7 +171,7 @@ BOOST_FIXTURE_TEST_SUITE(op_tx_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(reference_vectors)
 {
     const UniValue vectors{read_json(json_tests::op_tx)};
-    BOOST_REQUIRE_EQUAL(vectors.size(), 79);
+    BOOST_REQUIRE_EQUAL(vectors.size(), 80);
 
     for (const UniValue& test : vectors.getValues()) {
         const std::string id{test["id"].get_str()};
@@ -279,8 +279,9 @@ BOOST_AUTO_TEST_CASE(interpreter_dispatch_and_execution_cost)
     ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
     BOOST_REQUIRE(EvalTapscriptV2(push_stack, push_script, SCRIPT_VERIFY_NONE, checker, execdata, push_budget, &error));
     const uint64_t push_cost{DEFAULT_VAROPS - *push_budget.Remaining()};
-    const uint64_t op_tx_cost{varops::FixedOpcodeCost() + varops::TxSelectCost(0) +
-                              varops::CopyCost(1) - varops::CopyCost(0)};
+    // One numeric value: TX_VERSION.
+    const uint64_t op_tx_cost{varops::FixedOpcodeCost() + varops::TxSelectCost(1) +
+                              varops::ScalarOutputCost()};
     varops::Budget budget{push_cost + op_tx_cost};
     BOOST_REQUIRE(EvalTapscriptV2(stack, script, SCRIPT_VERIFY_NONE, checker, execdata, budget, &error));
     BOOST_CHECK_EQUAL(error, SCRIPT_ERR_OK);
@@ -430,7 +431,8 @@ BOOST_AUTO_TEST_CASE(future_selector_version_succeeds)
     malformed_later.push_back(OP_PUSHDATA1); // Truncated push in the referenced body.
     malformed_later << selector << OP_TX << OP_CALLMACRO;
     malformed_later.push_back(0);
-    eval_script(malformed_later, SCRIPT_VERIFY_NONE, SCRIPT_ERR_OK);
+    // Static decoding rejects the malformed body before OP_TX can execute.
+    eval_script(malformed_later, SCRIPT_VERIFY_NONE, SCRIPT_ERR_BAD_OPCODE);
 }
 
 BOOST_AUTO_TEST_CASE(bip341_sighash_construction_csfs)

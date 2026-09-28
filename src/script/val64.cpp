@@ -5,7 +5,6 @@
 #include <script/val64.h>
 
 #include <compat/endian.h>
-#include <script/varops.h>
 
 #include <algorithm>
 #include <array>
@@ -480,10 +479,8 @@ void Val64::AppendOne()
     SetSpan();
 }
 
-uint64_t Val64::ToU64Ceil(uint64_t max, uint64_t& varcost) const
+uint64_t Val64::ToU64Ceil(uint64_t max) const
 {
-    // Worst case, we have to examine the padded word span (LENGTHCONV).
-    varcost += varops::LengthConversionCost(m_size);
 
     // Little endian: get first word (zero-fills).
     const uint64_t value{GetOrZero(0)};
@@ -502,11 +499,6 @@ bool Val64::IsZero() const
     return SpanIsAllZero(m_limbs);
 }
 
-bool Val64::IsZero(uint64_t& varcost) const
-{
-    varcost += varops::CompareZeroCost(m_size);
-    return SpanIsAllZero(m_limbs);
-}
 
 bool Val64::SpanIsAllZero(std::span<const le64_t> span)
 {
@@ -554,12 +546,6 @@ int Val64::Compare(const Val64& other) const
     return CompareSpans(m_limbs, other.m_limbs);
 }
 
-int Val64::Compare(const Val64& other, uint64_t& varcost) const
-{
-    varcost += varops::ComparisonCost(m_size, other.m_size);
-
-    return CompareSpans(m_limbs, other.m_limbs);
-}
 
 // v1 += v2 (size v2 <= v1).  Return true if carry overflowed.
 bool Val64::AddSpans(std::span<le64_t> v1, std::span<const le64_t> v2, size_t& nonzero_len)
@@ -597,11 +583,10 @@ bool Val64::AddSpans(std::span<le64_t> v1, std::span<const le64_t> v2, size_t& n
     return carry;
 }
 
-void Val64::OpAdd(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpAdd(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::AddCost(v1.m_size, v2.m_size);
 
     size_t nonzero_len;
     bool carry = AddSpans(v1.m_limbs, v2.m_limbs, nonzero_len);
@@ -614,10 +599,9 @@ void Val64::OpAdd(Val64& v1, Val64& v2, uint64_t& varcost)
     v1.TrimTail(nonzero_len);
 }
 
-void Val64::Op1Add(Val64& v1, uint64_t& varcost)
+void Val64::Op1Add(Val64& v1)
 {
     // Charge as ADD with a minimal one-byte operand.
-    varcost += varops::AddCost(v1.m_size, 1);
     if (v1.m_limbs.empty()) {
         v1.AppendOne();
         return;
@@ -680,9 +664,8 @@ bool Val64::SubtractSpans(std::span<le64_t> v1, std::span<const le64_t> v2, size
 }
 
 
-bool Val64::OpSub(Val64& v1, const Val64& v2, uint64_t& varcost)
+bool Val64::OpSub(Val64& v1, const Val64& v2)
 {
-    varcost += varops::SubCost(v1.m_size, v2.m_size);
     size_t nonzero_len;
 
     const bool underflow{SubtractSpans(v1.m_limbs, v2.m_limbs, nonzero_len)};
@@ -700,9 +683,8 @@ bool Val64::OpSub(Val64& v1, const Val64& v2, uint64_t& varcost)
     return true;
 }
 
-bool Val64::Op1Sub(Val64& v1, uint64_t& varcost)
+bool Val64::Op1Sub(Val64& v1)
 {
-    varcost += varops::SubCost(v1.m_size, 1);
     if (v1.m_limbs.empty()) return false;
 
     le64_t one{htole64_internal(1)};
@@ -730,9 +712,9 @@ void Val64::ShiftDown(size_t words, size_t bits)
     Set(m_limbs.size() - 1 - words, previous_bits);
 }
 
-void Val64::OpDownShift(Val64& v1, const Val64& v2, uint64_t& varcost)
+void Val64::OpDownShift(Val64& v1, const Val64& v2)
 {
-    const uint64_t bits{v2.ToU64Ceil(v1.m_size * 8, varcost)};
+    const uint64_t bits{v2.ToU64Ceil(v1.m_size * 8)};
     const size_t bytes{static_cast<size_t>(bits / 8)};
 
     // ToU64Ceil charged conversion of BITS; charge copying below once the
@@ -744,7 +726,6 @@ void Val64::OpDownShift(Val64& v1, const Val64& v2, uint64_t& varcost)
         return;
     }
 
-    varcost += (v1.m_size - bytes) * varops::COST_COPYING;
 
     // Bitwise shifts can't do 0 anyway, as << 64 undefined.
     if (bits % 8 == 0) {
@@ -764,9 +745,9 @@ void Val64::OpDownShift(Val64& v1, const Val64& v2, uint64_t& varcost)
 }
 
 // Shift bits toward more-significant positions, increasing the value.
-bool Val64::OpUpShift(Val64& v1, const Val64& v2, size_t max_size, uint64_t& varcost)
+bool Val64::OpUpShift(Val64& v1, const Val64& v2, size_t max_size)
 {
-    const uint64_t bits{v2.ToU64Ceil(max_size * 8 + 1, varcost)};
+    const uint64_t bits{v2.ToU64Ceil(max_size * 8 + 1)};
 
     // Cannot overflow: m_size is (far) less than 32 bits, so is max_size.
     if (bits + v1.m_size * 8 > max_size * 8) return false;
@@ -775,13 +756,11 @@ bool Val64::OpUpShift(Val64& v1, const Val64& v2, size_t max_size, uint64_t& var
     const size_t prebytes{static_cast<size_t>(bits / 8)};
 
     // Charge against the pre-mutation operand size.
-    varcost += prebytes * varops::COST_FAST + v1.m_size * varops::COST_COPYING;
 
     if (bits % 8 == 0) {
         // Simply insert bytes at the beginning.
         v1.PrependZeros(prebytes);
     } else {
-        varcost += varops::UnalignedUpShiftCost(v1.m_size, prebytes);
         // There's no nice C++ "add this many bytes at the beginning,
         // and one at the end" so it is better to prepend too many bytes
         // (fast!) and shift backwards.
@@ -810,10 +789,9 @@ bool Val64::ShiftLeftLessThanWord(size_t bits)
     return previous_bits != 0;
 }
 
-void Val64::Op2Mul(Val64& v1, uint64_t& varcost)
+void Val64::Op2Mul(Val64& v1)
 {
     // Charge before trimming the operand.
-    varcost += varops::TwoMulCost(v1.m_size);
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.TrimTail();
@@ -825,10 +803,9 @@ void Val64::Op2Mul(Val64& v1, uint64_t& varcost)
     }
 }
 
-void Val64::Op2Div(Val64& v1, uint64_t& varcost)
+void Val64::Op2Div(Val64& v1)
 {
     // Charge before trimming the operand.
-    varcost += varops::TwoDivCost(v1.m_size);
 
     // Trim first: any bytes we trim here, we avoid shifting.
     v1.TrimTail();
@@ -840,9 +817,8 @@ void Val64::Op2Div(Val64& v1, uint64_t& varcost)
     v1.TrimTail();
 }
 
-void Val64::OpInvert(Val64& v1, uint64_t& varcost)
+void Val64::OpInvert(Val64& v1)
 {
-    varcost += varops::InvertCost(v1.m_size);
 
     // Endian doesn't matter, so access raw.
     for (le64_t& v : v1.m_limbs) {
@@ -865,11 +841,10 @@ void Val64::PutLongerFirst(Val64& v1, Val64& v2)
     if (v1.m_size < v2.m_size) v1.Swap(v2);
 }
 
-void Val64::OpAnd(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpAnd(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::AndCost(v1.m_size, v2.m_size);
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_limbs.size(); ++i) {
@@ -880,11 +855,10 @@ void Val64::OpAnd(Val64& v1, Val64& v2, uint64_t& varcost)
     std::fill(v1.m_limbs.begin() + v2.m_limbs.size(), v1.m_limbs.end(), 0);
 }
 
-void Val64::OpOr(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpOr(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::OrCost(v1.m_size, v2.m_size);
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_limbs.size(); ++i) {
@@ -892,11 +866,10 @@ void Val64::OpOr(Val64& v1, Val64& v2, uint64_t& varcost)
     }
 }
 
-void Val64::OpXor(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpXor(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::XorCost(v1.m_size, v2.m_size);
 
     // Endian doesn't matter, so access raw.
     for (size_t i = 0; i < v2.m_limbs.size(); ++i) {
@@ -904,11 +877,10 @@ void Val64::OpXor(Val64& v1, Val64& v2, uint64_t& varcost)
     }
 }
 
-void Val64::OpMin(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpMin(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::MinMaxCost(v1.m_size, v2.m_size);
 
     size_t nonzero_words{0};
     if (CompareSpans(v1.m_limbs, v2.m_limbs, &nonzero_words) > 0) {
@@ -917,11 +889,10 @@ void Val64::OpMin(Val64& v1, Val64& v2, uint64_t& varcost)
     v1.TrimTail(nonzero_words);
 }
 
-void Val64::OpMax(Val64& v1, Val64& v2, uint64_t& varcost)
+void Val64::OpMax(Val64& v1, Val64& v2)
 {
     PutLongerFirst(v1, v2);
 
-    varcost += varops::MinMaxCost(v1.m_size, v2.m_size);
 
     size_t nonzero_words{0};
     if (CompareSpans(v1.m_limbs, v2.m_limbs, &nonzero_words) < 0) {
@@ -995,7 +966,7 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
     // For efficiency, the divisor (v2) needs to be *normalized*, i.e.
     // the top bit is set.  We trim and shift both to ensure this is true.
 
-    // Consensus callers charge from the original encoded lengths before trimming.
+    // Consensus callers charge from the trimmed lengths.
     v1.TrimTail();
     v2.TrimTail();
 
@@ -1019,38 +990,39 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
 
     if (v1.m_size < v2.m_size) {
         // v2 > v1: v1 is remainder, quotient is 0.
-        if (op == DivModOp::DIV) v1 = Val64{0};
+        if (op == DivModOp::DIV) {
+            std::fill(v1.m_limbs.begin(), v1.m_limbs.end(), 0);
+            v1.TrimTail();
+        }
         return true;
     }
 
-    // Work with whole limbs until the final result is trimmed. Shift in
-    // place, reserving an extra dividend limb only when there is a carry.
+    // Work with whole limbs until the final result is trimmed. Normalizing
+    // can carry bits out of the dividend's top limb. Keep them in a separate
+    // limb rather than growing v1: stack elements usually have no spare
+    // capacity, and a reallocation in every division makes its cost depend
+    // on allocator state.
     v1.m_size = v1.m_limbs.size_bytes();
     v2.m_size = v2.m_limbs.size_bytes();
+    uint64_t dividend_carry{0};
     if (k != 0) {
-        if (v1.Get(v1.m_limbs.size() - 1) >> (64 - k)) {
-            v1.PrepareForByteMutation();
-            v1.m_bytes.resize(v1.m_size + sizeof(uint64_t));
-            v1.SetSpan();
-        }
-        const bool dividend_overflow{v1.ShiftLeftLessThanWord(k)};
-        assert(!dividend_overflow);
+        dividend_carry = v1.Get(v1.m_limbs.size() - 1) >> (64 - k);
+        v1.ShiftLeftLessThanWord(k);
         const bool overflow{v2.ShiftLeftLessThanWord(k)};
         assert(!overflow);
     }
 
-    // v1 has n+m words, v2 has n words.  β is the base (2^64 here).
     assert(v1.m_limbs.size() >= v2.m_limbs.size());
     const size_t n{v2.m_limbs.size()};
-    const size_t m{v1.m_limbs.size() - n};
 
     // Division by one word needs neither a quotient allocation nor Knuth's
     // trial-quotient correction. The operands are normalized above, so
     // DivMod64 also has a portable implementation on platforms without a
-    // native 128-by-64-bit division instruction.
+    // native 128-by-64-bit division instruction. The carried bits are below
+    // the normalized divisor, so they start the remainder.
     if (n == 1) {
         const uint64_t divisor{v2.Get(0)};
-        uint64_t remainder{0};
+        uint64_t remainder{dividend_carry};
         for (size_t i{v1.m_limbs.size()}; i > 0; --i) {
             const Div64Result result{
                 Uint128{remainder, v1.Get(i - 1)}.DivMod64(divisor, m_force_portable_math)};
@@ -1059,32 +1031,46 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
             if (op == DivModOp::DIV) v1.Set(i - 1, result.quotient);
         }
 
-        if (op == DivModOp::DIV) {
-            v1.TrimTail();
-        } else {
-            v1 = Val64{k == 0 ? remainder : remainder >> k};
+        // Write the remainder in place, like the quotient.
+        if (op == DivModOp::MOD) {
+            std::fill(v1.m_limbs.begin() + 1, v1.m_limbs.end(), 0);
+            v1.Set(0, remainder >> k);
         }
+        v1.TrimTail();
         return true;
     }
 
-    // Keep quotient and scratch in one buffer. Small divisions use local
-    // storage; larger divisions require only one allocation. Every word
-    // is written before being read.
+    // u is the normalized dividend with n+m words, v2 has n words. β is the
+    // base (2^64 here). With a carry, u is a copy in the work buffer.
+    const std::span<le64_t> dividend_limbs{v1.m_limbs};
+    const size_t dividend_words{dividend_limbs.size() + (dividend_carry != 0)};
+    const size_t m{dividend_words - n};
+
+    // Keep quotient, scratch and any extended dividend in one buffer. Small
+    // divisions use local storage; larger divisions require only one
+    // allocation. Every word is written before being read.
     const size_t quotient_words{op == DivModOp::DIV ? m + 1 : 0};
-    const size_t work_words{n + 1 + quotient_words};
+    const size_t copy_words{dividend_carry != 0 ? dividend_words : 0};
+    const size_t work_words{n + 1 + quotient_words + copy_words};
     std::array<le64_t, 16> local_work;
     std::vector<le64_t> heap_work;
     if (work_words > local_work.size()) heap_work.resize(work_words);
     const std::span<le64_t> work{heap_work.empty() ? std::span{local_work}.first(work_words) : std::span{heap_work}};
     const auto scratch{work.first(n + 1)};
-    const auto quotient{work.subspan(n + 1)};
-    const auto dividend_limbs{v1.m_limbs};
+    const auto quotient{work.subspan(n + 1, quotient_words)};
+    std::span<le64_t> u{dividend_limbs};
+    if (dividend_carry != 0) {
+        u = work.subspan(n + 1 + quotient_words);
+        std::copy(dividend_limbs.begin(), dividend_limbs.end(), u.begin());
+        u.back() = htole64_internal(dividend_carry);
+    }
+    const auto get{[&u](size_t i) { return le64toh_internal(u[i]); }};
 
-    // 1: if v1 >= β^m x v2, then q_m = 1, v1 = v1 - β^m x v2 else q_m = 0
-    if (CompareSpans(v1.m_limbs.subspan(m), v2.m_limbs) > -1) {
+    // 1: if u >= β^m x v2, then q_m = 1, u = u - β^m x v2 else q_m = 0
+    if (CompareSpans(u.subspan(m), v2.m_limbs) > -1) {
         size_t last_nonzero;
         if (op == DivModOp::DIV) quotient[m] = htole64_internal(1);
-        const bool carry{SubtractSpans(v1.m_limbs.subspan(m), v2.m_limbs, last_nonzero)};
+        const bool carry{SubtractSpans(u.subspan(m), v2.m_limbs, last_nonzero)};
         assert(!carry);
     } else {
         if (op == DivModOp::DIV) quotient[m] = 0;
@@ -1094,28 +1080,26 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
     for (size_t j = m; j > 0;) {
         --j;
 
-        // 3: q* = floor((v1_n+j_ x β + v1_n+j-1_) / v2_n-1_)
-        const uint64_t v_hi{v1.Get(n + j)};
-        const uint64_t v_lo{v1.Get(n + j - 1)};
+        // 3: q* = floor((u_n+j_ x β + u_n+j-1_) / v2_n-1_)
+        const uint64_t v_hi{get(n + j)};
+        const uint64_t v_lo{get(n + j - 1)};
         const uint64_t divisor{v2.Get(n - 1)};
         const Div64Result div64{Uint128{v_hi, v_lo}.DivMod64(divisor, m_force_portable_math)};
         uint64_t qstar{div64.quotient};
         uint64_t rstar{div64.remainder};
         bool qstar_is_beta{div64.quotient_is_beta};
         bool rstar_overflow{false};
-        if (qstar_is_beta) assert(n > 1);
 
         // Knuth suggests: test if q* == β, or
-        // q* x v2_n-2_ > βr* + v1_n+j-2_.  If so, decrease q* by 1,
+        // q* x v2_n-2_ > βr* + u_n+j-2_.  If so, decrease q* by 1,
         // increase r* by v2_n-1_, and repeat if r* did not overflow β.
-        if (n > 1) {
+        {
             const uint64_t v2_n2{v2.Get(n - 2)};
-            const uint64_t v1_nj2{v1.Get(n + j - 2)};
-            const uint64_t divisor{v2.Get(n - 1)};
+            const uint64_t u_nj2{get(n + j - 2)};
 
             auto product_greater_than_remainder = [&]() {
                 const Uint128 product{Uint128::Mul(qstar, v2_n2, m_force_portable_math)};
-                return product.hi > rstar || (product.hi == rstar && product.lo > v1_nj2);
+                return product.hi > rstar || (product.hi == rstar && product.lo > u_nj2);
             };
 
             while (qstar_is_beta || (!rstar_overflow && product_greater_than_remainder())) {
@@ -1132,7 +1116,7 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
         // This is our (64-bit) guess.
         uint64_t qj = qstar;
 
-        // D4: v1 = v1 - q_j_ x β^j x v2
+        // D4: u = u - q_j_ x β^j x v2
 
         // Assign scratch = q_j_ x v2
         // Note: v2 doesn't change in this loop, so scratch gets fully
@@ -1141,48 +1125,42 @@ bool Val64::DivMod(Val64& v1, Val64& v2, DivModOp op)
 
         bool underflow;
         size_t last_nonzero;
-        underflow = SubtractSpans(v1.m_limbs.subspan(j), scratch, last_nonzero);
+        underflow = SubtractSpans(u.subspan(j), scratch, last_nonzero);
         // D5: Set q_j_ = q*.  If the result of D4 was negative, go to D6.
         if (underflow) {
-            // D6: Decrease q_j_ by 1, and add β^j x v2 to v1
+            // D6: Decrease q_j_ by 1, and add β^j x v2 to u
 
-            // Intuitively: we've got an estimate on v1/v2, using division on
+            // Intuitively: we've got an estimate on u/v2, using division on
             // the high words, plus a compensation from the next-highest.  It
             // could be an overestimate by one, however!  This path is covered
             // by the val64_div_mod_knuth_d6_add_back regression test.
             --qj;
             size_t nonzero_len;
-            const bool carry{AddSpans(v1.m_limbs.subspan(j), v2.m_limbs, nonzero_len)};
+            const bool carry{AddSpans(u.subspan(j), v2.m_limbs, nonzero_len)};
             assert(carry);
         }
 
         // The discarded high limb is zero. Shrink the view here and leave
         // the backing storage in place until the final result is trimmed.
-        assert(v1.Get(v1.m_limbs.size() - 1) == 0);
-        v1.m_limbs = v1.m_limbs.first(v1.m_limbs.size() - 1);
-        v1.m_size = v1.m_limbs.size_bytes();
+        assert(u.back() == 0);
+        u = u.first(u.size() - 1);
 
         if (op == DivModOp::DIV) quotient[j] = htole64_internal(qj);
     }
 
-    switch (op) {
-    case DivModOp::MOD:
-        // Remainder needs shifting back (quotient is unaffected, since
-        // (A * N) / (B * N) == A / B).
-        if (k != 0 && v1.m_size != 0) v1.ShiftDown(0, k);
-        v1.TrimTail();
-        return true;
-    case DivModOp::DIV:
-        // Reuse the dividend's storage for the quotient. Clear discarded
-        // remainder words to preserve the zero-padding invariant.
-        std::copy(quotient.begin(), quotient.end(), dividend_limbs.begin());
-        std::fill(dividend_limbs.begin() + quotient_words, dividend_limbs.end(), 0);
-        v1.m_limbs = dividend_limbs.first(quotient_words);
-        v1.m_size = v1.m_limbs.size_bytes();
-        v1.TrimTail();
-        return true;
-    }
-    assert(!"Invalid op");
+    // Results are written into the dividend's storage. Clear discarded words
+    // to preserve the zero-padding invariant.
+    const std::span<const le64_t> result{op == DivModOp::DIV ? std::span<const le64_t>{quotient} : u};
+    assert(result.size() <= dividend_limbs.size());
+    if (result.data() != dividend_limbs.data()) std::copy(result.begin(), result.end(), dividend_limbs.begin());
+    std::fill(dividend_limbs.begin() + result.size(), dividend_limbs.end(), 0);
+    v1.m_limbs = dividend_limbs.first(result.size());
+    v1.m_size = v1.m_limbs.size_bytes();
+    // The remainder needs shifting back (the quotient is unaffected, since
+    // (A * N) / (B * N) == A / B).
+    if (op == DivModOp::MOD && k != 0 && v1.m_size != 0) v1.ShiftDown(0, k);
+    v1.TrimTail();
+    return true;
 }
 
 bool Val64::OpDiv(Val64& v1, Val64& v2)

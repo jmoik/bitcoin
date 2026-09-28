@@ -36,12 +36,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <fstream>
 #include <functional>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <optional>
@@ -58,6 +60,13 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#ifndef _WIN32
+#include <sys/resource.h>
+#else
+#include <compat/compat.h>
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
@@ -66,6 +75,8 @@
 #endif
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
+static bool g_diagnose_div17{false};
+static bool g_skip_allocator_trim{false};
 
 // The audit counts coefficients separately from primitive composition. Derive
 // these views from the single consensus formulas rather than duplicating prices.
@@ -77,38 +88,42 @@ constexpr uint64_t COST_OUTPUT_FIXED{OutputCost(0)};
 constexpr uint64_t COST_OUTPUT_BYTE{(OutputCost(8) - OutputCost(0)) / 8};
 constexpr uint64_t COST_COPY_FIXED{CopyCost(0)};
 constexpr uint64_t COST_COPY_BYTE{CopyCost(1) - CopyCost(0)};
-constexpr uint64_t COST_RELEASE_FIXED{2 * ReleaseCost(8) - ReleaseCost(16)};
-constexpr uint64_t COST_RELEASE_BYTE{(ReleaseCost(16) - ReleaseCost(8)) / 8};
 constexpr uint64_t COST_READ_FIXED{ReadCost(0)};
 constexpr uint64_t COST_READ{(ReadCost(8) - ReadCost(0)) / 8};
 constexpr uint64_t COST_ARITH_FIXED{ArithCost(0)};
 constexpr uint64_t COST_ARITH_BYTE{ArithCost(1) - ArithCost(0)};
 constexpr uint64_t COST_BIT_FIXED{BitCost(0)};
 constexpr uint64_t COST_BIT{BitCost(1) - BitCost(0)};
+constexpr uint64_t COST_REVERSE_FIXED{ByteReverseCost(0)};
+constexpr uint64_t COST_REVERSE{ByteReverseCost(1) - ByteReverseCost(0)};
 constexpr uint64_t COST_MOVE_FIXED{MoveCost(0)};
 constexpr uint64_t COST_MOVE{MoveCost(1) - MoveCost(0)};
-constexpr uint64_t COST_MUL_ROW_FIXED{MulRowCost(0)};
-constexpr uint64_t COST_MUL_ROW{MulRowCost(1) - MulRowCost(0)};
+constexpr uint64_t COST_MUL_FIXED{MulCost(0, 0)};
+constexpr uint64_t COST_MUL_ROW{MulCost(1, 0) - MulCost(0, 0)};
+constexpr uint64_t COST_MUL_CELL{MulCost(1, 1) - MulCost(1, 0)};
 constexpr uint64_t COST_DIV_FIXED{DivCoreCost(0, 0)};
-constexpr uint64_t COST_DIV_CELL{DivCoreCost(1, 1) - DivCoreCost(0, 0)};
-constexpr uint64_t COST_H256_FIXED{Sha256Cost(0)};
-constexpr uint64_t COST_H256_BYTE{Sha256Cost(1) - Sha256Cost(0)};
-constexpr uint64_t COST_H160_FIXED{Ripemd160Cost(0)};
-constexpr uint64_t COST_H160_BYTE{Ripemd160Cost(1) - Ripemd160Cost(0)};
-constexpr uint64_t COST_H1_FIXED{Sha1Cost(0)};
-constexpr uint64_t COST_H1_BYTE{Sha1Cost(1) - Sha1Cost(0)};
+constexpr uint64_t COST_DIV_STEP{DivCoreCost(1, 0) - DivCoreCost(0, 0)};
+constexpr uint64_t COST_DIV_CELL{DivCoreCost(1, 1) - DivCoreCost(1, 0)};
+// Hash rates are per byte of the padded 64-byte-block span; an empty message is one block.
+constexpr uint64_t COST_H256_BYTE{(Sha256Cost(64) - Sha256Cost(0)) / 64};
+constexpr uint64_t COST_H256_FIXED{Sha256Cost(0) - 64 * COST_H256_BYTE};
+constexpr uint64_t COST_H160_BYTE{(Ripemd160Cost(64) - Ripemd160Cost(0)) / 64};
+constexpr uint64_t COST_H160_FIXED{Ripemd160Cost(0) - 64 * COST_H160_BYTE};
+constexpr uint64_t COST_H1_BYTE{(Sha1Cost(64) - Sha1Cost(0)) / 64};
+constexpr uint64_t COST_H1_FIXED{Sha1Cost(0) - 64 * COST_H1_BYTE};
 constexpr uint64_t COST_SIG{SignatureCost()};
 constexpr uint64_t COST_TWEAK{TweakCost()};
 constexpr uint64_t COST_SELECT_FIXED{TxSelectCost(0)};
 constexpr uint64_t COST_SELECT_ITEM{TxSelectCost(1) - TxSelectCost(0)};
-constexpr uint64_t COST_DECODE_FIXED{MacroDecodeCost(0)};
-constexpr uint64_t COST_DECODE{MacroDecodeCost(1) - MacroDecodeCost(0)};
+constexpr uint64_t COST_MACRO_UNROLL{MacroUnrollCost()};
 constexpr uint64_t COST_SCALAR_OUTPUT{ScalarOutputCost()};
 } // namespace varops
 
 namespace {
 
 constexpr size_t SCRIPT_BYTES{MAX_BLOCK_WEIGHT};
+// Unrolled bytes reserved for wrappers and the harness cleanup suffix.
+constexpr size_t UNROLLED_MARGIN{64};
 constexpr uint64_t TOTAL_VAROPS_BUDGET{uint64_t{MAX_BLOCK_WEIGHT} * varops::BUDGET_PER_WEIGHT_UNIT};
 // Avoid amplifying fixed harness overhead from semantic one-shot cases.
 constexpr uint64_t MIN_FULL_VAROPS_SAMPLE_BUDGET{TOTAL_VAROPS_BUDGET / 100};
@@ -168,6 +183,18 @@ struct Options {
     std::string output_file;
     std::string coverage_manifest;
     std::string case_filter;
+    bool shape_search{false};
+    double reference_seconds{0};
+    uint64_t search_budget{TOTAL_VAROPS_BUDGET / 100};
+    uint32_t search_samples{32};
+    uint32_t search_climbers{2};
+    uint32_t search_steps{4};
+    uint32_t search_top{20};
+    uint64_t search_seed{ROUND_SEED};
+    //! Confirmation mode: rerun the cases a screening CSV flagged above the threshold.
+    std::string confirm_file;
+    double confirm_threshold{0.9};
+    std::set<std::string> confirm_names;
 };
 
 static uint64_t SampleBudget(const Options& options)
@@ -303,9 +330,7 @@ static uint64_t IndependentWordSize(size_t size)
 static uint64_t InitialProducerCost(const std::vector<valtype>& stack)
 {
     uint64_t total{0};
-    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-        for (const auto& value : stack) total += varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * value.size();
-    }
+    for (const auto& value : stack) total += varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * value.size();
     return total;
 }
 
@@ -315,6 +340,13 @@ static uint64_t IndependentCharge(unsigned __int128 cost)
         return std::numeric_limits<uint64_t>::max();
     }
     return static_cast<uint64_t>(cost);
+}
+
+// Message plus padding and length, in whole 64-byte hash blocks.
+static uint64_t IndependentHashSpan(uint64_t bytes)
+{
+    const uint64_t blocks{(bytes + 9 + 63) / 64};
+    return blocks * 64;
 }
 
 static void IndependentAdd(unsigned __int128& q, uint64_t coefficient, uint64_t units = 1)
@@ -356,6 +388,18 @@ static uint64_t IndependentDecodeU64(const valtype& value, uint64_t maximum)
 static const valtype& IndependentTop(const ValtypeStack& stack, size_t depth = 0)
 {
     return stack.at(stack.size() - depth - 1);
+}
+
+static uint64_t IndependentMinimalLimbs(const valtype& value)
+{
+    size_t size{value.size()};
+    while (size > 0 && value[size - 1] == 0) --size;
+    return IndependentWordSize(size) / 8;
+}
+
+static uint64_t IndependentDivSteps(uint64_t dividend_limbs, uint64_t divisor_limbs)
+{
+    return std::max<uint64_t>(1, dividend_limbs + 2 - std::min(divisor_limbs, dividend_limbs + 2));
 }
 
 class IndependentCostAudit final : public varops::CostAudit
@@ -400,13 +444,6 @@ class IndependentCostAudit final : public varops::CostAudit
         IndependentAdd(q, varops::COST_COPY_BYTE, size);
     }
 
-    static void AddRelease(unsigned __int128& q, size_t size)
-    {
-        if (size == 0) return;
-        IndependentAdd(q, varops::COST_RELEASE_FIXED);
-        IndependentAdd(q, varops::COST_RELEASE_BYTE, IndependentWordSize(size));
-    }
-
     static void AddMove(unsigned __int128& q, size_t entries)
     {
         IndependentAdd(q, varops::COST_MOVE_FIXED);
@@ -433,6 +470,8 @@ public:
             switch (opcode) {
             case OP_NOP: case OP_IF: case OP_NOTIF: case OP_ELSE: case OP_ENDIF:
             case OP_CODESEPARATOR:
+            case OP_NOP1: case OP_NOP4: case OP_NOP5: case OP_NOP6: case OP_NOP7:
+            case OP_NOP8: case OP_NOP9: case OP_NOP10:
                 break;
             case OP_TOALTSTACK: case OP_FROMALTSTACK:
                 AddMove(pending.q, 1);
@@ -450,14 +489,8 @@ public:
                 AddMove(pending.q, 6);
                 break;
             case OP_DROP:
-                AddRelease(pending.q, IndependentTop(stack).size());
-                break;
             case OP_2DROP:
-                AddRelease(pending.q, IndependentTop(stack, 1).size());
-                AddRelease(pending.q, IndependentTop(stack).size());
-                break;
             case OP_NIP:
-                AddRelease(pending.q, IndependentTop(stack, 1).size());
                 break;
             case OP_VERIFY:
                 IndependentPrep(pending.q, IndependentTop(stack).size());
@@ -552,7 +585,6 @@ public:
                 } else if (opcode == OP_MIN || opcode == OP_MAX) {
                     IndependentAdd(pending.q, varops::COST_READ_FIXED);
                     IndependentAdd(pending.q, varops::COST_READ, words);
-                    AddRelease(pending.q, std::max(left, right));
                     pending.deferred = Deferred::PRODUCED;
                 } else {
                     IndependentAdd(pending.q, varops::COST_READ_FIXED);
@@ -581,21 +613,21 @@ public:
                 const size_t output{opcode == OP_SHA256 || opcode == OP_HASH256 ? 32U : 20U};
                 if (opcode == OP_SHA1) {
                     IndependentAdd(pending.q, varops::COST_H1_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H1_BYTE, input);
+                    IndependentAdd(pending.q, varops::COST_H1_BYTE, IndependentHashSpan(input));
                 } else if (opcode == OP_RIPEMD160) {
                     IndependentAdd(pending.q, varops::COST_H160_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H160_BYTE, input);
+                    IndependentAdd(pending.q, varops::COST_H160_BYTE, IndependentHashSpan(input));
                 } else if (opcode == OP_SHA256) {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, IndependentHashSpan(input));
                 } else if (opcode == OP_HASH160) {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, IndependentHashSpan(input));
                     IndependentAdd(pending.q, varops::COST_H160_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H160_BYTE, 32);
+                    IndependentAdd(pending.q, varops::COST_H160_BYTE, IndependentHashSpan(32));
                 } else {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED, 2);
-                    IndependentAdd(pending.q, varops::COST_H256_BYTE, input + 32);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, IndependentHashSpan(input) + IndependentHashSpan(32));
                 }
                 IndependentAdd(pending.q, varops::COST_COPY_FIXED);
                 IndependentAdd(pending.q, varops::COST_COPY_BYTE, output);
@@ -605,7 +637,7 @@ public:
                 const valtype& signature{IndependentTop(stack, 1)};
                 if (!signature.empty()) {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, IndependentHashSpan(96));
                     IndependentAdd(pending.q, varops::COST_SIG);
                 }
                 IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
@@ -617,7 +649,7 @@ public:
                 IndependentPrep(pending.q, number_size);
                 if (!signature.empty()) {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED);
-                    IndependentAdd(pending.q, varops::COST_H256_BYTE, 96);
+                    IndependentAdd(pending.q, varops::COST_H256_BYTE, IndependentHashSpan(96));
                     IndependentAdd(pending.q, varops::COST_SIG);
                     IndependentAdd(pending.q, varops::COST_ARITH_FIXED);
                     IndependentAdd(pending.q, varops::COST_ARITH_BYTE,
@@ -631,7 +663,7 @@ public:
                 if (!signature.empty()) {
                     IndependentAdd(pending.q, varops::COST_H256_FIXED, 2);
                     IndependentAdd(pending.q, varops::COST_H256_BYTE,
-                                   IndependentTop(stack, 1).size() + 96);
+                                   IndependentHashSpan(IndependentTop(stack, 1).size()) + IndependentHashSpan(96));
                     IndependentAdd(pending.q, varops::COST_SIG);
                 }
                 IndependentAdd(pending.q, varops::COST_SCALAR_OUTPUT);
@@ -649,8 +681,8 @@ public:
                 break;
             }
             case OP_BYTEREV:
-                IndependentAdd(pending.q, varops::COST_BIT_FIXED);
-                IndependentAdd(pending.q, varops::COST_BIT,
+                IndependentAdd(pending.q, varops::COST_REVERSE_FIXED);
+                IndependentAdd(pending.q, varops::COST_REVERSE,
                                IndependentTop(stack).size());
                 break;
             case OP_CAT: {
@@ -662,27 +694,20 @@ public:
                 break;
             }
             case OP_SUBSTR:
-                AddRelease(pending.q, IndependentTop(stack, 2).size());
                 IndependentPrep(pending.q, IndependentTop(stack, 1).size());
                 IndependentRead(pending.q, IndependentTop(stack, 1).size());
-                AddRelease(pending.q, IndependentTop(stack, 1).size());
                 IndependentPrep(pending.q, IndependentTop(stack).size());
                 IndependentRead(pending.q, IndependentTop(stack).size());
-                AddRelease(pending.q, IndependentTop(stack).size());
                 pending.deferred = Deferred::SUBSTR_OUTPUT;
                 break;
-            case OP_LEFT: {
-                const valtype& offset_value{IndependentTop(stack)};
-                IndependentPrep(pending.q, offset_value.size());
-                IndependentRead(pending.q, offset_value.size());
-                break;
-            }
+            case OP_LEFT:
             case OP_RIGHT: {
                 const size_t data_size{IndependentTop(stack, 1).size()};
                 const valtype& offset_value{IndependentTop(stack)};
                 const uint64_t offset{IndependentDecodeU64(offset_value, data_size)};
                 IndependentPrep(pending.q, offset_value.size());
                 IndependentRead(pending.q, offset_value.size());
+                IndependentAdd(pending.q, varops::COST_COPY_FIXED);
                 IndependentAdd(pending.q, varops::COST_COPY_BYTE, offset);
                 break;
             }
@@ -710,24 +735,17 @@ public:
                 } else if (opcode == OP_MUL) {
                     const uint64_t rows{std::max(left_words, right_words) / 8};
                     const uint64_t row_limbs{std::min(left_words, right_words) / 8};
-                    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-                        AddCopy(pending.q, left_words + right_words);
-                        IndependentPrep(pending.q, left_words + right_words);
-                        AddCopy(pending.q, (row_limbs + 1) * 8);
-                    }
-                    IndependentAdd(pending.q, varops::COST_MUL_ROW_FIXED, rows);
-                    IndependentAdd(pending.q, varops::COST_MUL_ROW, rows * row_limbs);
-                    IndependentAdd(pending.q, varops::COST_ARITH_FIXED, rows);
-                    IndependentAdd(pending.q, varops::COST_ARITH_BYTE,
-                                   rows * (row_limbs + 1) * 8);
+                    AddCopy(pending.q, left_words + right_words);
+                    IndependentAdd(pending.q, varops::COST_MUL_FIXED);
+                    IndependentAdd(pending.q, varops::COST_MUL_ROW, rows);
+                    IndependentAdd(pending.q, varops::COST_MUL_CELL, rows * row_limbs);
                 } else if (opcode == OP_DIV || opcode == OP_MOD) {
-                    const uint64_t left_limbs{left_words / 8};
-                    const uint64_t right_limbs{right_words / 8};
-                    const uint64_t steps{right_limbs == 1 ? left_limbs : (left_limbs > right_limbs ? left_limbs - right_limbs : 1)};
+                    const uint64_t left_limbs{IndependentMinimalLimbs(IndependentTop(stack, 1))};
+                    const uint64_t right_limbs{IndependentMinimalLimbs(IndependentTop(stack))};
+                    const uint64_t steps{IndependentDivSteps(left_limbs, right_limbs)};
                     IndependentAdd(pending.q, varops::COST_DIV_FIXED);
-                    IndependentAdd(pending.q, varops::COST_DIV_CELL,
-                                   steps * right_limbs);
-                    AddRelease(pending.q, std::max(left, right));
+                    IndependentAdd(pending.q, varops::COST_DIV_STEP, steps);
+                    IndependentAdd(pending.q, varops::COST_DIV_CELL, steps * right_limbs);
                 } else {
                     IndependentAdd(pending.q, varops::COST_BIT_FIXED);
                     IndependentAdd(pending.q, varops::COST_BIT,
@@ -772,7 +790,7 @@ public:
             break;
         case Deferred::PRODUCED:
             IndependentProduced(pending.q, IndependentTop(stack).size());
-            if (varops::PRODUCER_LIFETIME_EXPERIMENT && opcode == OP_MUL) {
+            if (opcode == OP_MUL) {
                 pending.q -= varops::COST_COPY_FIXED + varops::COST_COPY_BYTE * IndependentWordSize(IndependentTop(stack).size());
             }
             break;
@@ -791,9 +809,7 @@ public:
             const size_t outputs{m_spec.op_tx_collate.value_or(true) ? 1 :
                 m_spec.op_tx_result_values.value_or(*m_spec.empty_witness_items + 2)};
             for (size_t i{0}; i < outputs; ++i) {
-                if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-                    IndependentAdd(pending.q, varops::COST_COPY_FIXED);
-                }
+                IndependentAdd(pending.q, varops::COST_COPY_FIXED);
                 IndependentAdd(pending.q, varops::COST_COPY_BYTE, IndependentTop(stack, i).size());
             }
             break;
@@ -806,10 +822,10 @@ public:
     void StandaloneCharge(opcodetype opcode, uint64_t feature_units,
                           uint64_t actual_charge) override
     {
+        // The only standalone charge is the macro unrolling charge: one unit
+        // per substituted instruction and per visited reference.
         unsigned __int128 q{0};
-        if (opcode == OP_CALLMACRO) IndependentAdd(q, varops::COST_F);
-        IndependentAdd(q, varops::COST_DECODE_FIXED);
-        IndependentAdd(q, varops::COST_DECODE, feature_units);
+        if (opcode == OP_CALLMACRO) IndependentAdd(q, varops::COST_MACRO_UNROLL, feature_units);
         Compare(opcode, IndependentCharge(q), actual_charge);
     }
 
@@ -844,14 +860,55 @@ public:
         ++count;
     }
     void EndOpcode(opcodetype, const ValtypeStack&, const ValtypeStack&, opcodetype, uint64_t) override {}
-    void StandaloneCharge(opcodetype opcode, uint64_t, uint64_t) override
+    void StandaloneCharge(opcodetype, uint64_t feature_units, uint64_t) override
     {
-        // A fragment call expands into body instructions but is itself charged
-        // before the cursor returns an opcode to the interpreter.
-        if (opcode == OP_CALLMACRO) ++count;
+        // Unrolling processes every substituted instruction and visited
+        // reference once, whether or not it later executes.
+        count += feature_units;
     }
     void FinalCheck(size_t, uint64_t) override {}
 };
+
+/** Process resource usage around one timed sample; -1 marks an unavailable counter. */
+struct ResourceCounters {
+    double cpu_sec{-1};
+    int64_t minor_faults{-1}, major_faults{-1}, involuntary_switches{-1};
+};
+
+static ResourceCounters ReadResourceCounters()
+{
+    ResourceCounters counters;
+#ifndef _WIN32
+    rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        const auto seconds = [](const timeval& t) { return double(t.tv_sec) + double(t.tv_usec) / 1e6; };
+        counters.cpu_sec = seconds(usage.ru_utime) + seconds(usage.ru_stime);
+        counters.minor_faults = usage.ru_minflt;
+        counters.major_faults = usage.ru_majflt;
+        counters.involuntary_switches = usage.ru_nivcsw;
+    }
+#else
+    FILETIME creation, exit, kernel, user;
+    if (GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
+        const auto ticks = [](const FILETIME& t) { return (uint64_t{t.dwHighDateTime} << 32) | t.dwLowDateTime; };
+        counters.cpu_sec = double(ticks(kernel) + ticks(user)) / 1e7;
+    }
+    // Windows counts soft and hard faults together; report them as minor faults.
+    PROCESS_MEMORY_COUNTERS memory{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory))) {
+        counters.minor_faults = memory.PageFaultCount;
+    }
+#endif
+    return counters;
+}
+
+static ResourceCounters CounterDelta(const ResourceCounters& before, const ResourceCounters& after)
+{
+    const auto delta = [](auto a, auto b) { return a < 0 || b < 0 ? decltype(a){-1} : b - a; };
+    return {delta(before.cpu_sec, after.cpu_sec), delta(before.minor_faults, after.minor_faults),
+            delta(before.major_faults, after.major_faults),
+            delta(before.involuntary_switches, after.involuntary_switches)};
+}
 
 struct TimingSample {
     MeasurementMode mode{MeasurementMode::REALISTIC};
@@ -859,6 +916,8 @@ struct TimingSample {
     int round{0};
     size_t order{0};
     double wall_sec{0};
+    //! Measured realistic samples only; extrapolated samples reuse the measurement.
+    std::optional<ResourceCounters> counters{};
 };
 
 struct CaseSample {
@@ -988,25 +1047,25 @@ static uint64_t CandidateHashOpcodeCost(opcodetype opcode, size_t input_size)
     switch (opcode) {
     case OP_SHA1:
         IndependentAdd(q, varops::COST_H1_FIXED);
-        IndependentAdd(q, varops::COST_H1_BYTE, input_size);
+        IndependentAdd(q, varops::COST_H1_BYTE, IndependentHashSpan(input_size));
         break;
     case OP_RIPEMD160:
         IndependentAdd(q, varops::COST_H160_FIXED);
-        IndependentAdd(q, varops::COST_H160_BYTE, input_size);
+        IndependentAdd(q, varops::COST_H160_BYTE, IndependentHashSpan(input_size));
         break;
     case OP_SHA256:
         IndependentAdd(q, varops::COST_H256_FIXED);
-        IndependentAdd(q, varops::COST_H256_BYTE, input_size);
+        IndependentAdd(q, varops::COST_H256_BYTE, IndependentHashSpan(input_size));
         break;
     case OP_HASH160:
         IndependentAdd(q, varops::COST_H256_FIXED);
-        IndependentAdd(q, varops::COST_H256_BYTE, input_size);
+        IndependentAdd(q, varops::COST_H256_BYTE, IndependentHashSpan(input_size));
         IndependentAdd(q, varops::COST_H160_FIXED);
-        IndependentAdd(q, varops::COST_H160_BYTE, 32);
+        IndependentAdd(q, varops::COST_H160_BYTE, IndependentHashSpan(32));
         break;
     case OP_HASH256:
         IndependentAdd(q, varops::COST_H256_FIXED, 2);
-        IndependentAdd(q, varops::COST_H256_BYTE, input_size + 32);
+        IndependentAdd(q, varops::COST_H256_BYTE, IndependentHashSpan(input_size) + IndependentHashSpan(32));
         break;
     default:
         throw std::runtime_error("not a hash opcode");
@@ -1016,13 +1075,10 @@ static uint64_t CandidateHashOpcodeCost(opcodetype opcode, size_t input_size)
     return IndependentCharge(q);
 }
 
-static uint64_t CandidateDropCost(size_t value_size)
+// The value's producer prepaid its release.
+static uint64_t CandidateDropCost(size_t)
 {
-    if (value_size == 0) {
-        return varops::COST_F;
-    }
-    return varops::COST_F + varops::COST_RELEASE_FIXED +
-           varops::COST_RELEASE_BYTE * varops::detail::WordSize(value_size);
+    return varops::COST_F;
 }
 
 static uint64_t CandidateCleanupCost(std::span<const valtype> stack, size_t cleanup_items)
@@ -1034,6 +1090,31 @@ static uint64_t CandidateCleanupCost(std::span<const valtype> stack, size_t clea
     }
     return cost;
 }
+
+/**
+ * Superseded BIP 441 byte-rate formulas. They only choose sizes for exploratory
+ * crossover probes, whose saturation and cost are not asserted (see AddCostCase).
+ * They are not charges; candidate costs come from varops.h.
+ */
+namespace legacy_sizing {
+constexpr uint64_t COST_FAST{2};
+constexpr uint64_t COST_COPYING{3};
+constexpr uint64_t COST_OTHER{4};
+constexpr uint64_t COST_ARITH{6};
+constexpr uint64_t COST_HASH{50};
+constexpr uint64_t LengthConversionCost(size_t size) { return varops::WordSpan(size) * COST_FAST; }
+constexpr uint64_t CompareZeroCost(size_t size) { return varops::WordSpan(size) * COST_FAST; }
+constexpr uint64_t AddCost(size_t a, size_t b) { return std::max(varops::WordSpan(a), varops::WordSpan(b)) * (COST_ARITH + COST_COPYING); }
+constexpr uint64_t SubCost(size_t a, size_t b) { return std::max(varops::WordSpan(a), varops::WordSpan(b)) * COST_ARITH; }
+constexpr uint64_t InvertCost(size_t size) { return varops::WordSpan(size) * COST_OTHER; }
+constexpr uint64_t TwoMulCost(size_t size) { return varops::WordSpan(size) * (COST_COPYING + COST_OTHER); }
+constexpr uint64_t TwoDivCost(size_t size) { return varops::WordSpan(size) * COST_OTHER; }
+constexpr uint64_t UnalignedUpShiftCost(size_t size, size_t prepended) { return varops::WordSpan(size + prepended) * COST_OTHER; }
+constexpr uint64_t WithinCost(size_t a, size_t b, size_t c)
+{
+    return (std::max(varops::WordSpan(a), varops::WordSpan(b)) + std::max(varops::WordSpan(a), varops::WordSpan(c))) * COST_FAST;
+}
+} // namespace legacy_sizing
 
 static uint64_t SequenceExecutionCost(const CScript& sequence)
 {
@@ -1050,7 +1131,7 @@ static uint64_t SequenceExecutionCost(const CScript& sequence)
             // flat byte charge here to avoid double-counting.
             continue;
         }
-        cost += data.size() * varops::COST_COPYING;
+        cost += data.size() * legacy_sizing::COST_COPYING;
     }
     return cost;
 }
@@ -1096,6 +1177,7 @@ static uint64_t StackFixtureBytes(const std::vector<valtype>& stack) { return St
 
 static void ReleaseAllocatorCaches()
 {
+    if (g_skip_allocator_trim) return;
 #if defined(__APPLE__)
     malloc_zone_pressure_relief(nullptr, 0);
 #elif defined(__GLIBC__)
@@ -1139,7 +1221,7 @@ static SaturationBoundaries FindCrossoverPair(size_t sequence_bytes, size_t clea
     }
     const uint64_t script_limit{(SCRIPT_BYTES - cleanup_items - 1) / sequence_bytes};
     const uint64_t suffix_cost{
-        (cleanup_items + 1) * varops::COST_PER_OPCODE + varops::CompareZeroCost(1)};
+        (cleanup_items + 1) * varops::COST_PER_OPCODE + legacy_sizing::CompareZeroCost(1)};
     const uint64_t available_budget{TOTAL_VAROPS_BUDGET - suffix_cost};
     const auto script_limited = [&](size_t size) {
         const uint64_t cost{sequence_cost(size)};
@@ -1574,12 +1656,12 @@ static StackFactory FixedStack(std::vector<valtype> stack)
 
 static void AddPreAndV2Cases(std::vector<CaseSpec>& specs, opcodetype opcode,
                              std::string case_label, std::string shape, std::string pattern,
-                             const CScript& sequence, StackFactory factory)
+                             const CScript& sequence, StackFactory factory, CaseOptions options = {})
 {
     AddCase(specs, opcode, HeadlineRole::PRE_BASELINE,
-            case_label, shape, pattern, sequence, factory);
+            case_label, shape, pattern, sequence, factory, options);
     AddCase(specs, opcode, HeadlineRole::COMMON_V2,
-            std::move(case_label), std::move(shape), std::move(pattern), sequence, std::move(factory));
+            std::move(case_label), std::move(shape), std::move(pattern), sequence, std::move(factory), std::move(options));
 }
 
 static void AddCostCase(std::vector<CaseSpec>& specs, opcodetype opcode, HeadlineRole role,
@@ -1617,18 +1699,18 @@ static CScript OneToOneSequence(opcodetype opcode, bool three_way) { return thre
 static uint64_t OneToOneTargetCost(opcodetype opcode, size_t size)
 {
     switch (opcode) {
-    case OP_1ADD: return varops::AddCost(size, 1);
-    case OP_1SUB: return varops::SubCost(size, 1);
+    case OP_1ADD: return legacy_sizing::AddCost(size, 1);
+    case OP_1SUB: return legacy_sizing::SubCost(size, 1);
     case OP_NOT:
-    case OP_0NOTEQUAL: return varops::CompareZeroCost(size);
-    case OP_INVERT: return varops::InvertCost(size);
-    case OP_2MUL: return varops::TwoMulCost(size);
-    case OP_2DIV: return varops::TwoDivCost(size);
+    case OP_0NOTEQUAL: return legacy_sizing::CompareZeroCost(size);
+    case OP_INVERT: return legacy_sizing::InvertCost(size);
+    case OP_2MUL: return legacy_sizing::TwoMulCost(size);
+    case OP_2DIV: return legacy_sizing::TwoDivCost(size);
     case OP_RIPEMD160:
     case OP_SHA1:
     case OP_SHA256:
     case OP_HASH160:
-    case OP_HASH256: return size * varops::COST_HASH;
+    case OP_HASH256: return size * legacy_sizing::COST_HASH;
     default: throw std::runtime_error("unsupported one-to-one opcode");
     }
 }
@@ -1646,18 +1728,18 @@ static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_
         const bool input_nonzero{pattern != "zero"};
         const size_t output_size{(opcode == OP_NOT ? !input_nonzero : input_nonzero) ? 1U : 0U};
         const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
-            varops::COST_PREP_BYTE * varops::detail::WordSize(size) +
-            varops::COST_READ_FIXED + varops::COST_READ * varops::detail::WordSize(size) +
+            varops::COST_PREP_BYTE * varops::WordSpan(size) +
+            varops::COST_READ_FIXED + varops::COST_READ * varops::WordSpan(size) +
             varops::COST_SCALAR_OUTPUT};
         return copy_opcode + transforms * (target + CandidateDropCost(output_size));
     }
     case OP_1ADD:
     case OP_1SUB: {
-        const uint64_t words{varops::detail::WordSize(size)};
+        const uint64_t words{varops::WordSpan(size)};
         const bool low{pattern == "padded-low" || pattern == "one-low"};
         const size_t output_size{low ? (opcode == OP_1SUB ? 0U : 1U) :
                                       (opcode == OP_1SUB && pattern == "late-nonzero" && size != 0 ? size - 1 : size)};
-        const uint64_t output_words{varops::detail::WordSize(output_size)};
+        const uint64_t output_words{varops::WordSpan(output_size)};
         const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
             varops::COST_PREP_BYTE * words + varops::COST_ARITH_FIXED +
             varops::COST_ARITH_BYTE * words + varops::COST_OUTPUT_FIXED +
@@ -1667,13 +1749,13 @@ static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_
     case OP_INVERT:
     case OP_2MUL:
     case OP_2DIV: {
-        const uint64_t words{varops::detail::WordSize(size)};
+        const uint64_t words{varops::WordSpan(size)};
         const bool low{pattern == "padded-low" || pattern == "one-low"};
         const size_t output_size{
             low && opcode == OP_2DIV ? 0U :
             low && opcode == OP_2MUL ? 1U :
             opcode == OP_2DIV && pattern == "late-nonzero" && size != 0 ? size - 1 : size};
-        const uint64_t output_words{varops::detail::WordSize(output_size)};
+        const uint64_t output_words{varops::WordSpan(output_size)};
         const uint64_t target{varops::COST_F + varops::COST_PREP_FIXED +
             varops::COST_PREP_BYTE * words + varops::COST_BIT_FIXED +
             varops::COST_BIT * words + varops::COST_OUTPUT_FIXED +
@@ -1691,21 +1773,21 @@ static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_
         IndependentAdd(hash_q, varops::COST_F);
         if (opcode == OP_SHA1) {
             IndependentAdd(hash_q, varops::COST_H1_FIXED);
-            IndependentAdd(hash_q, varops::COST_H1_BYTE, size);
+            IndependentAdd(hash_q, varops::COST_H1_BYTE, IndependentHashSpan(size));
         } else if (opcode == OP_RIPEMD160) {
             IndependentAdd(hash_q, varops::COST_H160_FIXED);
-            IndependentAdd(hash_q, varops::COST_H160_BYTE, size);
+            IndependentAdd(hash_q, varops::COST_H160_BYTE, IndependentHashSpan(size));
         } else if (opcode == OP_SHA256) {
             IndependentAdd(hash_q, varops::COST_H256_FIXED);
-            IndependentAdd(hash_q, varops::COST_H256_BYTE, size);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, IndependentHashSpan(size));
         } else if (opcode == OP_HASH160) {
             IndependentAdd(hash_q, varops::COST_H256_FIXED);
-            IndependentAdd(hash_q, varops::COST_H256_BYTE, size);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, IndependentHashSpan(size));
             IndependentAdd(hash_q, varops::COST_H160_FIXED);
-            IndependentAdd(hash_q, varops::COST_H160_BYTE, 32);
+            IndependentAdd(hash_q, varops::COST_H160_BYTE, IndependentHashSpan(32));
         } else {
             IndependentAdd(hash_q, varops::COST_H256_FIXED, 2);
-            IndependentAdd(hash_q, varops::COST_H256_BYTE, size + 32);
+            IndependentAdd(hash_q, varops::COST_H256_BYTE, IndependentHashSpan(size) + IndependentHashSpan(32));
         }
         IndependentAdd(hash_q, varops::COST_COPY_FIXED);
         IndependentAdd(hash_q, varops::COST_COPY_BYTE, output_size);
@@ -1715,11 +1797,11 @@ static uint64_t OneToOneSequenceCost(opcodetype opcode, size_t size, bool three_
     default:
         break;
     }
-    return transforms * size * varops::COST_COPYING +
+    return transforms * size * legacy_sizing::COST_COPYING +
            transforms * OneToOneTargetCost(opcode, size);
 }
 
-static uint64_t TruthCopyCost(size_t size) { return size * varops::COST_COPYING + varops::CompareZeroCost(size); }
+static uint64_t TruthCopyCost(size_t size) { return size * legacy_sizing::COST_COPYING + legacy_sizing::CompareZeroCost(size); }
 static StackFactory OneToOneStack(size_t size, std::string_view pattern, bool three_way) { return FixedStack(std::vector<valtype>(three_way ? 3U : 1U, PatternBytes(size, pattern))); }
 
 static void AddOneToOneSpec(std::vector<CaseSpec>& specs, opcodetype opcode, HeadlineRole role,
@@ -1815,7 +1897,7 @@ static void AddBinaryDataCases(std::vector<CaseSpec>& specs, opcodetype opcode,
             AddCostCase(specs, opcode, HeadlineRole::NEW_GSR,
                         "carry-boundary", strprintf("1Bx%uB", size), "all-ff-plus-one",
                         sequence, FixedStack({valtype{1}, valtype(size, 0xff)}),
-                        varops::AddCost(1, size) + (1 + size) * varops::COST_COPYING);
+                        legacy_sizing::AddCost(1, size) + (1 + size) * legacy_sizing::COST_COPYING);
         }
     }
     if (!restored) {
@@ -1877,6 +1959,32 @@ static void AddStackOpcodeCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         AddPreAndV2Cases(specs, opcode, std::move(case_label), "32B", "dense", sequence,
                          FixedStack(std::move(stack)));
     };
+    // Grow the stack to its item limit in one execution, then drop the
+    // copies. Later repetitions in the same execution would reuse the stack's
+    // capacity, so each execution repeats this only once.
+    const auto add_growth_case = [&](CScript step, size_t pushed, size_t initial_items) {
+        const size_t steps{(MAX_TAPSCRIPT_V2_STACK_SIZE - initial_items) / pushed};
+        CScript sequence;
+        for (size_t i{0}; i < steps; ++i) sequence.insert(sequence.end(), step.begin(), step.end());
+        for (size_t i{0}; i < steps * pushed / 2; ++i) sequence << OP_2DROP;
+        if (steps * pushed % 2) sequence << OP_DROP;
+        CaseOptions options;
+        options.max_repetitions = 1;
+        options.sequence_label = strprintf("%ux(%s)+drops", steps, SequenceOpcodeNames(step));
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, "stack-growth",
+                strprintf("%u-items", initial_items + steps * pushed), "1B-items", std::move(sequence),
+                FixedStack(std::vector<valtype>(initial_items, PatternBytes(1, "one-low"))), options);
+    };
+    switch (opcode) {
+    case OP_DUP: add_growth_case(Ops({OP_DUP}), 1, 1); break;
+    case OP_2DUP: add_growth_case(Ops({OP_2DUP}), 2, 2); break;
+    case OP_3DUP: add_growth_case(Ops({OP_3DUP}), 3, 3); break;
+    case OP_OVER: add_growth_case(Ops({OP_OVER}), 1, 2); break;
+    case OP_2OVER: add_growth_case(Ops({OP_2OVER}), 2, 4); break;
+    case OP_TUCK: add_growth_case(Ops({OP_TUCK}), 1, 2); break;
+    case OP_PICK: add_growth_case(Ops({OP_0, OP_PICK}), 1, 1); break;
+    default: break;
+    }
     switch (opcode) {
     case OP_TOALTSTACK:
     case OP_FROMALTSTACK:
@@ -1937,7 +2045,8 @@ static void AddStackOpcodeCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         roll_one << OP_1 << OP_ROLL << OP_SWAP;
         add_shared_case("roll-depth-1-neutral", roll_one, {PatternBytes(32, "dense"), PatternBytes(32, "alternating")});
         CaseOptions deep_stack_options{};
-        deep_stack_options.expected_saturation = SaturationExpectation::SCRIPT_BYTES;
+        // At MOVE(k) = 300 + 25k the full budget binds before the 4 MB script limit.
+        deep_stack_options.expected_saturation = SaturationExpectation::VAROPS_BUDGET;
         AddCase(specs, opcode, HeadlineRole::NEW_GSR, "deep-stack", "1000x4B", "dense",
                 Ops({OP_DEPTH, OP_1SUB, OP_ROLL}),
                 FixedStack(std::vector<valtype>(1000, PatternBytes(4, "dense"))),
@@ -2100,22 +2209,19 @@ static size_t LargestAffordable(const std::function<uint64_t(size_t)>& cost, siz
 
 static uint64_t MulSequenceCost(size_t left, size_t right)
 {
-    const uint64_t left_words{varops::detail::WordSize(left)};
-    const uint64_t right_words{varops::detail::WordSize(right)};
+    const uint64_t left_words{varops::WordSpan(left)};
+    const uint64_t right_words{varops::WordSpan(right)};
     const uint64_t rows{std::max(left_words, right_words) / 8};
     const uint64_t row_limbs{std::min(left_words, right_words) / 8};
     const size_t output_size{left + right};
-    const uint64_t storage{varops::PRODUCER_LIFETIME_EXPERIMENT ?
-        varops::CopyCost(left_words + right_words) + varops::PrepCost(left_words + right_words) +
-        varops::CopyCost((row_limbs + 1) * 8) - varops::CopyCost(varops::WordSpan(output_size)) : 0};
+    const uint64_t storage{varops::CopyCost(left_words + right_words) - varops::CopyCost(varops::WordSpan(output_size))};
     return storage + 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
            varops::COST_COPY_BYTE * (left + right) +
            2 * varops::COST_PREP_FIXED +
            varops::COST_PREP_BYTE * (left_words + right_words) +
-           rows * (varops::COST_MUL_ROW_FIXED + varops::COST_MUL_ROW * row_limbs +
-                   varops::COST_ARITH_FIXED + varops::COST_ARITH_BYTE * (row_limbs + 1) * 8) +
+           varops::MulCost(rows, row_limbs) +
            varops::COST_OUTPUT_FIXED +
-           varops::COST_OUTPUT_BYTE * varops::detail::WordSize(output_size);
+           varops::COST_OUTPUT_BYTE * varops::WordSpan(output_size);
 }
 
 static void AddMulCases(std::vector<CaseSpec>& specs, opcodetype opcode)
@@ -2170,18 +2276,18 @@ static valtype DivisorTopLimbOne(size_t size)
 
 static uint64_t DivModSequenceCost(opcodetype opcode, size_t dividend, size_t divisor)
 {
-    const uint64_t dividend_words{varops::detail::WordSize(dividend)};
-    const uint64_t divisor_words{varops::detail::WordSize(divisor)};
+    const uint64_t dividend_words{varops::WordSpan(dividend)};
+    const uint64_t divisor_words{varops::WordSpan(divisor)};
     const uint64_t dividend_limbs{dividend_words / 8};
     const uint64_t divisor_limbs{divisor_words / 8};
-    const uint64_t steps{divisor_limbs == 1 ? dividend_limbs : (dividend_limbs > divisor_limbs ? dividend_limbs - divisor_limbs : 1)};
+    const uint64_t steps{IndependentDivSteps(dividend_limbs, divisor_limbs)};
     // OP_2DUP, target, OP_DROP.  The output is at most the dividend size;
     // the dense benchmark fixtures used here retain that padded width.
     return 3 * varops::COST_F + 2 * varops::COST_COPY_FIXED +
            varops::COST_COPY_BYTE * (dividend + divisor) +
            2 * varops::COST_PREP_FIXED +
            varops::COST_PREP_BYTE * (dividend_words + divisor_words) +
-           varops::COST_DIV_FIXED +
+           varops::COST_DIV_FIXED + varops::COST_DIV_STEP * steps +
            varops::COST_DIV_CELL * steps * divisor_limbs +
            varops::COST_OUTPUT_FIXED + varops::COST_OUTPUT_BYTE * dividend_words;
 }
@@ -2232,6 +2338,20 @@ static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 strprintf("wide-normalization-%s-seed%u", top_one ? "top-one" : "top-clear", seed));
         }
     }
+    // Build a live operand pool in Script, then consume it in reverse creation
+    // order. Unlike host-prepared diagnostics, all duplication work is funded.
+    for (size_t count : {256U, 4096U, 6000U}) {
+        valtype divisor{seeded(64 * 8, 22)};
+        divisor.back() = 0x40;
+        CScript batched;
+        for (size_t i = 0; i < count; ++i) batched << OP_2DUP;
+        for (size_t i = 0; i < count; ++i) batched << opcode << OP_DROP;
+        CaseOptions options;
+        options.sequence_label = strprintf("%uxOP_2DUP+%ux(%s+OP_DROP)", count, count, OpcodeName(opcode));
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, "divmod-batched-pool",
+                strprintf("520Bx512B/%u-pairs", count), "wide-normalization-top-clear-seed17",
+                std::move(batched), FixedStack({seeded(65 * 8, 17), std::move(divisor)}), options);
+    }
     add(PatternBytes(8, "one-low"), PatternBytes(16, "late-nonzero"), "8Bx16B", "dividend-smaller");
     const valtype addback_dividend{
         0x71, 0x0a, 0x7f, 0x30, 0x34, 0x4d, 0x13, 0x98, 0xb1, 0x15, 0xd5, 0x64, 0xac, 0xc8, 0x9d, 0x56,
@@ -2246,6 +2366,17 @@ static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     const valtype correction_divisor{
         0xe7, 0x26, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1d, 0x00, 0x00, 0x3b, 0x00};
     add(correction_dividend, correction_divisor, "25Bx17B", "knuth-d3-quotient-correction");
+    // Zero padding changes encoded lengths but not the trimmed division work.
+    for (const size_t size : {16384U, 65536U}) {
+        valtype padded_divisor{DivisorTopClear(size / 2)};
+        padded_divisor.resize(size, 0);
+        add(PatternBytes(size, "dense"), std::move(padded_divisor),
+            FormatBytes(size) + "x" + FormatBytes(size), "divisor-half-zero-padded");
+        valtype padded_dividend{PatternBytes(size / 2, "dense")};
+        padded_dividend.resize(size, 0);
+        add(std::move(padded_dividend), DivisorTopClear(size / 4),
+            FormatBytes(size) + "x" + FormatBytes(size / 4), "dividend-half-zero-padded");
+    }
 
     enum class DivisorPattern { DENSE,
                                 TOP_CLEAR,
@@ -2283,10 +2414,10 @@ static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 FixedStack({PatternBytes(tail_dividend, "dense"), DivisorTopClear(tail_divisor)}),
                 DivModSequenceCost(opcode, tail_dividend, tail_divisor));
 
-    const size_t largest{LargestAffordable([opcode](size_t size) {
-        return opcode == OP_DIV ? varops::DivCost(size, size) : varops::ModCost(size, size);
-    },
-                                           2'000'000)};
+    // Equal-size operands take two DIVCORE rows, so the candidate cost stays far
+    // below the budget; the cap keeps two copies within the 8 MB stack limit.
+    const size_t largest{LargestAffordable([opcode](size_t size) { return DivModSequenceCost(opcode, size, size); },
+                                           1'000'000)};
     for (size_t size : {largest > 1 ? largest - 1 : largest, largest, largest + 1}) {
         add(PatternBytes(size, "dense"), DivisorTopLimbOne(size),
             FormatBytes(size) + "x" + FormatBytes(size), "largest-normalized");
@@ -2300,16 +2431,16 @@ static void AddDivModCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 static uint64_t ShiftSequenceCost(opcodetype opcode, size_t size, uint64_t shift)
 {
     const size_t shift_size{Val64(shift).MoveToValtype().size()};
-    const uint64_t copy_cost{(size + shift_size) * varops::COST_COPYING};
+    const uint64_t copy_cost{(size + shift_size) * legacy_sizing::COST_COPYING};
     const uint64_t prebytes{shift / 8};
     if (opcode == OP_RSHIFT) {
-        return copy_cost + varops::LengthConversionCost(shift_size) +
-               (prebytes < size ? size - prebytes : 0) * varops::COST_COPYING;
+        return copy_cost + legacy_sizing::LengthConversionCost(shift_size) +
+               (prebytes < size ? size - prebytes : 0) * legacy_sizing::COST_COPYING;
     }
     if (opcode != OP_LSHIFT) throw std::runtime_error("unsupported shift opcode");
-    return copy_cost + varops::LengthConversionCost(shift_size) + prebytes * varops::COST_FAST +
-           size * varops::COST_COPYING +
-           (shift % 8 == 0 ? 0 : varops::UnalignedUpShiftCost(size, prebytes));
+    return copy_cost + legacy_sizing::LengthConversionCost(shift_size) + prebytes * legacy_sizing::COST_FAST +
+           size * legacy_sizing::COST_COPYING +
+           (shift % 8 == 0 ? 0 : legacy_sizing::UnalignedUpShiftCost(size, prebytes));
 }
 
 static void AddShiftCases(std::vector<CaseSpec>& specs, opcodetype opcode)
@@ -2394,7 +2525,7 @@ static void AddSignatureCases(std::vector<CaseSpec>& specs, opcodetype opcode)
             FixedCase(SCRIPT_ERR_SCHNORR_SIG, 1, 0, "semantic-failure"));
 }
 
-static uint64_t TimelockSequenceCost(size_t size) { return varops::LengthConversionCost(size); }
+static uint64_t TimelockSequenceCost(size_t size) { return legacy_sizing::LengthConversionCost(size); }
 
 static void AddTimelockCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
@@ -2466,6 +2597,58 @@ static CScript FunctionCalls(const CScript& body, size_t calls)
     return sequence;
 }
 
+static void AppendMacroCompactSize(CScript& script, uint64_t value)
+{
+    if (value < 253) {
+        script.push_back(value);
+        return;
+    }
+    const unsigned int width{value <= 0xffff ? 2U : value <= 0xffffffff ? 4U :
+                                                                          8U};
+    script.push_back(width == 2 ? 0xfd : width == 4 ? 0xfe :
+                                                      0xff);
+    for (unsigned int i{0}; i < width; ++i)
+        script.push_back(value >> (8 * i));
+}
+
+static void AppendMacroDefinition(CScript& script, const CScript& body)
+{
+    script << OP_MACRO;
+    AppendMacroCompactSize(script, body.size());
+    script.insert(script.end(), body.begin(), body.end());
+}
+
+static void AppendMacroReference(CScript& script, uint64_t index)
+{
+    script << OP_CALLMACRO;
+    AppendMacroCompactSize(script, index);
+}
+
+static size_t MacroReferenceSize(uint64_t index)
+{
+    return 1 + (index < 253 ? 1 : index <= 0xffff ? 3 :
+                                                    5);
+}
+
+/** Number of references to a body that keep the unrolled script within its limit. */
+static size_t UnrolledCalls(const CScript& body)
+{
+    return (MAX_TAPSCRIPT_V2_UNROLLED_SIZE - UNROLLED_MARGIN) / body.size();
+}
+
+/** Unrolling charge of one reference to a body without references. */
+static uint64_t MacroCallUnrollCost(const CScript& body)
+{
+    uint64_t instructions{0};
+    CScript::const_iterator pc{body.begin()};
+    opcodetype opcode;
+    while (pc < body.end()) {
+        if (!body.GetOp(pc, opcode)) throw std::runtime_error("macro benchmark body does not decode");
+        ++instructions;
+    }
+    return (instructions + 1) * varops::COST_MACRO_UNROLL;
+}
+
 static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
     const auto add_with_stack = [&](const CScript& body, size_t calls, std::vector<valtype> stack,
@@ -2491,7 +2674,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
         const size_t definition_size{FunctionCalls(body, 0).size()};
         const size_t call_size{2};
         const size_t script_calls{(SCRIPT_BYTES - definition_size - 2) / call_size};
-        const size_t body_calls{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size()};
+        const size_t body_calls{UnrolledCalls(body)};
         const size_t calls{std::min(script_calls, body_calls)};
         add(body, calls, 1, "function-dup-drop-body-scaling",
             calls == body_calls ? "function-body-bytes" : "script-bytes");
@@ -2503,7 +2686,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 
     CScript push_body;
     push_body << valtype(10, 0x42) << OP_DROP;
-    add(push_body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / push_body.size(), 0,
+    add(push_body, UnrolledCalls(push_body), 0,
         "function-push-drop-body", "function-body-bytes");
 
     constexpr size_t hash_body_size{252};
@@ -2519,12 +2702,8 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
             (3 + stack_items + 1) * varops::COST_F +
             varops::COST_PREP_FIXED + varops::COST_PREP_BYTE * 8 +
             varops::COST_READ_FIXED + varops::COST_READ * 8};
-        const uint64_t call_cost{
-            varops::COST_F + varops::COST_DECODE_FIXED +
-            varops::COST_DECODE * hash_body_size + body_cost};
-        const uint64_t definition_cost{
-            varops::COST_DECODE_FIXED + varops::COST_DECODE * hash_body_size};
-        const size_t calls{static_cast<size_t>((TOTAL_VAROPS_BUDGET - fixed_cost - definition_cost) / call_cost)};
+        const uint64_t call_cost{MacroCallUnrollCost(body) + body_cost};
+        const size_t calls{std::min(UnrolledCalls(body), static_cast<size_t>((TOTAL_VAROPS_BUDGET - fixed_cost) / call_cost))};
         add_with_stack(body, calls,
                        std::vector<valtype>(stack_items, PatternBytes(item_size, "late-nonzero")),
                        "function-slow-" + OpcodeName(target), "3x519B", "late-nonzero",
@@ -2532,9 +2711,81 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     }
 
     const CScript div_body{RepeatedSequenceBody(Ops({OP_2DUP, OP_DIV, OP_DROP}), 255)};
-    add_with_stack(div_body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / div_body.size(),
+    add_with_stack(div_body, UnrolledCalls(div_body),
                    {PatternBytes(17, "dense"), DivisorTopClear(9)},
                    "function-slow-OP_DIV", "17Bx9B", "normalization-top-clear", "function-body-bytes");
+
+    // Unrolling calibration. Each script is a declaration prefix followed by
+    // references repeated until the script bytes, the unrolled bytes or the
+    // varops budget saturate. call_cost is the unrolling charge of one
+    // reference plus the execution charge of what it unrolls to.
+    const auto add_references = [&](CScript prefix, uint64_t index, size_t unrolled_size, uint64_t call_cost,
+                                    bool inactive, std::string case_label, std::string shape, std::string pattern) {
+        // Leave room for the wrapper and the harness cleanup suffix.
+        const size_t wrapper_size{(inactive ? 3U : 0U) + 16U};
+        const size_t script_calls{(SCRIPT_BYTES - prefix.size() - wrapper_size) / MacroReferenceSize(index)};
+        const size_t unrolled_calls{unrolled_size == 0 ? script_calls : (MAX_TAPSCRIPT_V2_UNROLLED_SIZE - UNROLLED_MARGIN) / unrolled_size};
+        const size_t budget_calls{static_cast<size_t>(TOTAL_VAROPS_BUDGET / call_cost)};
+        const size_t calls{std::min({script_calls, unrolled_calls, budget_calls})};
+        CScript sequence{std::move(prefix)};
+        if (inactive) sequence << OP_0 << OP_IF;
+        for (size_t call{0}; call < calls; ++call)
+            AppendMacroReference(sequence, index);
+        if (inactive) sequence << OP_ENDIF;
+        const std::string saturation{calls == budget_calls ? "varops-budget" :
+                                     calls == unrolled_calls ? "unrolled-bytes" :
+                                                               "script-bytes"};
+        CaseOptions options{FixedCase(SCRIPT_ERR_OK, 1, 1, saturation)};
+        options.sequence_label = strprintf("%s+%u_CALLS", shape, calls);
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, std::move(case_label),
+                strprintf("%s/%u-calls", shape, calls), std::move(pattern), std::move(sequence),
+                FixedStack({PatternBytes(1, "one-low")}), std::move(options));
+    };
+    for (const size_t body_size : {1U, 16U, 256U}) {
+        // Inactive unrolled instructions are paid for only by the unrolling charge.
+        const CScript body{RepeatedSequenceBody(Ops({OP_NOP}), body_size)};
+        CScript prefix;
+        AppendMacroDefinition(prefix, body);
+        add_references(std::move(prefix), 0, body.size(), MacroCallUnrollCost(body),
+                       /*inactive=*/true, "macro-unroll-nop", strprintf("%uNOP", body_size), "inactive");
+    }
+    {
+        // A push body costs the same to unroll whatever its payload size; this
+        // case measures the uncharged payload copy.
+        constexpr size_t push_size{1'000'000};
+        const CScript body{CScript{} << valtype(push_size, 0x42)};
+        CScript prefix;
+        AppendMacroDefinition(prefix, body);
+        add_references(std::move(prefix), 0, body.size(), MacroCallUnrollCost(body),
+                       /*inactive=*/true, "macro-unroll-push", FormatBytes(push_size), "inactive");
+    }
+    for (const size_t depth : {256U, 16'384U}) {
+        // Body i references body i-1; body 0 is empty. Each call visits depth
+        // references and unrolls to nothing.
+        CScript prefix;
+        AppendMacroDefinition(prefix, CScript{});
+        for (size_t i{1}; i < depth; ++i) {
+            CScript body;
+            AppendMacroReference(body, i - 1);
+            AppendMacroDefinition(prefix, body);
+        }
+        add_references(std::move(prefix), depth - 1, 0, depth * varops::COST_MACRO_UNROLL,
+                       /*inactive=*/false, "macro-ref-chain", strprintf("depth-%u", depth), "empty-leaf");
+    }
+    {
+        // Body i references body i-1 twice; each call visits 2^(levels+1)-1 references.
+        constexpr size_t levels{20};
+        CScript prefix;
+        AppendMacroDefinition(prefix, CScript{});
+        for (size_t i{1}; i <= levels; ++i) {
+            CScript body;
+            AppendMacroReference(body, i - 1);
+            AppendMacroReference(body, i - 1);
+            AppendMacroDefinition(prefix, body);
+        }
+        add_references(std::move(prefix), levels, 0, ((uint64_t{2} << levels) - 1) * varops::COST_MACRO_UNROLL,
+                       /*inactive=*/false, "macro-ref-fanout", strprintf("levels-%u", levels), "empty-leaf");
+    }
 
     // Cheap sustaining sequences found by the per-opcode calibration probes.
     // Preserve the initial values without unnecessary per-iteration copies.
@@ -2542,7 +2793,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                                std::vector<valtype> stack, std::string shape,
                                opcodetype target = OP_INVALIDOPCODE) {
         const CScript body{RepeatedSequenceBody(sequence, (256 / sequence.size()) * sequence.size())};
-        size_t calls{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size()};
+        size_t calls{UnrolledCalls(body)};
         if (target == OP_SHA1 || target == OP_RIPEMD160 || target == OP_SHA256 ||
             target == OP_HASH160 || target == OP_HASH256) {
             const size_t digest_size{target == OP_SHA1 || target == OP_RIPEMD160 || target == OP_HASH160 ? 20U : 32U};
@@ -2550,14 +2801,33 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
                 sequence.size() == 1 ? CandidateHashOpcodeCost(target, digest_size) :
                 OneToOneSequenceCost(target, digest_size, false, "dense")};
             const uint64_t body_cost{body.size() / sequence.size() * sequence_cost};
-            const uint64_t call_cost{
-                varops::COST_F + varops::COST_DECODE_FIXED +
-                varops::COST_DECODE * body.size() + body_cost};
+            const uint64_t call_cost{MacroCallUnrollCost(body) + body_cost};
             calls = std::min(calls, static_cast<size_t>(TOTAL_VAROPS_BUDGET / call_cost));
         }
+        // Every probe preserves its stack, so one extra call adds a fixed charge.
+        // Price rises must not push the body-byte call count past the budget.
+        const auto consumed = [&](size_t count) {
+            CScript script{FunctionCalls(body, count)};
+            script.insert(script.end(), stack.size(), static_cast<unsigned char>(OP_DROP));
+            script << OP_1;
+            ValtypeStack eval_stack{stack};
+            ScriptExecutionData execdata;
+            BaseSignatureChecker checker;
+            varops::Budget budget{TOTAL_VAROPS_BUDGET};
+            ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
+            if (!EvalTapscriptV2(eval_stack, script, BENCH_SCRIPT_VERIFY_FLAGS, checker, execdata, budget, &error)) {
+                throw std::runtime_error("function probe calibration failed for " + label + ": " + ScriptErrorString(error));
+            }
+            return TOTAL_VAROPS_BUDGET - *budget.Remaining();
+        };
+        const uint64_t one_call{consumed(1)};
+        const uint64_t call_cost{consumed(2) - one_call};
+        const size_t budget_calls{static_cast<size_t>((TOTAL_VAROPS_BUDGET - (one_call - call_cost)) / call_cost)};
+        const bool budget_limited{budget_calls < calls};
+        calls = std::min(calls, budget_calls);
         add_with_stack(body, calls,
                        std::move(stack), "function-probe-" + label, std::move(shape),
-                       "calibration-worst-pattern", "function-body-bytes");
+                       "calibration-worst-pattern", budget_limited ? "varops-budget" : "function-body-bytes");
     };
     for (size_t size : {1U, 17U}) {
         add_probe("div-identity", Ops({OP_1, OP_DIV}), {PatternBytes(size, "dense")}, FormatBytes(size));
@@ -2591,7 +2861,7 @@ static void AddFunctionCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     for (const size_t literal_size : {4096U, 65536U}) {
         CScript body;
         body << valtype(literal_size, 0x42) << OP_DROP;
-        add_with_stack(body, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE / body.size(), {},
+        add_with_stack(body, UnrolledCalls(body), {},
                        "function-probe-large-literal", FormatBytes(literal_size),
                        "repeated-push-copy", "function-body-bytes");
     }
@@ -2622,6 +2892,8 @@ static void AddControlAndFloorCases(std::vector<CaseSpec>& specs, opcodetype opc
     case OP_CODESEPARATOR:
         AddPreAndV2Cases(specs, opcode, "interpreter-floor", "no-operands", "executed", Ops({opcode}), FixedStack({}));
         if (opcode == OP_NOP) {
+            AddPreAndV2Cases(specs, opcode, "upgradable-nops", "no-operands", "executed",
+                             Ops({OP_NOP1, OP_NOP4, OP_NOP5, OP_NOP6, OP_NOP7, OP_NOP8, OP_NOP9, OP_NOP10}), FixedStack({}));
             AddCase(specs, opcode, HeadlineRole::PRE_BASELINE,
                     "max-initial-stack", "1000-items", "empty-items", Ops({OP_NOP}),
                     FixedStack(std::vector<valtype>(MAX_STACK_SIZE, valtype{})));
@@ -2681,10 +2953,57 @@ static void AddControlAndFloorCases(std::vector<CaseSpec>& specs, opcodetype opc
                     TruthCopyCost(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE));
         break;
     }
-    case OP_IF:
+    case OP_IF: {
         AddPreAndV2Cases(specs, opcode, "executed-if", "1B", "true-branch", Ops({OP_1, OP_IF, OP_NOP, OP_ENDIF}), FixedStack({}));
         AddPreAndV2Cases(specs, opcode, "skipped-if", "0B", "false-branch", Ops({OP_0, OP_IF, OP_NOP, OP_ENDIF}), FixedStack({}));
+        // Maximum-size scripts of control instructions, each paying only F, and of
+        // skipped instructions, which weight alone funds. One copy fills the script;
+        // the final OP_1 takes the last byte.
+        const size_t body{SCRIPT_BYTES - 1 - 3};
+        const auto wrap = [](opcodetype condition, const CScript& inner) {
+            CScript script;
+            script << condition << OP_IF;
+            script.insert(script.end(), inner.begin(), inner.end());
+            script << OP_ENDIF;
+            return script;
+        };
+        const auto repeat = [](const CScript& unit, size_t count) {
+            CScript script;
+            script.reserve(unit.size() * count);
+            for (size_t i{0}; i < count; ++i) script.insert(script.end(), unit.begin(), unit.end());
+            return script;
+        };
+        // Spelled-out names of these scripts would be megabytes long.
+        const auto labeled = [](std::string label) {
+            CaseOptions options;
+            options.sequence_label = std::move(label);
+            return options;
+        };
+        AddPreAndV2Cases(specs, opcode, "else-toggle", FormatBytes(body) + "-script", "alternating-branches",
+                         wrap(OP_1, repeat(Ops({OP_ELSE}), body)), FixedStack({}),
+                         labeled(strprintf("OP_1+OP_IF+%uxOP_ELSE+OP_ENDIF", body)));
+        AddPreAndV2Cases(specs, opcode, "inactive-if-pairs", FormatBytes(body) + "-script", "flat",
+                         wrap(OP_0, repeat(Ops({OP_IF, OP_ENDIF}), body / 2)), FixedStack({}),
+                         labeled(strprintf("OP_0+OP_IF+%ux(OP_IF+OP_ENDIF)+OP_ENDIF", body / 2)));
+        CScript nested{repeat(Ops({OP_IF}), body / 2)};
+        const CScript closing{repeat(Ops({OP_ENDIF}), body / 2)};
+        nested.insert(nested.end(), closing.begin(), closing.end());
+        AddPreAndV2Cases(specs, opcode, "inactive-if-nested", FormatBytes(body) + "-script", strprintf("depth-%u", body / 2),
+                         wrap(OP_0, nested), FixedStack({}),
+                         labeled(strprintf("OP_0+OP_IF+%uxOP_IF+%uxOP_ENDIF+OP_ENDIF", body / 2, body / 2)));
+        AddPreAndV2Cases(specs, opcode, "skipped-nops", FormatBytes(body) + "-script", "uncharged",
+                         wrap(OP_0, repeat(Ops({OP_NOP}), body)), FixedStack({}),
+                         labeled(strprintf("OP_0+OP_IF+%uxOP_NOP+OP_ENDIF", body)));
+        // v1 rejects skipped pushes above 520 bytes, so only v2 can skip one maximal literal.
+        CScript literal;
+        const size_t literal_size{body - 5};
+        literal.push_back(static_cast<unsigned char>(OP_PUSHDATA4));
+        for (unsigned int shift : {0U, 8U, 16U, 24U}) literal.push_back(static_cast<unsigned char>((literal_size >> shift) & 0xff));
+        literal.insert(literal.end(), literal_size, 0x42);
+        AddCase(specs, opcode, HeadlineRole::NEW_GSR, "skipped-literal", FormatBytes(literal_size), "uncharged",
+                wrap(OP_0, literal), FixedStack({}));
         break;
+    }
     default: throw std::runtime_error("unhandled control opcode registry entry");
     }
 }
@@ -2703,7 +3022,7 @@ static void AddSizeCases(std::vector<CaseSpec>& specs, opcodetype opcode)
     }
 }
 
-static uint64_t WithinSequenceCost(size_t size) { return 3 * size * varops::COST_COPYING + varops::WithinCost(size, size, size); }
+static uint64_t WithinSequenceCost(size_t size) { return 3 * size * legacy_sizing::COST_COPYING + legacy_sizing::WithinCost(size, size, size); }
 
 static void AddWithinCases(std::vector<CaseSpec>& specs, opcodetype opcode)
 {
@@ -2826,14 +3145,14 @@ static std::pair<std::string, std::string> BaselineFormula(opcodetype opcode)
     case OP_LSHIFT: case OP_RSHIFT: case OP_BYTEREV:
         return {"F + PREP(operands) + BIT(bytes) + OUTPUT(out)",
             "F,PREP.fixed,PREP.byte,READ,BIT,OUTPUT.fixed,OUTPUT.byte"};
-        case OP_MUL: return {"F + PREP(a,b) + u*(MULROW(v) + ARITH(8*(v+1))) + OUTPUT(out)", "F,PREP.fixed,PREP.byte,MULROW,ARITH.fixed,ARITH.byte,OUTPUT.fixed,OUTPUT.byte"};
-        case OP_DIV: case OP_MOD: return {"F + PREP(a,b) + DIVCORE(s,v) + OUTPUT(out) + RELEASE(max input)", "F,PREP.fixed,PREP.byte,DIVCORE.fixed,DIVCORE.cell,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
+        case OP_MUL: return {"F + PREP(a,b) + MUL(u,v) + PRODUCE(8*(u+v)) + NORMALIZE(out)", "F,PREP.fixed,PREP.byte,MUL.fixed,MUL.row,MUL.cell,PRODUCE,NORMALIZE"};
+        case OP_DIV: case OP_MOD: return {"F + PREP(a,b) + DIVCORE(s,v) + OUTPUT(out) + RELEASE(max input)", "F,PREP.fixed,PREP.byte,DIVCORE.fixed,DIVCORE.step,DIVCORE.cell,OUTPUT.fixed,OUTPUT.byte,RELEASE.fixed,RELEASE.byte"};
     case OP_CAT: return {"F + COPY(a+b)", "F,COPY.fixed,COPY.byte"};
     case OP_SUBSTR:
         return {"F + PREP(indices) + READ(indices) + COPY(out) + RELEASE(W(source), W(indices))",
                 "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte,RELEASE.fixed,RELEASE.byte"};
-    case OP_LEFT: return {"F + PREP(index) + READ(W(index))", "F,PREP.fixed,PREP.byte,READ"};
-    case OP_RIGHT: return {"F + PREP(index) + READ(W(index)) + COPY.byte*offset", "F,PREP.fixed,PREP.byte,READ,COPY.byte"};
+    case OP_LEFT: return {"F + PREP(index) + READ(W(index)) + COPY(out)", "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte"};
+    case OP_RIGHT: return {"F + PREP(index) + READ(W(index)) + COPY(out)", "F,PREP.fixed,PREP.byte,READ,COPY.fixed,COPY.byte"};
     case OP_SHA1:
         return {"F + H1(n) + COPY(digest)", "F,H1.fixed,H1.byte,COPY.fixed,COPY.byte"};
     case OP_RIPEMD160:
@@ -2851,26 +3170,25 @@ static std::pair<std::string, std::string> BaselineFormula(opcodetype opcode)
     case OP_TX:
         return {"F + SELECT(selected records/items) + COPY.byte*returned_bytes",
                 "F,SELECT.fixed,SELECT.item,COPY.byte"};
-    case OP_MACRO: return {"DECODE(body bytes) once; CALLMACRO: F + DECODE(body bytes)", "F,DECODE"};
+    case OP_MACRO: return {"UNROLL * (substituted instructions + visited references), then execution", "UNROLL"};
     default: return {"unwired", ""};
     }
 }
 
 static std::pair<std::string, std::string> CandidateFormula(opcodetype opcode)
 {
-    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) return BaselineFormula(opcode);
     // NUMERIC_RESULT(n) = PRODUCE(W(n)) + NORMALIZE(n). Initial witness
     // production is charged once per script, not again in each opcode formula.
     switch (opcode) {
     case OP_DROP: case OP_2DROP: case OP_NIP: return {"F", "F"};
-    case OP_BYTEREV: return {"F + BIT(n)", "F,BIT"};
+    case OP_BYTEREV: return {"F + REVERSE(n)", "F,REVERSE"};
     case OP_MIN: case OP_MAX:
         return {"F + PREP(operands) + READ(W) + NUMERIC_RESULT(out)", "F,PREP,READ,PRODUCE,NORMALIZE"};
     case OP_DIV: case OP_MOD:
         return {"F + PREP(a,b) + DIVCORE(s,v) + NUMERIC_RESULT(out)", "F,PREP,DIVCORE,PRODUCE,NORMALIZE"};
     case OP_MUL:
-        return {"F + PREP(a,b) + PRODUCE(8*(u+v)) + PREP(8*(u+v)) + PRODUCE(8*(v+1)) + u*(MULROW(v) + ARITH(8*(v+1))) + NORMALIZE(out)",
-                "F,PREP,PRODUCE,MULROW,ARITH,NORMALIZE"};
+        return {"F + PREP(a,b) + MUL(u,v) + PRODUCE(8*(u+v)) + NORMALIZE(out)",
+                "F,PREP,MUL,PRODUCE,NORMALIZE"};
     case OP_SUBSTR:
         return {"F + PREP(indices) + READ(indices) + PRODUCE(out)", "F,PREP,READ,PRODUCE"};
     case OP_LSHIFT: case OP_RSHIFT:
@@ -2972,6 +3290,14 @@ static std::vector<CaseSpec> GenerateCaseSpecs(const Options& options)
             return spec.role != HeadlineRole::PRE_BASELINE &&
                    spec.name.find(options.case_filter) == std::string::npos;
         });
+    }
+    if (!options.confirm_names.empty()) {
+        std::erase_if(specs, [&](const CaseSpec& spec) { return !options.confirm_names.contains(spec.name); });
+        for (const std::string& name : options.confirm_names) {
+            if (std::ranges::none_of(specs, [&](const CaseSpec& spec) { return spec.name == name; })) {
+                throw std::runtime_error("confirmation case is not in this corpus (rerun screening with the same options): " + name);
+            }
+        }
     }
     std::sort(specs.begin(), specs.end(), [](const CaseSpec& left, const CaseSpec& right) { return left.name < right.name; });
     const std::vector<CaseSpec>::iterator duplicate{std::adjacent_find(specs.begin(), specs.end(), [](const CaseSpec& left, const CaseSpec& right) {
@@ -3121,16 +3447,29 @@ static TimingSample MeasurePrepared(const MaterializedCase& test_case, const Cry
     ankerl::nanobench::Bench bench{SetupBenchmark()};
     EvalOutcome outcome;
     size_t executions{0};
+    const bool diagnose{g_diagnose_div17 && test_case.spec->opcode == OP_DIV &&
+                        test_case.spec->operand_shape == "17Bx9B"};
+    ResourceCounters before, after;
     bench.run(test_case.spec->name, [&] {
         ++executions;
+        before = ReadResourceCounters();
         outcome = ExecutePrepared(test_case, checker, execution);
+        after = ReadResourceCounters();
     });
+    const ResourceCounters counters{CounterDelta(before, after)};
+    if (diagnose) {
+        std::cerr << strprintf("DIV17_DIAG round=%d order=%u trim=%d wall=%.9f cpu=%.9f"
+                               " minor_faults=%d major_faults=%d involuntary=%d\n",
+            round, order, !g_skip_allocator_trim,
+            bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed), counters.cpu_sec,
+            counters.minor_faults, counters.major_faults, counters.involuntary_switches);
+    }
     if (executions != 1 || bench.results().size() != 1 || bench.results().front().size() != 1) {
         throw std::runtime_error("nanobench did not execute exactly one case sample");
     }
     CheckMeasuredOutcome(test_case, expected, outcome, TimingStageName(stage));
     return {MeasurementMode::REALISTIC, stage, round, order,
-            bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed)};
+            bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed), counters};
 }
 
 static bool ConfigureFullVaropsExtrapolation(const MaterializedCase& test_case,
@@ -3222,12 +3561,15 @@ static TimingSample MeasureSchnorrBatch(const CryptoFixture& fixture, TimingStag
     ankerl::nanobench::Bench bench{SetupBenchmark()};
     uint64_t valid{0};
     size_t executions{0};
+    ResourceCounters before, after;
     bench.run("Schnorr signature validation", [&] {
         ++executions;
+        before = ReadResourceCounters();
         for (uint64_t i{0}; i < iterations; ++i) {
             valid += fixture.pubkey.VerifySchnorr(fixture.message, fixture.signature);
         }
         ankerl::nanobench::doNotOptimizeAway(valid);
+        after = ReadResourceCounters();
     });
     if (executions != 1 || valid != iterations || bench.results().size() != 1 ||
         bench.results().front().size() != 1) {
@@ -3235,7 +3577,8 @@ static TimingSample MeasureSchnorrBatch(const CryptoFixture& fixture, TimingStag
     }
     const double scale{static_cast<double>(SIGNATURES_PER_BLOCK) / iterations};
     return {MeasurementMode::REALISTIC, stage, round, order,
-            bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed) * scale};
+            bench.results().front().get(0, ankerl::nanobench::Result::Measure::elapsed) * scale,
+            CounterDelta(before, after)};
 }
 
 static BenchResult RunRawSchnorr(const CryptoFixture& fixture)
@@ -3558,6 +3901,10 @@ enum class CsvColumn : size_t {
     FULL_VAROPS_WALL_MAX_SECONDS,
     FULL_VAROPS_MDAPE,
     FULL_VAROPS_SCHNORR_EQUIVALENTS,
+    CPU_SECONDS,
+    MINOR_PAGE_FAULTS,
+    MAJOR_PAGE_FAULTS,
+    INVOLUNTARY_SWITCHES,
     COUNT,
 };
 
@@ -3574,7 +3921,7 @@ static constexpr std::string_view CSV_HEADER{
     "Full_Varops_Status,Full_Varops_Script_Bytes,Full_Varops_Script_Executions,Full_Varops_Measured_Varops,"
     "Full_Varops_Scale,Full_Varops_Projected_Logical_Opcodes,Full_Varops_Stage,Full_Varops_Samples,Full_Varops_Wall_Seconds,"
     "Full_Varops_Wall_Min_Seconds,Full_Varops_Wall_Max_Seconds,Full_Varops_MdAPE,"
-    "Full_Varops_Schnorr_Equivalents"};
+    "Full_Varops_Schnorr_Equivalents,CPU_Seconds,Minor_Page_Faults,Major_Page_Faults,Involuntary_Context_Switches"};
 static_assert(std::ranges::count(CSV_HEADER, ',') + 1 == CsvIndex(CsvColumn::COUNT));
 
 static std::string& CsvField(CsvRow& row, CsvColumn column) { return row[CsvIndex(column)]; }
@@ -3630,7 +3977,8 @@ static bool FlushAndClose(std::ofstream& file, const fs::path& path)
 }
 
 static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std::string& filepath,
-                              const CorpusCounts& counts, const Options& options)
+                              const CorpusCounts& counts, const Options& options,
+                              const std::vector<std::string>& notes = {})
 {
     const fs::path output_target{fs::PathFromString(filepath)};
     fs::path output_temporary{output_target};
@@ -3645,7 +3993,7 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
     for (const BenchResult& result : results)
         raw_sample_count += result.samples.size();
 
-    output_file << "# Schema: bench_varops-v5\n";
+    output_file << "# Schema: bench_varops-v6\n";
     output_file << GetBenchmarkSystemInfo();
     output_file << "# Record types: summary=aggregated row; sample=normalized wall-clock measurement.\n";
     output_file << "# Wall_Seconds: summary median or sample value; Schnorr samples are normalized to 80,000 validations.\n";
@@ -3653,6 +4001,8 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
                    "to exactly 40 billion varops.\n";
     output_file << "# Full-varops extrapolation requires at least 1% of the budget in the measured script.\n";
     output_file << "# Measurement_Mode distinguishes realistic measurements and full-varops extrapolations.\n";
+    output_file << "# Realistic sample rows record process CPU seconds, page faults and involuntary context switches "
+                   "during the timed execution (Windows reports all page faults as minor, without switches).\n";
     output_file << "# New_In_V2 marks workloads requiring v2 rules or limits, not only new opcode names.\n";
     output_file << strprintf("# Records: summary=%u sample=%u\n", results.size(), raw_sample_count);
     output_file << "# Realistic measurement: scripts stop at their natural script-size or varops limit, "
@@ -3666,6 +4016,7 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
     output_file << strprintf("# Protocol: schnorr_samples=%u sample_budget_percent=%u sample_budget_varops=%u\n",
                              SCHNORR_BASELINE_SAMPLES,
                              options.sample_budget_percent, SampleBudget(options));
+    for (const std::string& note : notes) output_file << "# " << note << '\n';
     output_file << "#\n";
     output_file << CSV_HEADER << '\n';
 
@@ -3743,6 +4094,15 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
             CsvField(row, CsvColumn::ROUND) = CsvNumber(sample.round);
             CsvField(row, CsvColumn::ORDER) = CsvNumber(sample.order);
             CsvField(row, CsvColumn::WALL_SECONDS) = CsvNumber(sample.wall_sec);
+            if (sample.counters) {
+                const ResourceCounters& c{*sample.counters};
+                if (c.cpu_sec >= 0) CsvField(row, CsvColumn::CPU_SECONDS) = CsvNumber(c.cpu_sec);
+                if (c.minor_faults >= 0) CsvField(row, CsvColumn::MINOR_PAGE_FAULTS) = CsvNumber(c.minor_faults);
+                if (c.major_faults >= 0) CsvField(row, CsvColumn::MAJOR_PAGE_FAULTS) = CsvNumber(c.major_faults);
+                if (c.involuntary_switches >= 0) {
+                    CsvField(row, CsvColumn::INVOLUNTARY_SWITCHES) = CsvNumber(c.involuntary_switches);
+                }
+            }
             WriteCsvRow(output_file, row);
         }
     }
@@ -3763,6 +4123,139 @@ static bool SaveResultsToFile(const std::vector<BenchResult>& results, const std
     return true;
 }
 
+/** Cases selected from a screening run, and its same-run reference. */
+struct ConfirmationPlan {
+    std::set<std::string> names;
+    std::set<std::string> references;
+    std::map<std::string, double> screening_ratios;
+    double screening_reference{0};
+};
+
+static std::vector<std::string> ParseCsvLine(const std::string& line)
+{
+    std::vector<std::string> fields(1);
+    bool quoted{false};
+    for (size_t i{0}; i < line.size(); ++i) {
+        const char ch{line[i]};
+        if (quoted) {
+            if (ch == '"' && i + 1 < line.size() && line[i + 1] == '"') {
+                fields.back() += '"';
+                ++i;
+            } else if (ch == '"') {
+                quoted = false;
+            } else {
+                fields.back() += ch;
+            }
+        } else if (ch == '"') {
+            quoted = true;
+        } else if (ch == ',') {
+            fields.emplace_back();
+        } else if (ch != '\r') {
+            fields.back() += ch;
+        }
+    }
+    return fields;
+}
+
+/**
+ * Screening flags every v2 case whose measured or projected time exceeds
+ * threshold × the screening run's slowest pre-v2 case. Confirmation reruns the
+ * flagged cases with the three slowest pre-v2 cases as a same-run reference.
+ */
+static ConfirmationPlan ReadConfirmationPlan(const std::string& path, double threshold)
+{
+    std::ifstream input{path};
+    if (!input) throw std::runtime_error("cannot read screening CSV " + path);
+    std::string line;
+    std::map<std::string, size_t> column;
+    std::vector<std::pair<double, std::string>> references;
+    std::vector<std::pair<std::string, double>> candidates;
+    while (std::getline(input, line)) {
+        if (line.empty() || line.front() == '#') continue;
+        const std::vector<std::string> fields{ParseCsvLine(line)};
+        if (column.empty()) {
+            for (size_t i{0}; i < fields.size(); ++i) column[fields[i]] = i;
+            for (const char* name : {"Record_Type", "Name", "Domain", "Wall_Seconds", "Full_Varops_Wall_Seconds"}) {
+                if (!column.contains(name)) throw std::runtime_error(strprintf("screening CSV lacks %s", name));
+            }
+            continue;
+        }
+        const auto field = [&](const char* name) -> const std::string& {
+            const size_t index{column.at(name)};
+            if (index >= fields.size()) throw std::runtime_error("truncated screening CSV row");
+            return fields[index];
+        };
+        if (field("Record_Type") != "summary") continue;
+        const auto seconds = [](const std::string& text) { return text.empty() ? 0.0 : std::stod(text); };
+        const double wall{std::max(seconds(field("Wall_Seconds")), seconds(field("Full_Varops_Wall_Seconds")))};
+        if (field("Domain") == DomainName(ExecutionDomain::PRE_GSR_TAPSCRIPT)) {
+            references.emplace_back(wall, field("Name"));
+        } else if (field("Domain") == DomainName(ExecutionDomain::GSR_TAPSCRIPT_V2)) {
+            candidates.emplace_back(field("Name"), wall);
+        }
+    }
+    if (references.empty()) throw std::runtime_error("screening CSV has no pre-v2 reference cases");
+    std::ranges::sort(references, std::greater{});
+    ConfirmationPlan plan;
+    plan.screening_reference = references.front().first;
+    for (size_t i{0}; i < std::min<size_t>(3, references.size()); ++i) {
+        plan.references.insert(references[i].second);
+        plan.names.insert(references[i].second);
+    }
+    for (const auto& [name, wall] : candidates) {
+        const double ratio{wall / plan.screening_reference};
+        if (ratio > threshold) {
+            plan.screening_ratios[name] = ratio;
+            plan.names.insert(name);
+        }
+    }
+    return plan;
+}
+
+/** Per-round ratios against the same round's slowest reference, with a verdict per case. */
+static std::vector<std::string> ReportConfirmation(const std::vector<BenchResult>& results,
+                                                   const ConfirmationPlan& plan, double threshold)
+{
+    std::map<int, double> reference;
+    for (const BenchResult& result : results) {
+        if (!plan.references.contains(result.name)) continue;
+        for (const TimingSample& sample : result.samples) {
+            if (sample.mode != MeasurementMode::REALISTIC) continue;
+            reference[sample.round] = std::max(reference[sample.round], sample.wall_sec);
+        }
+    }
+    std::vector<std::string> lines;
+    lines.push_back(strprintf("Confirmation: threshold %.3fx; screening reference %.3f s; %u flagged cases; "
+                              "per-round ratio = max(measured, projected) / slowest same-round reference",
+                              threshold, plan.screening_reference, plan.screening_ratios.size()));
+    for (const auto& [name, screening] : plan.screening_ratios) {
+        const auto found{std::ranges::find_if(results, [&](const BenchResult& result) { return result.name == name; })};
+        if (found == results.end()) {
+            lines.push_back(strprintf("Confirmation: %s did not complete", name));
+            continue;
+        }
+        std::map<int, double> wall;
+        for (const TimingSample& sample : found->samples) wall[sample.round] = std::max(wall[sample.round], sample.wall_sec);
+        std::vector<double> ratios;
+        for (const auto& [round, seconds] : wall) {
+            if (reference.contains(round) && reference.at(round) > 0) ratios.push_back(seconds / reference.at(round));
+        }
+        if (ratios.empty()) {
+            lines.push_back(strprintf("Confirmation: %s has no round with a reference", name));
+            continue;
+        }
+        std::ranges::sort(ratios);
+        const double median{ratios.size() % 2 ? ratios[ratios.size() / 2] :
+                                                (ratios[ratios.size() / 2 - 1] + ratios[ratios.size() / 2]) / 2};
+        const std::string verdict{median > 1.0          ? "above-limit" :
+                                  median > threshold    ? "above-target" :
+                                  ratios.back() > threshold ? "straddles-target" : "below-target"};
+        lines.push_back(strprintf("Confirmation: %s screening=%.3fx rounds=%u median=%.3fx min=%.3fx max=%.3fx verdict=%s",
+                                  name, screening, ratios.size(), median, ratios.front(), ratios.back(), verdict));
+    }
+    return lines;
+}
+
 static void PrintUsage(const char* program)
 {
     std::cout << "Usage: " << program << " [OPTIONS]\n\n"
@@ -3776,6 +4269,19 @@ static void PrintUsage(const char* program)
               << "  --verify-costs         Cost-verification mode: assert static/runtime parity, skip timing\n"
               << "  --coverage-manifest P Export candidate opcode/formula/parity CSV\n"
               << "  --exclude-experimental Skip postponed OP_TX/macro cases (including parity checks)\n"
+              << "  --confirm SCREEN.csv    Rerun the v2 cases a screening CSV flagged above the threshold,\n"
+              << "                            with its three slowest pre-v2 cases as same-run reference\n"
+              << "  --confirm-threshold R   Screening ratio that flags a case (default: 0.9)\n"
+              << "  --diagnose-div17       Print CPU/fault/context-switch counters for DIV 17x9B\n"
+              << "  --no-allocator-trim    Diagnostic: do not force allocator cache release\n"
+              << "  --shape-search          Search operand shapes/sizes for the worst time per varop\n"
+              << "  --reference-seconds S   Same-machine T_pre used to report search ratios (required)\n"
+              << "  --search-budget N       Varops per screening sample (default: 400000000)\n"
+              << "  --search-samples N      Random candidates per opcode (default: 32)\n"
+              << "  --search-climbers N     Best random candidates refined per opcode (default: 2)\n"
+              << "  --search-steps N        Maximum hill-climbing steps per refinement (default: 4)\n"
+              << "  --search-top N          Global screening leaders to confirm (default: 20)\n"
+              << "  --search-seed N         Random seed for candidate generation\n"
               << "  --silent                Suppress progress output\n"
               << "  --file PATH             Atomically write a v4 summary-and-sample CSV\n"
               << "  --help, -h              Show this help\n\n"
@@ -3823,6 +4329,18 @@ static Options ParseArguments(int argc, char* argv[])
                 throw std::runtime_error("--case-filter requires a nonempty substring");
             }
             options.case_filter = argv[i];
+        } else if (arg == "--confirm") {
+            if (++i >= argc) throw std::runtime_error("--confirm requires a screening CSV path");
+            options.confirm_file = argv[i];
+        } else if (arg == "--confirm-threshold") {
+            if (++i >= argc) throw std::runtime_error("--confirm-threshold requires a positive number");
+            double threshold{0};
+            std::istringstream parser{argv[i]};
+            parser.imbue(std::locale::classic());
+            if (!(parser >> threshold) || !parser.eof() || !std::isfinite(threshold) || threshold <= 0) {
+                throw std::runtime_error("invalid --confirm-threshold value '" + std::string{argv[i]} + "'");
+            }
+            options.confirm_threshold = threshold;
         } else if (arg == "--list-opcodes") {
             options.list_opcodes = true;
         } else if (arg == "--verify-costs") {
@@ -3832,6 +4350,39 @@ static Options ParseArguments(int argc, char* argv[])
         } else if (arg == "--coverage-manifest") {
             if (++i >= argc) throw std::runtime_error("--coverage-manifest requires a path");
             options.coverage_manifest = argv[i];
+        } else if (arg == "--diagnose-div17") {
+            g_diagnose_div17 = true;
+        } else if (arg == "--no-allocator-trim") {
+            g_skip_allocator_trim = true;
+        } else if (arg == "--shape-search") {
+            options.shape_search = true;
+        } else if (arg == "--reference-seconds") {
+            if (++i >= argc) throw std::runtime_error("--reference-seconds requires a positive number");
+            double seconds{0};
+            std::istringstream parser{argv[i]};
+            parser.imbue(std::locale::classic());
+            if (!(parser >> seconds) || !parser.eof() || !std::isfinite(seconds) || seconds <= 0) {
+                throw std::runtime_error("invalid --reference-seconds value '" + std::string{argv[i]} + "'");
+            }
+            options.reference_seconds = seconds;
+        } else if (arg == "--search-budget" || arg == "--search-samples" || arg == "--search-climbers" ||
+                   arg == "--search-steps" || arg == "--search-top" || arg == "--search-seed") {
+            if (++i >= argc) throw std::runtime_error(arg + " requires an integer");
+            const std::optional<uint64_t> value{ToIntegral<uint64_t>(argv[i])};
+            const bool allow_zero{arg == "--search-seed" || arg == "--search-climbers" ||
+                                  arg == "--search-steps" || arg == "--search-top"};
+            if (!value || (*value == 0 && !allow_zero) ||
+                (arg == "--search-budget" && *value > TOTAL_VAROPS_BUDGET) ||
+                (arg != "--search-budget" && arg != "--search-seed" &&
+                 *value > std::numeric_limits<uint32_t>::max())) {
+                throw std::runtime_error("invalid " + arg + " value '" + std::string{argv[i]} + "'");
+            }
+            if (arg == "--search-budget") options.search_budget = *value;
+            if (arg == "--search-samples") options.search_samples = *value;
+            if (arg == "--search-climbers") options.search_climbers = *value;
+            if (arg == "--search-steps") options.search_steps = *value;
+            if (arg == "--search-top") options.search_top = *value;
+            if (arg == "--search-seed") options.search_seed = *value;
         } else if (arg == "--silent") {
             options.silent = true;
         } else if (arg == "--file") {
@@ -3843,6 +4394,17 @@ static Options ParseArguments(int argc, char* argv[])
         } else {
             throw std::runtime_error("unknown option '" + arg + "'");
         }
+    }
+    if (options.shape_search && options.reference_seconds == 0) {
+        throw std::runtime_error("--shape-search requires --reference-seconds");
+    }
+    if (!options.confirm_file.empty() && (options.shape_search || options.verify_costs ||
+                                          !options.case_filter.empty() || !options.selected_opcodes.empty())) {
+        throw std::runtime_error("--confirm selects its own cases; do not combine it with --opcodes, --case-filter, "
+                                 "--shape-search or --verify-costs");
+    }
+    if (options.shape_search && (options.verify_costs || !options.case_filter.empty())) {
+        throw std::runtime_error("--shape-search cannot be combined with --verify-costs or --case-filter");
     }
     return options;
 }
@@ -3963,17 +4525,412 @@ static void RequireIndependentParity(
     }
 }
 
+// The corpus fixes hand-chosen operands. This mode searches operand values and
+// sizes for the largest measured time per charged varop of a repeated,
+// stack-neutral script. It complements the whole-workload runtime checks.
+enum class SearchShape : uint8_t {
+    DENSE,
+    ZERO,
+    ONE_LOW,
+    SMALL,
+    TOP_ONE,
+    TOP_CLEAR,
+    LOW_HALF,
+    HIGH_HALF,
+    ALTERNATING,
+    RANDOM,
+};
+
+constexpr std::array SEARCH_SHAPES{
+    SearchShape::DENSE, SearchShape::ZERO, SearchShape::ONE_LOW, SearchShape::SMALL,
+    SearchShape::TOP_ONE, SearchShape::TOP_CLEAR, SearchShape::LOW_HALF, SearchShape::HIGH_HALF,
+    SearchShape::ALTERNATING, SearchShape::RANDOM};
+// Keep initial operands inside a feasible witness, leaving room for the script.
+constexpr size_t MAX_SEARCH_PAYLOAD{3'900'000};
+// Screening samples are single timings; ignore improvements within their noise.
+constexpr double SEARCH_IMPROVEMENT{0.03};
+
+static std::string SearchShapeName(SearchShape shape)
+{
+    switch (shape) {
+    case SearchShape::DENSE: return "dense";
+    case SearchShape::ZERO: return "zero";
+    case SearchShape::ONE_LOW: return "one-low";
+    case SearchShape::SMALL: return "small";
+    case SearchShape::TOP_ONE: return "top-one";
+    case SearchShape::TOP_CLEAR: return "top-clear";
+    case SearchShape::LOW_HALF: return "low-half";
+    case SearchShape::HIGH_HALF: return "high-half";
+    case SearchShape::ALTERNATING: return "alternating";
+    case SearchShape::RANDOM: return "random";
+    }
+    return "unknown";
+}
+
+struct SearchOperand {
+    SearchShape shape{SearchShape::DENSE};
+    size_t size{0};
+    uint64_t value{0}; // Little-endian value of SMALL, zero-padded to size.
+};
+
+struct SearchPoint {
+    opcodetype opcode{OP_NOP};
+    std::vector<SearchOperand> operands;
+};
+
+struct SearchResult {
+    SearchPoint point;
+    std::string phase;
+    std::string reason;
+    bool valid{false};
+    uint64_t repetitions{0};
+    uint64_t consumed{0};
+    uint64_t initial{0};
+    double wall_sec{0};
+    double projected_sec{0};
+    double ratio{0};
+};
+
+static size_t SearchArity(opcodetype opcode)
+{
+    switch (opcode) {
+    case OP_1ADD: case OP_1SUB: case OP_NOT: case OP_0NOTEQUAL:
+    case OP_INVERT: case OP_2MUL: case OP_2DIV:
+    case OP_RIPEMD160: case OP_SHA1: case OP_SHA256: case OP_HASH160: case OP_HASH256:
+        return 1;
+    case OP_EQUAL: case OP_ADD: case OP_SUB: case OP_BOOLAND: case OP_BOOLOR:
+    case OP_NUMEQUAL: case OP_NUMNOTEQUAL: case OP_LESSTHAN: case OP_GREATERTHAN:
+    case OP_LESSTHANOREQUAL: case OP_GREATERTHANOREQUAL: case OP_MIN: case OP_MAX:
+    case OP_AND: case OP_OR: case OP_XOR: case OP_MUL: case OP_DIV: case OP_MOD:
+    case OP_LSHIFT: case OP_RSHIFT: case OP_CAT: case OP_LEFT: case OP_RIGHT:
+        return 2;
+    case OP_SUBSTR: case OP_WITHIN:
+        return 3;
+    default:
+        return 0;
+    }
+}
+
+static void NormalizeOperand(SearchOperand& operand)
+{
+    operand.size = std::min<size_t>(operand.size, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE);
+    if (operand.shape != SearchShape::SMALL) {
+        operand.value = 0;
+    } else if (operand.size < sizeof(uint64_t)) {
+        operand.value &= (uint64_t{1} << (8 * operand.size)) - 1;
+    }
+}
+
+static valtype SearchBytes(const SearchOperand& operand)
+{
+    const size_t size{operand.size};
+    valtype out(size, 0x00);
+    switch (operand.shape) {
+    case SearchShape::DENSE: std::ranges::fill(out, 0xff); break;
+    case SearchShape::ZERO: break;
+    case SearchShape::ONE_LOW: if (size != 0) out.front() = 0x01; break;
+    case SearchShape::SMALL:
+        for (size_t i{0}; i < std::min(size, sizeof(uint64_t)); ++i) {
+            out[i] = static_cast<unsigned char>(operand.value >> (8 * i));
+        }
+        break;
+    case SearchShape::TOP_ONE: if (size != 0) out.back() = 0x01; break;
+    case SearchShape::TOP_CLEAR: std::ranges::fill(out, 0x7f); break;
+    case SearchShape::LOW_HALF: std::fill(out.begin(), out.begin() + (size + 1) / 2, 0xff); break;
+    case SearchShape::HIGH_HALF: std::fill(out.begin() + size / 2, out.end(), 0xff); break;
+    case SearchShape::ALTERNATING:
+        for (size_t i{0}; i < size; ++i) out[i] = (i & 1) ? 0x55 : 0xaa;
+        break;
+    case SearchShape::RANDOM: {
+        std::mt19937_64 rng{0x5eed ^ size};
+        for (unsigned char& byte : out) byte = static_cast<unsigned char>(rng());
+        break;
+    }
+    }
+    return out;
+}
+
+static std::string SearchOperandsLabel(const SearchPoint& point)
+{
+    std::string label;
+    for (const SearchOperand& operand : point.operands) {
+        if (!label.empty()) label += ' ';
+        label += operand.shape == SearchShape::SMALL ?
+            strprintf("small=%u:%uB", operand.value, operand.size) :
+            strprintf("%s:%uB", SearchShapeName(operand.shape), operand.size);
+    }
+    return label;
+}
+
+static std::string SearchKey(const SearchPoint& point)
+{
+    return OpcodeName(point.opcode) + "(" + SearchOperandsLabel(point) + ")";
+}
+
+static CScript SearchSequence(const SearchPoint& point)
+{
+    const size_t arity{point.operands.size()};
+    return Ops({arity == 1 ? OP_DUP : arity == 2 ? OP_2DUP : OP_3DUP, point.opcode, OP_DROP});
+}
+
+static uint64_t SearchPayload(const SearchPoint& point)
+{
+    uint64_t total{0};
+    for (const SearchOperand& operand : point.operands) total += operand.size;
+    return total;
+}
+
+static SearchOperand DrawSearchOperand(std::mt19937_64& rng)
+{
+    // Word, hash-block and allocation boundaries, then log-uniform sizes.
+    static constexpr std::array<size_t, 20> BOUNDARIES{
+        0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65, 520, 521, 4096, 4097, 65536, 1'000'000};
+    SearchOperand operand{SEARCH_SHAPES[rng() % SEARCH_SHAPES.size()], 0, 0};
+    if (rng() % 10 < 3) {
+        operand.size = BOUNDARIES[rng() % BOUNDARIES.size()];
+    } else {
+        std::uniform_real_distribution<double> exponent{0, std::log2(double(MAX_SEARCH_PAYLOAD))};
+        operand.size = static_cast<size_t>(std::exp2(exponent(rng)));
+    }
+    if (operand.shape == SearchShape::SMALL) {
+        std::uniform_real_distribution<double> exponent{0, 32};
+        operand.value = static_cast<uint64_t>(std::exp2(exponent(rng)));
+    }
+    NormalizeOperand(operand);
+    return operand;
+}
+
+static std::vector<SearchPoint> SearchNeighbors(const SearchPoint& point)
+{
+    std::vector<SearchPoint> out;
+    std::set<std::string> seen{SearchKey(point)};
+    for (size_t index{0}; index < point.operands.size(); ++index) {
+        const SearchOperand base{point.operands[index]};
+        const auto add = [&](SearchOperand operand) {
+            NormalizeOperand(operand);
+            SearchPoint next{point};
+            next.operands[index] = operand;
+            if (SearchPayload(next) > MAX_SEARCH_PAYLOAD || !seen.insert(SearchKey(next)).second) return;
+            out.push_back(std::move(next));
+        };
+        for (const size_t size : {base.size * 2, base.size / 2, base.size + 1, base.size + 8,
+                                  base.size - std::min<size_t>(base.size, 1),
+                                  base.size - std::min<size_t>(base.size, 8)}) {
+            SearchOperand operand{base};
+            operand.size = size;
+            add(operand);
+        }
+        for (const SearchShape shape : SEARCH_SHAPES) {
+            SearchOperand operand{base};
+            operand.shape = shape;
+            if (shape == SearchShape::SMALL && base.shape != SearchShape::SMALL) operand.value = 0xff;
+            add(operand);
+        }
+        if (base.shape == SearchShape::SMALL) {
+            for (const uint64_t value : {base.value * 2, base.value / 2, base.value + 1,
+                                         base.value - std::min<uint64_t>(base.value, 1)}) {
+                SearchOperand operand{base};
+                operand.value = value;
+                add(operand);
+            }
+        }
+    }
+    return out;
+}
+
+static SearchResult MeasureSearchPoint(const SearchPoint& point, std::string phase,
+                                       const CryptoFixture& fixture, const Options& options, int samples)
+{
+    SearchResult result;
+    result.point = point;
+    result.phase = std::move(phase);
+    std::vector<valtype> stack;
+    for (const SearchOperand& operand : point.operands) stack.push_back(SearchBytes(operand));
+    std::vector<CaseSpec> specs;
+    AddCase(specs, point.opcode, HeadlineRole::NEW_GSR, "shape-search", SearchOperandsLabel(point),
+            "searched", SearchSequence(point), FixedStack(std::move(stack)));
+    const CaseSpec& spec{specs.front()};
+    try {
+        uint64_t ceiling{options.search_budget};
+        MaterializedCase test_case{Materialize(spec, fixture, ceiling)};
+        if (test_case.repetitions == 0) {
+            // One sequence exceeds the screening budget: sample one repetition.
+            const uint64_t one_sequence{
+                test_case.varops_per_repeat + InitialProducerCost(test_case.initial_stack) +
+                CandidateCleanupCost(test_case.initial_stack, test_case.initial_stack.size()) + 10'000};
+            ceiling = std::min(TOTAL_VAROPS_BUDGET, std::max(ceiling, one_sequence));
+            test_case = Materialize(spec, fixture, ceiling);
+        }
+        if (test_case.repetitions == 0) {
+            result.reason = "one sequence exceeds the budget";
+            return result;
+        }
+        std::vector<double> walls;
+        std::optional<EvalOutcome> expected;
+        for (int sample{0}; sample < samples; ++sample) {
+            CaseSample measured{RunTimedCaseSample(test_case, fixture, expected, sample + 1, 0, ceiling)};
+            expected = measured.outcome;
+            walls.push_back(measured.timing.wall_sec);
+        }
+        result.repetitions = test_case.repetitions;
+        result.consumed = expected->varops_consumed;
+        result.initial = InitialProducerCost(test_case.initial_stack);
+        if (result.consumed <= result.initial) {
+            result.reason = "no charged work beyond initial ownership";
+            return result;
+        }
+        result.wall_sec = CalculateStats(std::move(walls)).median;
+        // Same projection as the corpus: initial ownership is funded once.
+        result.projected_sec = result.wall_sec * double(TOTAL_VAROPS_BUDGET - result.initial) /
+                               double(result.consumed - result.initial);
+        result.ratio = result.projected_sec / options.reference_seconds;
+        result.valid = true;
+    } catch (const std::exception& exception) {
+        result.reason = exception.what();
+    }
+    return result;
+}
+
+static bool WriteSearchResults(const Options& options, const std::vector<SearchResult>& log)
+{
+    std::ofstream out{options.output_file};
+    out << "# bench_varops shape search\n"
+        << strprintf("# reference_seconds=%.9g search_budget=%u seed=%u samples=%u climbers=%u steps=%u top=%u epochs=%d\n",
+                     options.reference_seconds, options.search_budget, options.search_seed,
+                     options.search_samples, options.search_climbers, options.search_steps,
+                     options.search_top, options.stable_rounds)
+        << "# ratio = wall * (40e9 - initial) / (consumed - initial) / reference_seconds\n"
+        << "phase,opcode,operands,sequence,valid,reason,repetitions,varops_consumed,initial_varops,"
+           "wall_seconds,projected_full_budget_seconds,ratio\n";
+    for (const SearchResult& result : log) {
+        out << strprintf("%s,%s,%s,%s,%d,%s,%u,%u,%u,%.9g,%.9g,%.9g\n",
+                         result.phase, OpcodeName(result.point.opcode),
+                         CsvEscape(SearchOperandsLabel(result.point)),
+                         SequenceOpcodeNames(SearchSequence(result.point)), result.valid,
+                         CsvEscape(result.reason), result.repetitions, result.consumed, result.initial,
+                         result.wall_sec, result.projected_sec, result.ratio);
+    }
+    out.close();
+    if (!out) std::cerr << "Error: could not write " << options.output_file << "\n";
+    return bool(out);
+}
+
+static bool RunShapeSearch(const Options& options, const CryptoFixture& fixture)
+{
+    for (const opcodetype requested : options.selected_opcodes) {
+        if (SearchArity(requested) == 0) {
+            throw std::runtime_error("--shape-search does not support " + OpcodeName(requested));
+        }
+    }
+    std::vector<opcodetype> opcodes;
+    for (const OpcodeEntry& entry : OpcodeRegistry()) {
+        if (SearchArity(entry.opcode) == 0) continue;
+        if (!options.selected_opcodes.empty() && !options.selected_opcodes.contains(entry.opcode)) continue;
+        opcodes.push_back(entry.opcode);
+    }
+
+    std::mt19937_64 rng{options.search_seed};
+    std::vector<SearchResult> log;
+    std::map<std::string, SearchResult> screened;
+    const auto screen = [&](const SearchPoint& point, std::string phase) {
+        const std::string key{SearchKey(point)};
+        if (const auto found{screened.find(key)}; found != screened.end()) return found->second;
+        SearchResult result{MeasureSearchPoint(point, std::move(phase), fixture, options, 1)};
+        log.push_back(result);
+        screened.emplace(key, result);
+        return result;
+    };
+
+    std::vector<SearchResult> climbed;
+    for (const opcodetype opcode : opcodes) {
+        const size_t arity{SearchArity(opcode)};
+        std::vector<SearchResult> candidates;
+        for (uint64_t attempt{0};
+             candidates.size() < options.search_samples && attempt < 4 * uint64_t{options.search_samples}; ++attempt) {
+            SearchPoint point{opcode, {}};
+            for (size_t i{0}; i < arity; ++i) point.operands.push_back(DrawSearchOperand(rng));
+            if (SearchPayload(point) > MAX_SEARCH_PAYLOAD) continue;
+            SearchResult result{screen(point, "random")};
+            if (result.valid) candidates.push_back(std::move(result));
+        }
+        std::ranges::sort(candidates, std::greater{}, &SearchResult::ratio);
+        double opcode_best{candidates.empty() ? 0 : candidates.front().ratio};
+        for (size_t index{0}; index < std::min<size_t>(options.search_climbers, candidates.size()); ++index) {
+            SearchResult current{candidates[index]};
+            for (uint32_t step{0}; step < options.search_steps; ++step) {
+                SearchResult best{current};
+                for (const SearchPoint& neighbor : SearchNeighbors(current.point)) {
+                    SearchResult result{screen(neighbor, "climb")};
+                    if (result.valid && result.ratio > best.ratio) best = std::move(result);
+                }
+                if (best.ratio <= current.ratio * (1 + SEARCH_IMPROVEMENT)) break;
+                current = std::move(best);
+            }
+            opcode_best = std::max(opcode_best, current.ratio);
+            climbed.push_back(std::move(current));
+        }
+        if (!options.silent) {
+            std::cout << strprintf("shape search %s: %u valid random candidates, best screened ratio %.4f\n",
+                                   OpcodeName(opcode), candidates.size(), opcode_best) << std::flush;
+        }
+    }
+
+    std::vector<SearchPoint> finalists;
+    std::set<std::string> finalist_keys;
+    const auto add_finalist = [&](const SearchPoint& point) {
+        if (finalist_keys.insert(SearchKey(point)).second) finalists.push_back(point);
+    };
+    for (const SearchResult& result : climbed) add_finalist(result.point);
+    std::vector<SearchResult> leaders;
+    std::ranges::copy_if(log, std::back_inserter(leaders), &SearchResult::valid);
+    std::ranges::sort(leaders, std::greater{}, &SearchResult::ratio);
+    for (size_t index{0}; index < std::min<size_t>(options.search_top, leaders.size()); ++index) {
+        add_finalist(leaders[index].point);
+    }
+
+    std::vector<SearchResult> confirmed;
+    for (const SearchPoint& point : finalists) {
+        SearchResult result{MeasureSearchPoint(point, "confirm", fixture, options, options.stable_rounds)};
+        log.push_back(result);
+        if (result.valid) confirmed.push_back(std::move(result));
+    }
+    std::ranges::sort(confirmed, std::greater{}, &SearchResult::ratio);
+
+    const size_t valid_count{static_cast<size_t>(std::ranges::count_if(log, &SearchResult::valid))};
+    std::cout << strprintf("\nShape search: %u measurements (%u valid), T_pre = %.4f s, screening budget %u varops\n",
+                           log.size(), valid_count, options.reference_seconds, options.search_budget)
+              << "Ratio = projected full-budget time / T_pre (confirmed median of "
+              << options.stable_rounds << " samples)\n";
+    std::cout << strprintf("%-6s %-10s %-10s %-10s %s\n", "ratio", "proj_s", "ps/varop", "reps", "case");
+    // The global top 20, then the leader of every other searched opcode.
+    std::set<opcodetype> reported;
+    for (size_t index{0}; index < confirmed.size(); ++index) {
+        const SearchResult& result{confirmed[index]};
+        const bool first_for_opcode{reported.insert(result.point.opcode).second};
+        if (index >= 20 && !first_for_opcode) continue;
+        std::cout << strprintf("%-6.4f %-10.4f %-10.2f %-10u %s\n", result.ratio, result.projected_sec,
+                               result.wall_sec * 1e12 / double(result.consumed - result.initial),
+                               result.repetitions, SearchKey(result.point));
+    }
+    return options.output_file.empty() || WriteSearchResults(options, log);
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
 {
-    if constexpr (varops::PRODUCER_LIFETIME_EXPERIMENT) {
-        std::cerr << "Experimental producer lifetime schedule: PRODUCE=" << varops::CopyCost(0)
-                  << "+" << varops::CopyCost(1) - varops::CopyCost(0)
-                  << "*n; initial stack prepaid; explicit RELEASE=0.\n";
-    }
     try {
-        const Options options{ParseArguments(argc, argv)};
+        Options options{ParseArguments(argc, argv)};
+        std::optional<ConfirmationPlan> confirmation;
+        if (!options.confirm_file.empty()) {
+            confirmation = ReadConfirmationPlan(options.confirm_file, options.confirm_threshold);
+            options.confirm_names = confirmation->names;
+            if (confirmation->screening_ratios.empty()) {
+                std::cout << strprintf("No v2 case in %s exceeds %.3fx its screening reference; nothing to confirm.\n",
+                                       options.confirm_file, options.confirm_threshold);
+                return 0;
+            }
+        }
         if (options.list_opcodes) {
             for (const auto& [name, opcode] : SupportedOpcodeMap()) {
                 std::cout << strprintf("%s (0x%02x)\n", name, static_cast<unsigned int>(opcode));
@@ -3985,6 +4942,10 @@ int main(int argc, char* argv[])
         RunTimingSelfChecks();
         SHA256AutoDetect();
         const CryptoFixture fixture;
+        if (options.shape_search) {
+            RunGlobalWarmup(fixture);
+            return RunShapeSearch(options, fixture) ? 0 : 1;
+        }
         const std::vector<CaseSpec> specs{GenerateCaseSpecs(options)};
         if (specs.empty()) throw std::runtime_error("the requested opcode set generated no cases");
         if (options.verify_costs) {
@@ -3997,6 +4958,7 @@ int main(int argc, char* argv[])
         }
         Options parity_options{options};
         parity_options.case_filter.clear();
+        parity_options.confirm_names.clear();
         const std::vector<CaseSpec> parity_specs{GenerateCaseSpecs(parity_options)};
         const auto parity{VerifyCorpusCosts(parity_specs, fixture, true)};
         RequireIndependentParity(parity_specs, parity);
@@ -4097,8 +5059,14 @@ int main(int argc, char* argv[])
             return WorstCaseSeconds(left) > WorstCaseSeconds(right);
         });
         PrintReport(results, counts, options);
+        std::vector<std::string> notes;
+        if (confirmation) {
+            notes = ReportConfirmation(results, *confirmation, options.confirm_threshold);
+            std::cout << '\n';
+            for (const std::string& note : notes) std::cout << "  " << note << '\n';
+        }
         if (!options.output_file.empty() &&
-            !SaveResultsToFile(results, options.output_file, counts, options)) {
+            !SaveResultsToFile(results, options.output_file, counts, options, notes)) {
             return 1;
         }
         return 0;

@@ -20,45 +20,67 @@ namespace varops {
 
 /** Whole-varop prices of the BIP 440 work classes. Byte arguments are logical sizes. */
 constexpr uint64_t WordSpan(size_t bytes) { return (static_cast<uint64_t>(bytes) + 7) / 8 * 8; }
-constexpr uint64_t FixedOpcodeCost() { return 382; }
-constexpr uint64_t PrepCost(size_t bytes) { return 233 + WordSpan(bytes); }
-#ifdef GSR_PRODUCER_LIFETIME_EXPERIMENT
-// Provisional measurement-derived schedule, isolated from ordinary builds.
-inline constexpr bool PRODUCER_LIFETIME_EXPERIMENT{true};
-constexpr uint64_t ProduceCost(size_t bytes) { return 639 + 6 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t NormalizeCost(size_t bytes) { return 766 + WordSpan(bytes); }
+// Four-machine coefficientwise maximum at 0.9x each machine's pre-v2 reference:
+// flats rounded up to 50, variable rates to whole varops.
+constexpr uint64_t FixedOpcodeCost() { return 350; }
+constexpr uint64_t PrepCost(size_t bytes) { return 300 + WordSpan(bytes); }
+constexpr uint64_t ProduceCost(size_t bytes) { return 1600 + 7 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t NormalizeCost(size_t bytes) { return 350 + 2 * WordSpan(bytes); }
 constexpr uint64_t OutputCost(size_t bytes) { return ProduceCost(WordSpan(bytes)) + NormalizeCost(bytes); }
 constexpr uint64_t CopyCost(size_t bytes) { return ProduceCost(bytes); }
-constexpr uint64_t ReleaseCost(size_t) { return 0; }
-#else
-inline constexpr bool PRODUCER_LIFETIME_EXPERIMENT{false};
-constexpr uint64_t OutputCost(size_t bytes) { return 1209 + 4 * WordSpan(bytes); }
-constexpr uint64_t CopyCost(size_t bytes) { return 668 + 2 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t ReleaseCost(size_t bytes) { return bytes == 0 ? 0 : 963 + 3 * WordSpan(bytes); }
-#endif
-constexpr uint64_t ReadCost(size_t bytes) { return 89 + 3 * WordSpan(bytes); }
-constexpr uint64_t ArithCost(size_t bytes) { return 51 + 4 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t BitCost(size_t bytes) { return 74 + static_cast<uint64_t>(bytes); }
-constexpr uint64_t MoveCost(size_t entries) { return 255 + 18 * static_cast<uint64_t>(entries); }
-constexpr uint64_t MulRowCost(size_t limbs) { return 34 + 14 * static_cast<uint64_t>(limbs); }
+constexpr uint64_t ReadCost(size_t bytes) { return 200 + 4 * WordSpan(bytes); }
+// ARITH: word passes with a carry or borrow chain; BIT: word passes without one.
+constexpr uint64_t ArithCost(size_t bytes) { return 300 + 5 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t BitCost(size_t bytes) { return 100 + 2 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t MoveCost(size_t entries) { return 300 + 25 * static_cast<uint64_t>(entries); }
+/** Complete prepared OP_MUL: schoolbook rows over the longer operand's limbs, each
+ *  multiplying the shorter operand's limbs, including internal scratch storage. */
+constexpr uint64_t MulCost(uint64_t rows, uint64_t row_limbs)
+{
+    return 1450 + 41 * rows + 42 * rows * row_limbs;
+}
 constexpr uint64_t DivCoreCost(size_t steps, size_t divisor_limbs)
 {
-    return 1574 + 267 * static_cast<uint64_t>(steps) * divisor_limbs;
+    return 11050 + 580 * static_cast<uint64_t>(steps) + 255 * static_cast<uint64_t>(steps) * divisor_limbs;
 }
-constexpr uint64_t Sha256Cost(size_t bytes) { return 2943 + 48 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t Ripemd160Cost(size_t bytes) { return 2555 + 40 * static_cast<uint64_t>(bytes); }
-constexpr uint64_t Sha1Cost(size_t bytes) { return 1516 + 25 * static_cast<uint64_t>(bytes); }
+/** DIVCORE quotient rows for limb counts of the operands without trailing zero bytes. */
+constexpr uint64_t DivSteps(uint64_t dividend_limbs, uint64_t divisor_limbs)
+{
+    // One row per quotient limb, plus one for a dividend limb added by divisor normalization.
+    // A shorter dividend still takes one row to compare the operands.
+    return dividend_limbs + 2 > divisor_limbs ? dividend_limbs + 2 - divisor_limbs : 1;
+}
+/** Bytes processed by a hash with 64-byte blocks (SHA1, SHA256, RIPEMD160): the
+ *  message plus at least 9 bytes of padding and length, rounded up to whole blocks. */
+constexpr uint64_t HashBlockSpan(size_t bytes) { return (static_cast<uint64_t>(bytes) + 72) / 64 * 64; }
+constexpr uint64_t Sha256Cost(size_t bytes) { return 450 + 57 * HashBlockSpan(bytes); }
+constexpr uint64_t Ripemd160Cost(size_t bytes) { return 200 + 44 * HashBlockSpan(bytes); }
+constexpr uint64_t Sha1Cost(size_t bytes) { return 200 + 28 * HashBlockSpan(bytes); }
 constexpr uint64_t SignatureCost() { return 500'000; }
-constexpr uint64_t TweakCost() { return 140839; }
-constexpr uint64_t TxSelectCost(size_t items) { return 3234 + 645 * static_cast<uint64_t>(items); }
-constexpr uint64_t MacroDecodeCost(size_t bytes) { return 2 + 55 * static_cast<uint64_t>(bytes); }
+constexpr uint64_t TweakCost() { return 168200; }
+// Interim OP_BYTEREV price from the measured byte-wise reversal (covenant opcode BIP).
+constexpr uint64_t ByteReverseCost(size_t bytes) { return 150 + 7 * static_cast<uint64_t>(bytes); }
+// OP_TX draft: selector decoding plus locating and encoding k selected values
+// or aggregate-scanned records. Provisional pending calibration.
+constexpr uint64_t TxSelectCost(size_t items) { return 3250 + 645 * static_cast<uint64_t>(items); }
+// Reusable macros draft: unrolling charge per substituted instruction and per
+// visited reference. Provisional pending calibration.
+constexpr uint64_t MacroUnrollCost() { return FixedOpcodeCost(); }
 constexpr uint64_t ScalarOutputCost() { return OutputCost(8); }
 
-// The quadratic charge dominates. Both numeric operands are at most 4 MB.
+// Charges are computed in uint64_t. Each opcode sums a bounded number of the
+// terms below, so bounding the superlinear ones shows no charge can wrap.
+// Both numeric operands are at most 4 MB, so DivSteps is at most MAX_V2_LIMBS + 2.
 constexpr uint64_t MAX_V2_LIMBS{WordSpan(MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE) / 8};
-static_assert(MAX_V2_LIMBS <=
+static_assert(MAX_V2_LIMBS + 2 <=
               (std::numeric_limits<uint64_t>::max() - DivCoreCost(0, 0)) /
-                  (DivCoreCost(1, 1) - DivCoreCost(0, 0)) / MAX_V2_LIMBS);
+                  (DivCoreCost(1, MAX_V2_LIMBS) - DivCoreCost(0, 0)),
+              "maximum OP_DIV and OP_MOD charge must fit in uint64_t");
+// OP_MUL: MUL plus production of the full product span, both operands maximal.
+constexpr uint64_t MAX_MUL_STORAGE_CHARGE{CopyCost(2 * MAX_V2_LIMBS * 8)};
+static_assert(MAX_V2_LIMBS <= (std::numeric_limits<uint64_t>::max() - MulCost(0, 0) - MAX_MUL_STORAGE_CHARGE) /
+                                  (MulCost(1, MAX_V2_LIMBS) - MulCost(0, 0)),
+              "maximum OP_MUL charge must fit in uint64_t");
 
 /** Hash work only; result construction is charged separately. */
 constexpr uint64_t HashCost(opcodetype opcode, size_t input_bytes)
@@ -185,22 +207,6 @@ public:
     ScopedCostAudit& operator=(const ScopedCostAudit&) = delete;
 };
 
-// Varops cost categories per byte:
-// Fast operations: comparing bytes, comparing bytes against zero, and zeroing bytes
-static constexpr uint64_t COST_FAST = 2;
-// Copying bytes: slightly more expensive than fast operations due to memory allocation overhead
-static constexpr uint64_t COST_COPYING = 3;
-// Everything else
-static constexpr uint64_t COST_OTHER = 4;
-// Arithmetic operations (add/subtract inner loop)
-static constexpr uint64_t COST_ARITH = 6;
-// Multiplication quadratic term: inner loop cost with overhead multiplier
-static constexpr uint64_t COST_MUL_QUAD = 27;
-// OP_ROLL: per stack element moved (24 bytes per std::vector * COST_FAST)
-static constexpr uint64_t COST_ROLL = 48;
-// All hash operations
-static constexpr uint64_t COST_HASH = 50;
-
 // A per-transaction budget is determined by multiplying the
 // total transaction weight by the fixed factor 10,000.
 static constexpr uint64_t BUDGET_PER_WEIGHT_UNIT = 10'000;
@@ -218,166 +224,6 @@ static_assert(COST_PER_SIGOP == BUDGET_PER_WEIGHT_UNIT * VALIDATION_WEIGHT_PER_S
 constexpr uint64_t SigcheckCost(opcodetype)
 {
     return COST_PER_SIGOP;
-}
-
-namespace detail {
-
-constexpr uint64_t ToCostSize(size_t size)
-{
-    return static_cast<uint64_t>(size);
-}
-
-constexpr uint64_t WordSize(size_t size)
-{
-    return WordSpan(size);
-}
-
-constexpr uint64_t MaxWordSize(size_t size1, size_t size2)
-{
-    return std::max(WordSize(size1), WordSize(size2));
-}
-
-constexpr uint64_t MinWordSize(size_t size1, size_t size2)
-{
-    return std::min(WordSize(size1), WordSize(size2));
-}
-
-// BIP 441 costs are maximal when every operand has the maximum permitted size.
-constexpr uint64_t MAX_COST_SIZE{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE};
-constexpr uint64_t MAX_U64{std::numeric_limits<uint64_t>::max()};
-constexpr uint64_t MAX_COST_WORD_SIZE{WordSize(MAX_COST_SIZE)};
-constexpr uint64_t MAX_MUL_COPY_COST{2 * MAX_COST_SIZE * COST_COPYING};
-constexpr uint64_t MAX_DIV_SQUARE{MAX_COST_WORD_SIZE * MAX_COST_WORD_SIZE};
-constexpr uint64_t MAX_DIV_QUADRATIC{MAX_DIV_SQUARE * 2 / 3};
-
-// These bounds prove that every intermediate in the maximum-size BIP 441 cost
-// expressions fits in uint64_t, not merely each final result.
-static_assert(MAX_COST_SIZE <= MAX_U64 - 7);
-static_assert(MAX_COST_SIZE <= MAX_U64 / (2 * COST_COPYING));
-static_assert(MAX_COST_WORD_SIZE / 8 <=
-                  (MAX_U64 - MAX_MUL_COPY_COST) / COST_MUL_QUAD / MAX_COST_WORD_SIZE,
-              "maximum OP_MUL cost must fit in uint64_t");
-static_assert(MAX_COST_WORD_SIZE <= MAX_U64 / MAX_COST_WORD_SIZE);
-static_assert(MAX_DIV_SQUARE <= MAX_U64 / 2);
-static_assert(MAX_COST_WORD_SIZE <=
-                  (MAX_U64 - MAX_DIV_QUADRATIC) / (3 * COST_ARITH + COST_OTHER),
-              "maximum OP_DIV and OP_MOD cost must fit in uint64_t");
-
-} // namespace detail
-
-/** Pure cost calculations taking operand sizes in bytes. */
-constexpr uint64_t LengthConversionCost(size_t size)
-{
-    return detail::WordSize(size) * COST_FAST;
-}
-
-constexpr uint64_t CompareZeroCost(size_t size)
-{
-    return detail::WordSize(size) * COST_FAST;
-}
-
-constexpr uint64_t ComparisonCost(size_t size1, size_t size2)
-{
-    return detail::MaxWordSize(size1, size2) * COST_FAST;
-}
-
-constexpr uint64_t AddCost(size_t size1, size_t size2)
-{
-    return detail::MaxWordSize(size1, size2) * (COST_ARITH + COST_COPYING);
-}
-
-constexpr uint64_t SubCost(size_t size1, size_t size2)
-{
-    return detail::MaxWordSize(size1, size2) * COST_ARITH;
-}
-
-constexpr uint64_t MulCost(size_t size1, size_t size2)
-{
-    const uint64_t copy_cost{(detail::ToCostSize(size1) + detail::ToCostSize(size2)) * COST_COPYING};
-    const uint64_t quadratic_cost{detail::WordSize(size1) / 8 * detail::WordSize(size2) * COST_MUL_QUAD};
-    return copy_cost + quadratic_cost;
-}
-
-constexpr uint64_t DivCost(size_t size1, size_t size2)
-{
-    const uint64_t s1{detail::WordSize(size1)};
-    const uint64_t s2{detail::WordSize(size2)};
-    const uint64_t linear_cost{s1 * (3 * COST_ARITH) + s2 * COST_OTHER};
-    const uint64_t quadratic_cost{s1 * s1 * 2 / 3};
-    return linear_cost + quadratic_cost;
-}
-
-constexpr uint64_t ModCost(size_t size1, size_t size2)
-{
-    // OP_MOD uses the same division algorithm and cost model as OP_DIV.
-    return DivCost(size1, size2);
-}
-
-constexpr uint64_t BoolAndCost(size_t size1, size_t size2)
-{
-    return (detail::WordSize(size1) + detail::WordSize(size2)) * COST_FAST; // COMPARINGZERO both operands
-}
-
-constexpr uint64_t BoolOrCost(size_t size1, size_t size2)
-{
-    return (detail::WordSize(size1) + detail::WordSize(size2)) * COST_FAST; // COMPARINGZERO both operands
-}
-
-constexpr uint64_t WithinCost(size_t size1, size_t size2, size_t size3)
-{
-    // Two comparisons: v1 vs v2, v1 vs v3
-    return detail::MaxWordSize(size1, size2) * COST_FAST + detail::MaxWordSize(size1, size3) * COST_FAST;
-}
-
-constexpr uint64_t InvertCost(size_t size)
-{
-    return detail::WordSize(size) * COST_OTHER;
-}
-
-constexpr uint64_t ByteReverseCost(size_t size)
-{
-    return detail::WordSize(size) * COST_OTHER;
-}
-
-constexpr uint64_t AndCost(size_t size1, size_t size2)
-{
-    // min * COST_OTHER + (max - min) * COST_FAST simplifies to this expression.
-    return (detail::WordSize(size1) + detail::WordSize(size2)) * COST_FAST;
-}
-
-constexpr uint64_t OrCost(size_t size1, size_t size2)
-{
-    return detail::MinWordSize(size1, size2) * COST_OTHER;
-}
-
-constexpr uint64_t XorCost(size_t size1, size_t size2)
-{
-    return detail::MinWordSize(size1, size2) * COST_OTHER;
-}
-
-constexpr uint64_t MinMaxCost(size_t size1, size_t size2)
-{
-    return detail::MaxWordSize(size1, size2) * COST_OTHER;
-}
-
-constexpr uint64_t TwoMulCost(size_t size)
-{
-    return detail::WordSize(size) * (COST_COPYING + COST_OTHER);
-}
-
-constexpr uint64_t TwoDivCost(size_t size)
-{
-    return detail::WordSize(size) * COST_OTHER;
-}
-
-constexpr uint64_t UnalignedUpShiftCost(size_t size, size_t prepended_bytes)
-{
-    return detail::WordSize(detail::ToCostSize(size) + detail::ToCostSize(prepended_bytes)) * COST_OTHER;
-}
-
-constexpr uint64_t ChecksigAddIncrementCost(size_t number_size)
-{
-    return std::max(detail::WordSize(1), detail::WordSize(number_size)) * (COST_ARITH + COST_COPYING);
 }
 
 } // namespace varops

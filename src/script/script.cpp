@@ -150,7 +150,7 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
-    // Opcodes proposed by the covenant-support-opcodes draft
+    // Opcodes proposed by the reusable macros draft
     case OP_MACRO: return "OP_MACRO";
     case OP_CALLMACRO: return "OP_CALLMACRO";
 

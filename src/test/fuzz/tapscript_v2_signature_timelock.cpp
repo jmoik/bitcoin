@@ -9,6 +9,7 @@
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <script/signingprovider.h>
+#include <script/varops.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/tapscript_v2_fuzz_util.h>
@@ -44,8 +45,15 @@ void CheckSignatureOpcode(FuzzedDataProvider& provider)
 
     const Bytes number{checksigadd ? ConsumeElement(provider) : Bytes{}};
     const Stack initial{checksigadd ? Stack{signature, number, pubkey} : Stack{signature, pubkey}};
-    const uint64_t cost{(nonempty_sig ? COST_PER_SIGOP : COST_PER_OPCODE) +
-                        (checksigadd ? ChecksigAddCost(number.size()) : 0)};
+    // CHECKSIG(VERIFY) charges everything before verifying. CHECKSIGADD prepares the
+    // number and, for a nonempty signature, pays the increment before verifying,
+    // then produces the resulting number afterwards.
+    const Bytes added{checksigadd ? (nonempty_sig ? Increment(number) : Normalize(number)) : Bytes{}};
+    const uint64_t pre_cost{InitialStackCost(initial) + F() + SignatureCheckCost(nonempty_sig) +
+                            (checksigadd ? varops::PrepCost(number.size()) +
+                                               (nonempty_sig ? varops::ArithCost(W(number.size())) : 0)
+                                         : ScalarCost())};
+    const uint64_t cost{pre_cost + (checksigadd ? varops::OutputCost(added.size()) : 0)};
     const bool xonly{pubkey.size() == 32};
     const bool upgradable{!pubkey.empty() && !xonly};
 
@@ -66,23 +74,24 @@ void CheckSignatureOpcode(FuzzedDataProvider& provider)
         } else if (opcode == OP_CHECKSIGVERIFY) {
             Assert(exact.stack.empty());
         } else {
-            AssertStackEqual(exact.stack, {nonempty_sig ? Increment(number) : Normalize(number)});
+            AssertStackEqual(exact.stack, {added});
         }
     }
-    Assert(exact.remaining_budget == 0);
+    // A failed check never reaches CHECKSIGADD's output charge.
+    Assert(exact.remaining_budget == (exact.ok ? 0 : cost - pre_cost));
     Assert(checker.schnorr_calls == (xonly && nonempty_sig ? 1 : 0));
     if (checker.schnorr_calls == 1) {
         Assert(checker.last_sigversion == SigVersion::TAPSCRIPT_V2);
         Assert(checker.last_codeseparator_pos == 0xFFFFFFFFUL);
     }
 
-    if (cost > 0) {
+    {
+        // One varop short of the pre-verification charges: no verification happens.
         RecordingChecker low_checker;
         const EvalOutcome low{
-            EvalTapscriptV2WithFlagsAndChecker(OneOp(opcode), initial, SCRIPT_VERIFY_NONE, low_checker, cost - 1)};
+            EvalTapscriptV2WithFlagsAndChecker(OneOp(opcode), initial, SCRIPT_VERIFY_NONE, low_checker, pre_cost - 1)};
         Assert(!low.ok);
         Assert(low.error == SCRIPT_ERR_VAROP_COUNT);
-        Assert(low.remaining_budget == cost - 1);
         Assert(low_checker.schnorr_calls == 0);
     }
 
@@ -92,7 +101,7 @@ void CheckSignatureOpcode(FuzzedDataProvider& provider)
             OneOp(opcode), initial, SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE, discouraged_checker, cost)};
         Assert(!discouraged.ok);
         Assert(discouraged.error == SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
-        Assert(discouraged.remaining_budget == 0);
+        Assert(discouraged.remaining_budget == cost - pre_cost);
         Assert(discouraged_checker.schnorr_calls == 0);
     }
 }
@@ -104,9 +113,12 @@ void CheckCodeseparator(FuzzedDataProvider& provider)
     uint32_t position{0};
     uint32_t expected{0xFFFFFFFFUL};
     uint64_t fixed_cost{0};
+    // OP_0 is an empty literal and OP_1 a scalar; every other executed opcode here pays only F.
     const auto append = [&](opcodetype op, bool executed = true) {
         script << op;
-        if (executed) fixed_cost += COST_PER_OPCODE;
+        if (executed) {
+            fixed_cost += op == OP_0 ? CopyingCost({0}) : op == OP_1 ? F() + ScalarCost() : F();
+        }
         return position++;
     };
 
@@ -133,7 +145,8 @@ void CheckCodeseparator(FuzzedDataProvider& provider)
 
     const Stack stack{Bytes(64, 0x01), Bytes(32, 0x02)};
     RecordingChecker checker;
-    const uint64_t exact_cost{fixed_cost + COST_PER_SIGOP};
+    const uint64_t signature_cost{F() + SignatureCheckCost(true) + ScalarCost()};
+    const uint64_t exact_cost{InitialStackCost(stack) + fixed_cost + signature_cost};
     const EvalOutcome exact{
         EvalTapscriptV2WithFlagsAndChecker(script, stack, SCRIPT_VERIFY_NONE, checker, exact_cost)};
     Assert(exact.ok);
@@ -166,7 +179,8 @@ void CheckRepeatedSigops(FuzzedDataProvider& provider)
     }
 
     RecordingChecker checker;
-    const uint64_t exact_cost{static_cast<uint64_t>(checks) * COST_PER_SIGOP};
+    const uint64_t per_check{F() + SignatureCheckCost(true) + ScalarCost()};
+    const uint64_t exact_cost{InitialStackCost(stack) + checks * per_check};
     const EvalOutcome exact{EvalTapscriptV2WithFlagsAndChecker(script, stack, SCRIPT_VERIFY_NONE, checker, exact_cost)};
     Assert(exact.ok);
     AssertStackEqual(exact.stack, {Bytes{1}});
@@ -174,12 +188,13 @@ void CheckRepeatedSigops(FuzzedDataProvider& provider)
 
     const uint8_t completed{provider.ConsumeIntegralInRange<uint8_t>(0, checks - 1)};
     RecordingChecker low_checker;
-    const uint64_t low_budget{static_cast<uint64_t>(completed) * COST_PER_SIGOP + COST_PER_SIGOP - 1};
+    // The next check's F is spent; its signature charge is one varop short.
+    const uint64_t low_budget{InitialStackCost(stack) + completed * per_check + per_check - 1};
     const EvalOutcome low{
         EvalTapscriptV2WithFlagsAndChecker(script, stack, SCRIPT_VERIFY_NONE, low_checker, low_budget)};
     Assert(!low.ok);
     Assert(low.error == SCRIPT_ERR_VAROP_COUNT);
-    Assert(low.remaining_budget == COST_PER_SIGOP - 1);
+    Assert(low.remaining_budget == per_check - 1 - F());
     Assert(low_checker.schnorr_calls == completed);
 }
 
@@ -207,7 +222,10 @@ void CheckTimelock(FuzzedDataProvider& provider)
     const bool sequence{provider.ConsumeBool()};
     const Bytes operand{ConsumeTimelockOperand(provider)};
     const uint64_t value{ToU64Ceil(operand, UINT64_C(0x100000000))};
-    const uint64_t cost{LengthCost(operand.size())};
+    // The operand is prepared and scanned before the range check; the pushed-back
+    // value is produced before the transaction is consulted.
+    const uint64_t pre_cost{InitialStackCost({operand}) + F() + ScanCost(operand.size())};
+    const uint64_t cost{pre_cost + varops::OutputCost(operand.size())};
     const bool checker_result{provider.ConsumeBool()};
     RecordingChecker checker{checker_result, checker_result};
     const opcodetype opcode{sequence ? OP_CHECKSEQUENCEVERIFY : OP_CHECKLOCKTIMEVERIFY};
@@ -217,7 +235,7 @@ void CheckTimelock(FuzzedDataProvider& provider)
     if (value == UINT64_C(0x100000000)) {
         Assert(!outcome.ok);
         Assert(outcome.error == SCRIPT_ERR_UNSATISFIED_LOCKTIME);
-        Assert(outcome.remaining_budget == cost);
+        Assert(outcome.remaining_budget == cost - pre_cost);
         Assert(checker.locktime_calls == 0 && checker.sequence_calls == 0);
         return;
     }
@@ -227,7 +245,7 @@ void CheckTimelock(FuzzedDataProvider& provider)
         Assert(outcome.ok);
         Assert(outcome.error == SCRIPT_ERR_OK);
         Assert(outcome.remaining_budget == 0);
-        if (cost > 0) {
+        {
             RecordingChecker low_checker;
             const EvalOutcome low{
                 EvalTapscriptV2WithFlagsAndChecker(OneOp(opcode), {operand}, flags, low_checker, cost - 1)};
@@ -237,7 +255,7 @@ void CheckTimelock(FuzzedDataProvider& provider)
     } else {
         Assert(!outcome.ok);
         Assert(outcome.error == SCRIPT_ERR_UNSATISFIED_LOCKTIME);
-        Assert(outcome.remaining_budget == cost);
+        Assert(outcome.remaining_budget == 0);
     }
     Assert(checker.locktime_calls == (sequence ? 0 : 1));
     Assert(checker.sequence_calls == (sequence && !disabled ? 1 : 0));

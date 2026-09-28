@@ -57,6 +57,15 @@ void ValtypeStack::push_back(const valtype& element)
 
 void ValtypeStack::push_back(valtype&& element)
 {
+    // Stack limits count logical bytes. Copy shortened values out of large
+    // buffers so element storage stays within twice the word-rounded length;
+    // every shortening opcode charges production of its result.
+    constexpr size_t WORD_BYTES{sizeof(uint64_t)};
+    const size_t word_span{element.size() + (WORD_BYTES - element.size() % WORD_BYTES) % WORD_BYTES};
+    if (element.capacity() > 2 * word_span) {
+        push_back(std::as_const(element));
+        return;
+    }
     m_stack.push_back(std::move(element));
     TrackAddedElement(m_stack.back());
 }
@@ -100,7 +109,10 @@ void ValtypeStack::erase(size_t n)
 
 void ValtypeStack::reserve(size_t n)
 {
-    m_stack.reserve(n);
+    // Callers reserve one or a few more items so references survive a push.
+    // std::vector::reserve grows to exactly n, which would move the whole
+    // stack on every such push; grow geometrically instead.
+    if (n > m_stack.capacity()) m_stack.reserve(std::max(n, 2 * m_stack.capacity()));
 }
 
 void ValtypeStack::Rotate(int first, int middle)

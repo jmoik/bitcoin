@@ -3,7 +3,6 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <script/val64.h>
-#include <script/varops.h>
 #include <test/data/val64_conversion.json.h>
 #include <test/util/json.h>
 #include <test/util/random.h>
@@ -57,6 +56,7 @@ public:
     Val64Test() = default;
 
     std::span<le64_t> Limbs() const { return Val64::m_limbs; }
+    const unsigned char* Storage() const { return Val64::m_bytes.data(); }
     size_t LimbCount() const { return Val64::m_limbs.size(); }
     uint64_t Get(size_t index) const { return Val64::Get(index); }
     static void SetForceOffsetSpan(bool value) { Val64::m_force_offset_span = value; }
@@ -260,7 +260,6 @@ BOOST_AUTO_TEST_CASE(val64_offset_span_move_constructor_preserves_valtype)
 
 BOOST_AUTO_TEST_CASE(val64_and_or_xor)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -281,7 +280,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
                 {
                     Val64Test v64a(vec_setbit(i));
                     Val64Test v64b(vec_setbit(j));
-                    Val64::OpAnd(v64a, v64b, varcost);
+                    Val64::OpAnd(v64a, v64b);
                     BOOST_CHECK(v64a.MoveToValtype() == expected_and);
                 }
 
@@ -289,7 +288,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
                 {
                     Val64Test v64a(vec_setbit(i));
                     Val64Test v64b(vec_setbit(j));
-                    Val64::OpOr(v64a, v64b, varcost);
+                    Val64::OpOr(v64a, v64b);
                     BOOST_CHECK(v64a.MoveToValtype() == expected_or);
                 }
 
@@ -297,7 +296,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
                 {
                     Val64Test v64a(vec_setbit(i));
                     Val64Test v64b(vec_setbit(j));
-                    Val64::OpXor(v64a, v64b, varcost);
+                    Val64::OpXor(v64a, v64b);
                     BOOST_CHECK(v64a.MoveToValtype() == expected_xor);
                 }
             }
@@ -323,7 +322,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
             {
                 Val64Test v64a(v1);
                 Val64Test v64b(v2);
-                Val64::OpAnd(v64a, v64b, varcost);
+                Val64::OpAnd(v64a, v64b);
                 BOOST_CHECK(v64a.MoveToValtype() == expect_and);
             }
 
@@ -331,7 +330,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
             {
                 Val64Test v64a(v1);
                 Val64Test v64b(v2);
-                Val64::OpOr(v64a, v64b, varcost);
+                Val64::OpOr(v64a, v64b);
                 BOOST_CHECK(v64a.MoveToValtype() == expect_or);
             }
 
@@ -339,7 +338,7 @@ BOOST_AUTO_TEST_CASE(val64_and_or_xor)
             {
                 Val64Test v64a(v1);
                 Val64Test v64b(v2);
-                Val64::OpXor(v64a, v64b, varcost);
+                Val64::OpXor(v64a, v64b);
                 BOOST_CHECK(v64a.MoveToValtype() == expect_xor);
             }
         }
@@ -360,10 +359,8 @@ BOOST_AUTO_TEST_CASE(val64_invert_clears_word_padding)
             }
 
             Val64Test value(input);
-            uint64_t varcost{0};
-            Val64::OpInvert(value, varcost);
+            Val64::OpInvert(value);
 
-            BOOST_CHECK_EQUAL(varcost, varops::InvertCost(width));
             BOOST_CHECK_EQUAL(value.size(), width);
             const Val64 expected_value{std::move(expected)};
             BOOST_CHECK_EQUAL(value.Compare(expected_value), 0);
@@ -380,7 +377,6 @@ BOOST_AUTO_TEST_CASE(val64_invert_clears_word_padding)
 
 BOOST_AUTO_TEST_CASE(val64_add)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -389,7 +385,7 @@ BOOST_AUTO_TEST_CASE(val64_add)
             for (size_t j = 0; j < 128; j++) {
                 Val64Test v64a(vec_setbit(i));
                 Val64Test v64b(vec_setbit(j));
-                Val64::OpAdd(v64a, v64b, varcost);
+                Val64::OpAdd(v64a, v64b);
 
                 // Check against expected vector.
                 std::vector<unsigned char> expected;
@@ -410,7 +406,7 @@ BOOST_AUTO_TEST_CASE(val64_add)
 
             Val64 v64a(std::move(almost));
             Val64 v64b(std::move(one));
-            Val64::OpAdd(v64a, v64b, varcost);
+            Val64::OpAdd(v64a, v64b);
             std::vector<unsigned char> res = v64a.MoveToValtype();
 
             std::vector<unsigned char> expect(i, 0);
@@ -430,7 +426,7 @@ BOOST_AUTO_TEST_CASE(val64_add)
             // Val64 version
             Val64 v64_1(std::move(v1)), v64_2(std::move(v2));
 
-            Val64::OpAdd(v64_1, v64_2, varcost);
+            Val64::OpAdd(v64_1, v64_2);
             std::vector<unsigned char> res = v64_1.MoveToValtype();
 
             BOOST_CHECK(res == expect);
@@ -440,7 +436,6 @@ BOOST_AUTO_TEST_CASE(val64_add)
 
 BOOST_AUTO_TEST_CASE(val64_sub)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -448,7 +443,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
         {
             Val64Test smaller{{0xb2, 0x89}};
             const Val64Test larger{{0x16, 0xaa, 0x73, 0x3d}};
-            BOOST_CHECK(!Val64::OpSub(smaller, larger, varcost));
+            BOOST_CHECK(!Val64::OpSub(smaller, larger));
             BOOST_CHECK_EQUAL(smaller.Get(0) >> 16, 0U);
         }
 
@@ -460,7 +455,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
             Val64Test v64a(vec_setbit(i));
             Val64Test v64zero(zero);
 
-            bool res = Val64::OpSub(v64a, v64zero, varcost);
+            bool res = Val64::OpSub(v64a, v64zero);
             BOOST_CHECK(res);
 
             BOOST_CHECK(v64a.MoveToValtype() == vec_setbit(i));
@@ -473,7 +468,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
             Val64Test v64a(vec_setbit(i));
             Val64Test v64one(one);
 
-            bool res = Val64::OpSub(v64a, v64one, varcost);
+            bool res = Val64::OpSub(v64a, v64one);
             BOOST_CHECK(res);
 
             std::vector<unsigned char> expected;
@@ -501,7 +496,7 @@ BOOST_AUTO_TEST_CASE(val64_sub)
             // Val64 version
             Val64 v64_1(std::move(v1)), v64_2(std::move(v2));
 
-            bool neg = !Val64::OpSub(v64_1, v64_2, varcost);
+            bool neg = !Val64::OpSub(v64_1, v64_2);
             std::vector<unsigned char> res = v64_1.MoveToValtype();
 
             if (expect_neg) {
@@ -516,7 +511,6 @@ BOOST_AUTO_TEST_CASE(val64_sub)
 
 BOOST_AUTO_TEST_CASE(val64_cmp)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -526,7 +520,7 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
                 std::vector<unsigned char> vb = vec_setbit(j);
                 Val64 v64a(std::move(va));
                 Val64 v64b(std::move(vb));
-                int res = v64a.Compare(v64b, varcost);
+                int res = v64a.Compare(v64b);
 
                 int expected;
                 if (i == j)
@@ -560,7 +554,7 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
             // Val64 version
             Val64Test v64_1(v1), v64_2(v2);
 
-            int res = v64_1.Compare(v64_2, varcost);
+            int res = v64_1.Compare(v64_2);
 
             BOOST_CHECK(res == expected);
         }
@@ -569,7 +563,6 @@ BOOST_AUTO_TEST_CASE(val64_cmp)
 
 BOOST_AUTO_TEST_CASE(val64_upshift)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -577,7 +570,7 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
             for (size_t j = 0; j < 128; j++) {
                 std::vector<unsigned char> va = vec_setbit(i);
                 Val64 v64a(std::move(va));
-                bool ok = Val64::OpUpShift(v64a, val64_singleton(j), 1000, varcost);
+                bool ok = Val64::OpUpShift(v64a, val64_singleton(j), 1000);
                 BOOST_CHECK(ok);
                 va = v64a.MoveToValtype();
 
@@ -601,7 +594,7 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
 
             // Val64 version
             Val64 v64(std::move(v1));
-            bool ok = Val64::OpUpShift(v64, val64_singleton(sbits), 5000, varcost);
+            bool ok = Val64::OpUpShift(v64, val64_singleton(sbits), 5000);
             BOOST_CHECK(ok);
             v1 = v64.MoveToValtype();
 
@@ -612,7 +605,6 @@ BOOST_AUTO_TEST_CASE(val64_upshift)
 
 BOOST_AUTO_TEST_CASE(val64_downshift)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -621,7 +613,7 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
                 std::vector<unsigned char> va = vec_setbit(i);
                 BOOST_CHECK(va.size() == (i + 8) / 8);
                 Val64 v64a(std::move(va));
-                Val64::OpDownShift(v64a, val64_singleton(j), varcost);
+                Val64::OpDownShift(v64a, val64_singleton(j));
                 va = v64a.MoveToValtype();
 
                 std::vector<unsigned char> expected;
@@ -648,7 +640,7 @@ BOOST_AUTO_TEST_CASE(val64_downshift)
 
             // Val64 version
             Val64 v64(std::move(v1));
-            Val64::OpDownShift(v64, val64_singleton(sbits), varcost);
+            Val64::OpDownShift(v64, val64_singleton(sbits));
             v1 = v64.MoveToValtype();
 
             BOOST_CHECK(v1 == expect);
@@ -855,7 +847,6 @@ BOOST_AUTO_TEST_CASE(val64_mul)
 
 BOOST_AUTO_TEST_CASE(val64_2mul)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -871,7 +862,7 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
                 va.insert(va.end(), j, 0);
 
                 Val64 v64a(std::move(va));
-                Val64::Op2Mul(v64a, varcost);
+                Val64::Op2Mul(v64a);
                 va = v64a.MoveToValtype();
 
                 std::vector<unsigned char> expected;
@@ -891,7 +882,7 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
 
             // Val64 version
             Val64 v64(std::move(v1));
-            Val64::Op2Mul(v64, varcost);
+            Val64::Op2Mul(v64);
             v1 = v64.MoveToValtype();
 
             BOOST_CHECK(v1 == expect);
@@ -901,7 +892,6 @@ BOOST_AUTO_TEST_CASE(val64_2mul)
 
 BOOST_AUTO_TEST_CASE(val64_2div)
 {
-    uint64_t varcost = 0;
     for (bool offset_span: {false, true}) {
         Val64Test::SetForceOffsetSpan(offset_span);
 
@@ -909,11 +899,9 @@ BOOST_AUTO_TEST_CASE(val64_2div)
             constexpr size_t padded_size{64 * 1024};
             std::vector<unsigned char> padded_one(padded_size, 0);
             padded_one.front() = 1;
-            uint64_t padded_cost{0};
             Val64 padded_value(std::move(padded_one));
-            Val64::Op2Div(padded_value, padded_cost);
+            Val64::Op2Div(padded_value);
             BOOST_CHECK(padded_value.MoveToValtype().empty());
-            BOOST_CHECK_EQUAL(padded_cost, varops::TwoDivCost(padded_size));
         }
 
         for (size_t i = 0; i < 129; i++) {
@@ -928,7 +916,7 @@ BOOST_AUTO_TEST_CASE(val64_2div)
                 va.insert(va.end(), j, 0);
 
                 Val64 v64a(std::move(va));
-                Val64::Op2Div(v64a, varcost);
+                Val64::Op2Div(v64a);
                 va = v64a.MoveToValtype();
 
                 std::vector<unsigned char> expected;
@@ -947,7 +935,7 @@ BOOST_AUTO_TEST_CASE(val64_2div)
 
             // Val64 version
             Val64 v64(std::move(v1));
-            Val64::Op2Div(v64, varcost);
+            Val64::Op2Div(v64);
             v1 = v64.MoveToValtype();
 
             BOOST_CHECK(v1 == expect);
@@ -1113,6 +1101,46 @@ BOOST_AUTO_TEST_CASE(val64_div_mod_normalizes_clear_top_bit_divisor)
 
                         Val64Test remainder{dividend}, remainder_divisor{divisor};
                         BOOST_REQUIRE(Val64Test::OpMod(remainder, remainder_divisor));
+                        BOOST_CHECK(remainder.MoveToValtype() == cpp_int_to_vector(a % b));
+                    }
+                }
+            }
+        }
+    }
+
+    Val64Test::SetForcePortableMath(false);
+    Val64Test::SetForceOffsetSpan(false);
+}
+
+BOOST_AUTO_TEST_CASE(val64_div_mod_normalization_carry_keeps_storage)
+{
+    // Normalizing these divisors carries bits out of the dividend's top limb.
+    // The division must not grow the dividend: stack elements have no spare
+    // capacity, so growing would reallocate in every such division.
+    for (bool portable_math : {false, true}) {
+        Val64Test::SetForcePortableMath(portable_math);
+        for (bool offset_span : {false, true}) {
+            Val64Test::SetForceOffsetSpan(offset_span);
+            for (size_t dividend_words : {2U, 3U, 8U, 16U, 17U, 65U}) {
+                for (size_t divisor_words : {size_t{1}, size_t{2}, dividend_words - 1, dividend_words}) {
+                    for (unsigned char top : {0x40, 0x01}) {
+                        std::vector<unsigned char> dividend(dividend_words * 8, 0xff);
+                        dividend[3] = 0x5a;
+                        std::vector<unsigned char> divisor(divisor_words * 8, 0x9c);
+                        divisor.back() = top;
+                        const cpp_int a{vector_to_cpp_int(dividend)};
+                        const cpp_int b{vector_to_cpp_int(divisor)};
+
+                        Val64Test quotient{dividend}, quotient_divisor{divisor};
+                        const unsigned char* const quotient_storage{quotient.Storage()};
+                        BOOST_REQUIRE(Val64Test::OpDiv(quotient, quotient_divisor));
+                        BOOST_CHECK(quotient.Storage() == quotient_storage);
+                        BOOST_CHECK(quotient.MoveToValtype() == cpp_int_to_vector(a / b));
+
+                        Val64Test remainder{dividend}, remainder_divisor{divisor};
+                        const unsigned char* const remainder_storage{remainder.Storage()};
+                        BOOST_REQUIRE(Val64Test::OpMod(remainder, remainder_divisor));
+                        BOOST_CHECK(remainder.Storage() == remainder_storage);
                         BOOST_CHECK(remainder.MoveToValtype() == cpp_int_to_vector(a % b));
                     }
                 }

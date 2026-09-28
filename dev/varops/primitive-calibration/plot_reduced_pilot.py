@@ -22,7 +22,7 @@ PRIMITIVE_CATEGORIES = [
     ('postponed', 'Postponed experimental extensions', ('SELECT', 'DECODE')),
 ]
 SAMPLED_DIMENSIONS = {
-    'F': 'Executed NOP count',
+    'F': 'Executed F-only instruction count',
     'COPY': 'Copied result bytes; isolated creation fitted, churn retained as a diagnostic',
     'RELEASE': 'Allocated capacity × isolated, churn-result, churn-source or retained 4 MB preallocation',
     'MUL': 'Source limb count; other operand fixed to one limb',
@@ -40,11 +40,12 @@ SAMPLED_DIMENSIONS = {
     'H256': 'Message bytes × Core or tagged hash path',
     'SELECT': 'Empty witness-item count × collated or noncollated output',
     'DIVCORE': 'Dividend/divisor limbs × DIV/MOD × normalization patterns × data seeds',
+    'MULCORE': 'Longer/shorter operand limbs × all-ones or random values',
     'TWEAK': 'One fixed key and tweak',
 }
 CONSTANT = {'F', 'SIG', 'TWEAK', 'FINAL'}
 MODEL_ID = 'producer-normalize-v1'
-PRODUCER_ORDER = 'F PREP PRODUCE NORMALIZE READ ARITH BIT MOVE MUL DIVCORE H256 H160 H1 SIG TWEAK'.split()
+PRODUCER_ORDER = 'F PREP PRODUCE NORMALIZE READ ARITH BIT MOVE MULCORE DIVCORE H256 H160 H1 SIG TWEAK'.split()
 UNDER_PENALTIES = (10, 100)
 COLORS = ['#2563eb', '#d97706', '#15803d', '#9333ea', '#dc2626', '#0891b2', '#64748b', '#be185d']
 NOTES = {
@@ -53,10 +54,11 @@ NOTES = {
     'OUTPUT': 'Shared fit includes materialization/insertion/release and small scalar construction. A shared fit does not establish that these paths have equal fixed work.',
     'COPY': 'Fit uses isolated copied-value creation and insertion, excluding subsequent release. Churn points remain visible only as composition diagnostics for COPY + RELEASE. The empty-copy fast path is shown but excluded. The local candidate uses this follow-up 100× fit; it remains preliminary.',
     'RELEASE': 'Times ValtypeStack removal and buffer destruction. Churn separates release of the copied result and the 4 MB source. Preallocated fixtures include touched buffers shrunk to empty before release: logical size and capacity then differ. Capacity is diagnostic, not a consensus charge input.',
-    'BIT': 'The one-byte reversal performs no swaps and is shown but excluded from this fit.',
+    'BIT': 'Bitwise logic and shifts: word passes without a carry chain. Byte reversal (OP_BYTEREV, covenant opcode BIP) is shown but excluded from this fit; its current byte-wise implementation is priced separately.',
     'MUL': 'Only MultiplySpan rows (u=1) were measured. The u*v extension is the declared model, not a measured complete multiplication or validation of accumulation/storage work.',
-    'DIVCORE': 'Complete prepared DIV/MOD: fixed setup + coefficient × s*v. Storage and normalization are included; do not add overlapping MUL/storage charges. No independent per-step coefficient.',
-    'H256': 'One shared H256 fit covers Core SHA256 and libsecp tagged hashing. Tagged calls use two passes and n+70 bytes. Backend differences remain visible; this compromise is not an upper bound.',
+    'DIVCORE': 'Complete prepared DIV/MOD: fixed setup + coefficient × s + coefficient × s*v. Storage and normalization are included; do not add overlapping MUL/storage charges.',
+    'MULCORE': 'Complete prepared OP_MUL: fixed setup + coefficient × u rows + coefficient × u*v limb products, including result and scratch allocation. Product release and final byte conversion are charged separately.',
+    'H256': 'One shared H256 fit over the padded 64-byte-block span covers Core SHA256 and libsecp tagged hashing. Tagged calls hash the tag and then taghash || taghash || message. Backend differences remain visible; this compromise is not an upper bound.',
     'H160': 'Direct RIPEMD160 domain ends at 520 bytes. Includes the 32-byte HASH160 intermediate input.',
     'H1': 'Direct SHA1 domain ends at 520 bytes.',
     'SIG': 'Plot shows complete signature verification. Fit estimates a nonnegative constant over the fitted H256(64+n) allowance; it does not independently identify curve-only work.',
@@ -83,7 +85,7 @@ def sampling_grid(family, rows, group_rows, epochs):
         scalars = group_rows[family, 'scalar'] // epochs
         assert lengths + scalars == count
         return f'{lengths} + {scalars} = {count}'
-    if family == 'DIVCORE':
+    if family in {'DIVCORE', 'MULCORE'}:
         return f'{count} operation/size/pattern fixtures'
     variants = [n // epochs for (name, _), n in group_rows.items() if name == family]
     if family != 'COPY' and len(variants) > 1 and len(set(variants)) == 1:
@@ -211,16 +213,19 @@ def fit_divcore(points, under_penalty=1):
     return min(candidates)[1]
 
 
-def fit_divcore_reduced(points, under_penalty=1):
-    fixed, cell = fit([dict(p, c=1) for p in points], 'affine', under_penalty)
-    return fixed, 0, cell
+def hash_span(n):
+    """Bytes processed by a 64-byte-block hash: message, at least 9 padding bytes, whole blocks."""
+    return (n + 72)//64*64
 
 
 def features(family, x, group):
-    if family == 'DIVCORE':
+    if family in {'DIVCORE', 'MULCORE'}:
         return x, x*int(group.split('=')[1])
     if family == 'H256' and group == 'secp_tagged':
-        return 2, x+70
+        # Tag hash (6-byte tag), then taghash || taghash || message.
+        return 2, hash_span(6) + hash_span(64 + x)
+    if family in {'H256', 'H160', 'H1'}:
+        return 1, hash_span(x)
     if family in {'PREP', 'OUTPUT', 'NORMALIZE'}:
         return 1, word(x)
     return 1, x
@@ -237,7 +242,8 @@ def parse(row, producer_manifest=None):
         x = int(fixture['normalize_bytes']) if family == 'NORMALIZE' else int(fixture['bytes']) / count
         y /= count
     elif family == 'F':
-        x = int(parts[2])+1; y /= x; group = 'nop'
+        # F/<group>/<n>: n charged instructions plus the final OP_1; skipped NOPs are uncharged.
+        group = parts[1]; x = int(parts[2]) + (group != 'skipped'); y /= x; included = group != 'skipped'
     elif family == 'PREP':
         x, group = int(parts[1]), parts[2]; included = group == 'spare'
     elif family == 'OUTPUT':
@@ -258,7 +264,10 @@ def parse(row, producer_manifest=None):
     elif family == 'MUL':
         x = int(parts[2]); group = 'u=1'
     elif family == 'DIVCORE':
-        aw, bw = int(parts[1]), int(parts[2]); x = aw if bw == 1 else max(1, aw-bw); group = f'v={bw}'
+        aw, bw = int(parts[1]), int(parts[2]); x = max(1, aw - bw + 2); group = f'v={bw}'
+    elif family == 'MULCORE':
+        # MULCORE/<u>/<v>/<pattern>: u rows of v limbs each.
+        x = int(parts[1]); group = f'v={int(parts[2])}'
     elif family == 'H256':
         x = int(parts[2]); group = parts[1]
     elif family == 'SELECT':
@@ -275,8 +284,8 @@ def parse(row, producer_manifest=None):
     if family in {'COPY', 'RELEASE'} and x == 0 and group != 'preallocated':
         group = 'empty'
         included = False
-    if label == 'BIT/reverse/1':
-        included = False
+    if family == 'BIT' and group == 'reverse':
+        included = False  # OP_BYTEREV is priced by its own BIP.
     c, v = features(family, x, group)
     if family == 'NORMALIZE':
         v = word(x)
@@ -292,7 +301,10 @@ def formula(family, coeff):
         return f'u × ({a:.6g} + {b:.6g} × v)'
     if family == 'DIVCORE':
         return f'{a:.6g} + {b:.6g} × s + {coeff[2]:.6g} × s × v'
-    term = 'W(n)' if family in {'PREP', 'OUTPUT', 'NORMALIZE'} else 'k' if family in {'MOVE', 'SELECT'} else 'n'
+    if family == 'MULCORE':
+        return f'{a:.6g} + {b:.6g} × u + {coeff[2]:.6g} × u × v'
+    term = ('W(n)' if family in {'PREP', 'OUTPUT', 'NORMALIZE'} else 'k' if family in {'MOVE', 'SELECT'}
+            else 'hashblockspan(n)' if family in {'H256', 'H160', 'H1'} else 'n')
     return (f'{a:.6g} + ' if a else '') + f'{b:.6g} × {term}'
 
 
@@ -309,7 +321,7 @@ def predict(family, x, group, coeff, fits):
     if family in CONSTANT:
         return a+background(family, x, fits)
     c,v = features(family, x, group)
-    if family == 'DIVCORE':
+    if family in {'DIVCORE', 'MULCORE'}:
         return a+b*c+coeff[2]*v
     return a*c+b*v
 
@@ -317,7 +329,7 @@ def predict(family, x, group, coeff, fits):
 def plot(family, points, models):
     groups = sorted({p['group'] for p in points})
     included = [p for p in points if p['included']]
-    path_specific = family in {'H256', 'DIVCORE'}
+    path_specific = family in {'H256', 'DIVCORE', 'MULCORE'}
     model_groups = sorted({p['group'] for p in included}) if path_specific else [included[0]['group']]
     xmax = max(p['x'] for p in points) or 1
     ys = [p['y'] for p in points]
@@ -366,8 +378,9 @@ def plot(family, points, models):
             excluded = '' if p['included'] else '; excluded from fit'
             out.append(f'<circle cx="{px:.2f}" cy="{py:.2f}" r="3.1" {style}><title>{html.escape(p["label"])}: {p["y"]:.6g} ns; batch {p["batch_ns"]/1000:.3g} µs{excluded}</title></circle>')
     out.append('</g>')
-    axis = 'bytes n' if family not in {'F','MOVE','MUL','DIVCORE','SELECT','TWEAK','RELEASE'} else {
+    axis = 'bytes n' if family not in {'F','MOVE','MUL','MULCORE','DIVCORE','SELECT','TWEAK','RELEASE'} else {
         'F':'executed instructions', 'MOVE':'entries k', 'MUL':'source limbs v (u = 1)', 'DIVCORE':'quotient steps s',
+        'MULCORE':'longer-operand limbs u',
         'SELECT':'selected input + witness items k', 'TWEAK':'fixture',
         'RELEASE':'allocated capacity (bytes) · diagnostic'}[family]
     out.append(f'<text x="425" y="381" text-anchor="middle">{axis} · log(1+x) spacing</text><text x="75" y="24">{"ns / executed instruction" if family == "F" else "ns / measured call"} · logarithmic y</text></g></svg>')
@@ -404,7 +417,7 @@ def main():
         PRIMITIVE_CATEGORIES = [
             ('interpreter', 'Interpreter', ('F',)),
             ('stack', 'Value lifetimes and traversal', ('PRODUCE', 'READ', 'MOVE')),
-            ('numeric', 'Numeric work', ('PREP', 'NORMALIZE', 'ARITH', 'BIT', 'MUL', 'DIVCORE')),
+            ('numeric', 'Numeric work', ('PREP', 'NORMALIZE', 'ARITH', 'BIT', 'MULCORE', 'DIVCORE')),
             ('crypto', 'Hashing and signatures', ('H256', 'H160', 'H1', 'SIG', 'TWEAK')),
         ]
         SAMPLED_DIMENSIONS.update(PRODUCE='Produced bytes per event × lifetime path',
@@ -469,7 +482,7 @@ def main():
             for p in ps:
                 p['background'] = background(family,p['x'],model)
             mode = 'residual' if family in {'SIG','FINAL'} else 'constant' if family in CONSTANT else 'affine'
-            model[family] = (fit_divcore_reduced(ps, under_penalty) if family == 'DIVCORE' else
+            model[family] = (fit_divcore(ps, under_penalty) if family in {'DIVCORE', 'MULCORE'} else
                              fit(ps, mode, under_penalty))
     # Exact synthetic fixtures check the optimizer and declared feature shapes.
     test = [dict(x=x,y=12+.25*x,c=1,v=x,group='test') for x in [0,1,8,64,1024]]
@@ -497,7 +510,7 @@ def main():
     build = {}
     if cache.exists():
         for line in cache.read_text().splitlines():
-            if line.startswith(('CMAKE_BUILD_TYPE:', 'APPEND_CPPFLAGS:', 'GSR_PRODUCER_LIFETIME_EXPERIMENT:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
+            if line.startswith(('CMAKE_BUILD_TYPE:', 'APPEND_CPPFLAGS:', 'GSR_PRIMITIVES_CANDIDATE_SCHEDULE:')):
                 key, value = line.split('=', 1)
                 build[key.split(':', 1)[0]] = value
     reference_seconds = float(headers['Reference_Script_Evaluation_Seconds'])
@@ -579,7 +592,7 @@ def main():
                     under_penalty_100_fit=dict(a_ns=penalized_100_fits[family][0],
                                                b_ns=penalized_100_fits[family][1],
                                                formula_ns=penalized_100_text))
-        if family == 'DIVCORE':
+        if family in {'DIVCORE', 'MULCORE'}:
             result['c_ns'] = coeff[2]
             result['under_penalty_10_fit']['c_ns'] = penalized_fits[family][2]
             result['under_penalty_100_fit']['c_ns'] = penalized_100_fits[family][2]

@@ -24,15 +24,9 @@ namespace test::tapscript_v2::fuzz {
 
 using Bytes = std::vector<unsigned char>;
 
-// These BIP 440 coefficients intentionally do not use production varops
-// helpers, keeping expected costs independent from the code under test.
-inline constexpr uint64_t COST_FAST{2};
-inline constexpr uint64_t COST_COPYING{3};
-inline constexpr uint64_t COST_ARITH{6};
-inline constexpr uint64_t COST_ROLL{48};
-inline constexpr uint64_t COST_PER_OPCODE{1'250};
-inline constexpr uint64_t COST_PER_SIGOP{500'000};
-
+// Expected charges for the opcodes these targets generate. Prices come from
+// varops.h; the composition of primitives per opcode is maintained here,
+// independently of the interpreter.
 inline uint64_t W(size_t size)
 {
     const uint64_t size_u64{size};
@@ -40,12 +34,39 @@ inline uint64_t W(size_t size)
     return (size_u64 + 7) / 8 * 8;
 }
 
-inline uint64_t CopyCost(size_t size) { return static_cast<uint64_t>(size) * COST_COPYING; }
-inline uint64_t CompareZeroCost(size_t size) { return W(size) * COST_FAST; }
-inline uint64_t LengthCost(size_t size) { return W(size) * COST_FAST; }
-inline uint64_t EqualCost(size_t a, size_t b) { return a == b ? static_cast<uint64_t>(a) * COST_FAST : 0; }
-inline uint64_t RollCost(size_t encoded_size, uint64_t depth) { return LengthCost(encoded_size) + depth * COST_ROLL; }
-inline uint64_t ChecksigAddCost(size_t size) { return std::max(W(1), W(size)) * (COST_ARITH + COST_COPYING); }
+inline uint64_t F() { return varops::FixedOpcodeCost(); }
+inline uint64_t ProduceCost(size_t size) { return varops::ProduceCost(size); }
+inline uint64_t ScalarCost() { return varops::ScalarOutputCost(); }
+//! Witness items have no producing opcode, so evaluation prepays their lifetimes.
+inline uint64_t InitialStackCost(const std::vector<Bytes>& stack)
+{
+    uint64_t cost{0};
+    for (const Bytes& item : stack) cost += ProduceCost(item.size());
+    return cost;
+}
+//! A literal push or a copying stack opcode: F plus one production per copy.
+inline uint64_t CopyingCost(std::initializer_list<size_t> copies)
+{
+    uint64_t cost{F()};
+    for (const size_t size : copies) cost += ProduceCost(size);
+    return cost;
+}
+inline uint64_t MovingCost(size_t entries) { return F() + varops::MoveCost(entries); }
+//! Numeric operand conversion and full scan, e.g. of a depth, count or condition.
+inline uint64_t ScanCost(size_t size) { return varops::PrepCost(size) + varops::ReadCost(size); }
+inline uint64_t EqualCost(size_t a, size_t b) { return F() + (a == b ? varops::ReadCost(a) : 0) + ScalarCost(); }
+inline uint64_t ZeroTestCost(size_t size) { return F() + ScanCost(size) + ScalarCost(); }
+inline uint64_t IfdupCost(size_t size, bool duplicated)
+{
+    return F() + ScanCost(size) + varops::OutputCost(size) + (duplicated ? ProduceCost(size) : 0);
+}
+inline uint64_t PickCost(size_t encoded_size, size_t value_size) { return F() + ScanCost(encoded_size) + ProduceCost(value_size); }
+inline uint64_t RollCost(size_t encoded_size, uint64_t depth) { return F() + ScanCost(encoded_size) + varops::MoveCost(depth); }
+inline uint64_t FinalCheckCost(size_t size) { return ScanCost(size); }
+inline uint64_t SignatureCheckCost(bool nonempty)
+{
+    return nonempty ? varops::Sha256Cost(96) + varops::SignatureCost() : 0;
+}
 
 inline bool ContainsNonZero(const Bytes& bytes)
 {

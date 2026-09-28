@@ -128,7 +128,6 @@ cmake_dependent_option(WITH_QRENCODE "Enable QR code support." ON "BUILD_GUI" OF
 cmake_dependent_option(WITH_DBUS "Enable DBus support." ON "NOT CMAKE_SYSTEM_NAME MATCHES \"(Windows|Darwin)\" AND BUILD_GUI" OFF)
 
 option(BUILD_BENCH "Build bench_bitcoin executable." OFF)
-option(GSR_PRODUCER_LIFETIME_EXPERIMENT "Enable the research producer-lifetime varops schedule." OFF)
 option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
 option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all other targets and override BUILD_FUZZ_BINARY." OFF)
 
@@ -159,9 +158,6 @@ check_cxx_features()
 # It is a usage requirement for all targets except for secp256k1, which
 # gets its flags by other means.
 add_library(core_interface INTERFACE)
-if(GSR_PRODUCER_LIFETIME_EXPERIMENT)
-  target_compile_definitions(core_interface INTERFACE GSR_PRODUCER_LIFETIME_EXPERIMENT)
-endif()
 add_library(core_interface_relwithdebinfo INTERFACE)
 add_library(core_interface_debug INTERFACE)
 target_link_libraries(core_interface INTERFACE

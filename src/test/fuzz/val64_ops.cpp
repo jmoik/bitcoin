@@ -31,13 +31,6 @@ constexpr size_t MAX_NORMAL_OPERAND_SIZE{256};
 constexpr size_t MIN_LARGE_OPERAND_SIZE{257};
 constexpr size_t MAX_LARGE_OPERAND_SIZE{4 * 1024};
 
-// BIP 440 cost coefficients. These intentionally do not use the production
-// varops helpers so the fuzz target remains an independent cost oracle.
-constexpr uint64_t COST_FAST{2};
-constexpr uint64_t COST_COPYING{3};
-constexpr uint64_t COST_OTHER{4};
-constexpr uint64_t COST_ARITH{6};
-
 enum class ArithmeticOp : uint8_t {
     ADD,
     SUB,
@@ -81,7 +74,6 @@ public:
 
 struct ActualResult {
     OptionalBytes value;
-    std::optional<uint64_t> cost;
 };
 
 cpp_int FromLittleEndian(const Bytes& bytes)
@@ -108,17 +100,6 @@ uint64_t ToU64Ceil(const Bytes& bytes, uint64_t max)
     const cpp_int value{FromLittleEndian(bytes)};
     if (value > max) return max;
     return value.convert_to<uint64_t>();
-}
-
-uint64_t W(size_t size)
-{
-    const uint64_t bytes{static_cast<uint64_t>(size)};
-    return (bytes + 7) / 8 * 8;
-}
-
-uint64_t LengthConversionCost(size_t size)
-{
-    return W(size) * COST_FAST;
 }
 
 OptionalBytes ReferenceArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& b)
@@ -167,77 +148,47 @@ OptionalBytes ReferenceArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& 
     return std::nullopt;
 }
 
-std::optional<uint64_t> ReferenceArithmeticCost(ArithmeticOp op, size_t a_size, size_t b_size)
-{
-    const uint64_t max_word_size{std::max(W(a_size), W(b_size))};
-
-    switch (op) {
-    case ArithmeticOp::ADD:
-        return max_word_size * (COST_ARITH + COST_COPYING);
-    case ArithmeticOp::SUB:
-        return max_word_size * COST_ARITH;
-    case ArithmeticOp::ONE_ADD:
-        return std::max(W(a_size), W(1)) * (COST_ARITH + COST_COPYING);
-    case ArithmeticOp::ONE_SUB:
-        return std::max(W(a_size), W(1)) * COST_ARITH;
-    case ArithmeticOp::TWO_MUL:
-        return W(a_size) * (COST_COPYING + COST_OTHER);
-    case ArithmeticOp::TWO_DIV:
-        return W(a_size) * COST_OTHER;
-    case ArithmeticOp::MIN:
-    case ArithmeticOp::MAX:
-        return max_word_size * COST_OTHER;
-    case ArithmeticOp::MUL:
-    case ArithmeticOp::DIV:
-    case ArithmeticOp::MOD:
-        return std::nullopt;
-    }
-    Assert(false);
-    return std::nullopt;
-}
-
 ActualResult ExecuteArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& b, bool portable_math)
 {
     const ScopedPortableMath scoped_portable_math{portable_math};
     Val64Fuzz va{a};
     Val64Fuzz vb{b};
-    uint64_t cost{0};
 
     switch (op) {
     case ArithmeticOp::ADD:
-        Val64::OpAdd(va, vb, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::OpAdd(va, vb);
+        return {va.MoveToValtype()};
     case ArithmeticOp::SUB:
-        if (!Val64::OpSub(va, vb, cost)) return {std::nullopt, cost};
-        return {va.MoveToValtype(), cost};
+        if (!Val64::OpSub(va, vb)) return {std::nullopt};
+        return {va.MoveToValtype()};
     case ArithmeticOp::ONE_ADD:
-        Val64::Op1Add(va, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::Op1Add(va);
+        return {va.MoveToValtype()};
     case ArithmeticOp::ONE_SUB:
-        if (!Val64::Op1Sub(va, cost)) return {std::nullopt, cost};
-        return {va.MoveToValtype(), cost};
+        if (!Val64::Op1Sub(va)) return {std::nullopt};
+        return {va.MoveToValtype()};
     case ArithmeticOp::TWO_MUL:
-        Val64::Op2Mul(va, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::Op2Mul(va);
+        return {va.MoveToValtype()};
     case ArithmeticOp::TWO_DIV:
-        Val64::Op2Div(va, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::Op2Div(va);
+        return {va.MoveToValtype()};
     case ArithmeticOp::MIN:
-        Val64::OpMin(va, vb, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::OpMin(va, vb);
+        return {va.MoveToValtype()};
     case ArithmeticOp::MAX:
-        Val64::OpMax(va, vb, cost);
-        return {va.MoveToValtype(), cost};
+        Val64::OpMax(va, vb);
+        return {va.MoveToValtype()};
     case ArithmeticOp::MUL: {
         Val64 result{Val64::OpMul(va, vb)};
-        return {result.MoveToValtype(), std::nullopt};
+        return {result.MoveToValtype()};
     }
     case ArithmeticOp::DIV:
-        if (!Val64::OpDiv(va, vb)) return {std::nullopt, std::nullopt};
-        return {va.MoveToValtype(), std::nullopt};
+        if (!Val64::OpDiv(va, vb)) return {std::nullopt};
+        return {va.MoveToValtype()};
     case ArithmeticOp::MOD:
-        if (!Val64::OpMod(va, vb)) return {std::nullopt, std::nullopt};
-        return {va.MoveToValtype(), std::nullopt};
+        if (!Val64::OpMod(va, vb)) return {std::nullopt};
+        return {va.MoveToValtype()};
     }
     Assert(false);
     return {};
@@ -258,22 +209,19 @@ void CheckArithmeticBackend(ArithmeticOp op,
                             const Bytes& a,
                             const Bytes& b,
                             bool portable_math,
-                            const OptionalBytes& expected,
-                            std::optional<uint64_t> expected_cost)
+                            const OptionalBytes& expected)
 {
     const ActualResult actual{ExecuteArithmetic(op, a, b, portable_math)};
     Assert(actual.value == expected);
-    Assert(actual.cost == expected_cost);
 }
 
 void CheckArithmetic(ArithmeticOp op, const Bytes& a, const Bytes& b)
 {
     const OptionalBytes expected{ReferenceArithmetic(op, a, b)};
-    const std::optional<uint64_t> expected_cost{ReferenceArithmeticCost(op, a.size(), b.size())};
 
-    CheckArithmeticBackend(op, a, b, /*portable_math=*/false, expected, expected_cost);
+    CheckArithmeticBackend(op, a, b, /*portable_math=*/false, expected);
     if (UsesPortableMath(op)) {
-        CheckArithmeticBackend(op, a, b, /*portable_math=*/true, expected, expected_cost);
+        CheckArithmeticBackend(op, a, b, /*portable_math=*/true, expected);
     }
 }
 
@@ -357,78 +305,41 @@ OptionalBytes ReferenceBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Byt
     return std::nullopt;
 }
 
-uint64_t ReferenceBitwiseShiftCost(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
-{
-    switch (op) {
-    case BitwiseShiftOp::INVERT:
-        return W(a.size()) * COST_OTHER;
-    case BitwiseShiftOp::AND:
-        return (W(a.size()) + W(b.size())) * COST_FAST;
-    case BitwiseShiftOp::OR:
-    case BitwiseShiftOp::XOR:
-        return std::min(W(a.size()), W(b.size())) * COST_OTHER;
-    case BitwiseShiftOp::UPSHIFT: {
-        constexpr uint64_t max_bits{uint64_t{MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE} * 8};
-        const uint64_t bits{ToU64Ceil(b, max_bits + 1)};
-        const uint64_t a_bits{static_cast<uint64_t>(a.size()) * 8};
-        uint64_t cost{LengthConversionCost(b.size())};
-        if (bits > max_bits - a_bits) return cost;
-
-        const size_t prebytes{static_cast<size_t>(bits / 8)};
-        cost += prebytes * COST_FAST + a.size() * COST_COPYING;
-        if (bits % 8 != 0) cost += W(a.size() + prebytes) * COST_OTHER;
-        return cost;
-    }
-    case BitwiseShiftOp::DOWNSHIFT: {
-        const uint64_t bits{ToU64Ceil(b, static_cast<uint64_t>(a.size()) * 8)};
-        const size_t bytes{static_cast<size_t>(bits / 8)};
-        uint64_t cost{LengthConversionCost(b.size())};
-        if (bytes < a.size()) cost += (a.size() - bytes) * COST_COPYING;
-        return cost;
-    }
-    }
-    Assert(false);
-    return 0;
-}
-
 ActualResult ExecuteBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
 {
     Val64Fuzz va{a};
     Val64Fuzz vb{b};
-    uint64_t cost{0};
 
     switch (op) {
     case BitwiseShiftOp::INVERT:
-        Val64::OpInvert(va, cost);
+        Val64::OpInvert(va);
         break;
     case BitwiseShiftOp::AND:
-        Val64::OpAnd(va, vb, cost);
+        Val64::OpAnd(va, vb);
         break;
     case BitwiseShiftOp::OR:
-        Val64::OpOr(va, vb, cost);
+        Val64::OpOr(va, vb);
         break;
     case BitwiseShiftOp::XOR:
-        Val64::OpXor(va, vb, cost);
+        Val64::OpXor(va, vb);
         break;
     case BitwiseShiftOp::UPSHIFT:
-        if (!Val64::OpUpShift(va, vb, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE, cost)) {
-            return {std::nullopt, cost};
+        if (!Val64::OpUpShift(va, vb, MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE)) {
+            return {std::nullopt};
         }
         break;
     case BitwiseShiftOp::DOWNSHIFT:
-        Val64::OpDownShift(va, vb, cost);
+        Val64::OpDownShift(va, vb);
         break;
     }
-    return {va.MoveToValtype(), cost};
+    return {va.MoveToValtype()};
 }
 
 void CheckBitwiseShift(BitwiseShiftOp op, const Bytes& a, const Bytes& b)
 {
     const OptionalBytes expected{ReferenceBitwiseShift(op, a, b)};
-    const uint64_t expected_cost{ReferenceBitwiseShiftCost(op, a, b)};
     const ActualResult actual{ExecuteBitwiseShift(op, a, b)};
     Assert(actual.value == expected);
-    Assert(actual.cost == expected_cost);
 }
 
 template <size_t N>
@@ -565,24 +476,16 @@ void CheckPredicates(FuzzedDataProvider& provider, const Bytes& a, const Bytes& 
 
     {
         Val64Fuzz va{a};
-        uint64_t cost{0};
-        Assert(va.ToU64Ceil(max, cost) == expected_ceil);
-        Assert(cost == LengthConversionCost(a.size()));
+        Assert(va.ToU64Ceil(max) == expected_ceil);
     }
     {
         Val64Fuzz va{a};
-        uint64_t cost{0};
         Assert(va.IsZero() == expected_zero);
-        Assert(va.IsZero(cost) == expected_zero);
-        Assert(cost == W(a.size()) * COST_FAST);
     }
     {
         Val64Fuzz va{a};
         Val64Fuzz vb{b};
-        uint64_t cost{0};
         Assert(va.Compare(vb) == expected_cmp);
-        Assert(va.Compare(vb, cost) == expected_cmp);
-        Assert(cost == std::max(W(a.size()), W(b.size())) * COST_FAST);
     }
 }
 } // namespace
@@ -631,5 +534,5 @@ FUZZ_TARGET(val64_large_mul_divmod)
     const Bytes a{ConsumeLargeOperand(provider)};
     const Bytes b{ConsumeLargeOperand(provider)};
     const OptionalBytes expected{ReferenceArithmetic(op, a, b)};
-    CheckArithmeticBackend(op, a, b, provider.ConsumeBool(), expected, std::nullopt);
+    CheckArithmeticBackend(op, a, b, provider.ConsumeBool(), expected);
 }

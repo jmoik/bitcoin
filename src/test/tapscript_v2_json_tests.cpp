@@ -171,7 +171,7 @@ static void RunJsonSuccessTests(const UniValue& tests, const std::string& suite_
                     ScriptExecutionData execdata;
                     ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
                     BaseSignatureChecker checker;
-                    constexpr uint64_t budget{250'000'000};
+                    constexpr uint64_t budget{400'000'000};
                     varops::Budget varops_budget{budget};
                     ValtypeStack stack{initial_stack};
 

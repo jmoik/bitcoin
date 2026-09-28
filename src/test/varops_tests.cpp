@@ -71,23 +71,35 @@ BOOST_AUTO_TEST_CASE(bip440_cost_constants)
     BOOST_CHECK_EQUAL(varops::COST_PER_SIGOP, 500'000);
     BOOST_CHECK_EQUAL(varops::SigcheckCost(OP_CHECKSIG), varops::COST_PER_SIGOP);
     BOOST_CHECK_EQUAL(varops::SignatureCost(), varops::COST_PER_SIGOP);
-    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) {
-        BOOST_CHECK_EQUAL(varops::CopyCost(0), 668);
-        BOOST_CHECK_EQUAL(varops::CopyCost(1), 670);
-    }
-    BOOST_CHECK_EQUAL(varops::ReleaseCost(0), 0);
-    BOOST_CHECK_EQUAL(varops::ReleaseCost(8), varops::PRODUCER_LIFETIME_EXPERIMENT ? 0 : 987);
+    BOOST_CHECK_EQUAL(varops::CopyCost(0), 1600);
+    BOOST_CHECK_EQUAL(varops::CopyCost(1), 1607);
 }
 
 BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
 {
-    BOOST_CHECK_EQUAL(varops::FixedOpcodeCost(), 382);
+    BOOST_CHECK_EQUAL(varops::FixedOpcodeCost(), 350);
     BOOST_CHECK_EQUAL(varops::SignatureCost(), varops::COST_PER_SIGOP);
-    BOOST_CHECK_EQUAL(varops::Sha256Cost(1) - varops::Sha256Cost(0), 48);
-    BOOST_CHECK_EQUAL(varops::PrepCost(9), 249);
-    BOOST_CHECK_EQUAL(varops::HashCost(OP_SHA256, 32), 4479);
+    BOOST_CHECK_EQUAL(varops::HashBlockSpan(0), 64);
+    BOOST_CHECK_EQUAL(varops::HashBlockSpan(55), 64);
+    BOOST_CHECK_EQUAL(varops::HashBlockSpan(56), 128);
+    BOOST_CHECK_EQUAL(varops::HashBlockSpan(520), 576);
+    BOOST_CHECK_EQUAL(varops::Sha256Cost(55), varops::Sha256Cost(0));
+    BOOST_CHECK_EQUAL(varops::Sha256Cost(56) - varops::Sha256Cost(55), 57 * 64);
+    BOOST_CHECK_EQUAL(varops::PrepCost(9), 316);
+    BOOST_CHECK_EQUAL(varops::HashCost(OP_SHA256, 32), 4098);
+    BOOST_CHECK_EQUAL(varops::ReadCost(9), 264);
+    BOOST_CHECK_EQUAL(varops::ArithCost(8), 340);
+    BOOST_CHECK_EQUAL(varops::BitCost(8), 116);
+    BOOST_CHECK_EQUAL(varops::ByteReverseCost(8), 206);
+    BOOST_CHECK_EQUAL(varops::MoveCost(2), 350);
+    BOOST_CHECK_EQUAL(varops::MulCost(2, 3), 1784);
+    BOOST_CHECK_EQUAL(varops::Ripemd160Cost(32), 3016);
+    BOOST_CHECK_EQUAL(varops::Sha1Cost(32), 1992);
+    BOOST_CHECK_EQUAL(varops::TweakCost(), 168200);
+    BOOST_CHECK_EQUAL(varops::ProduceCost(8), 1656);
+    BOOST_CHECK_EQUAL(varops::NormalizeCost(8), 366);
+    BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), 2022);
     BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), varops::OutputCost(8));
-    if constexpr (!varops::PRODUCER_LIFETIME_EXPERIMENT) BOOST_CHECK_EQUAL(varops::ScalarOutputCost(), 1241);
 
     // Spending more than once deducts only newly added whole-varop costs.
     varops::Meter meter;
@@ -104,17 +116,19 @@ BOOST_AUTO_TEST_CASE(compositional_integer_accounting)
     BOOST_CHECK_EQUAL(*budget.Remaining(), 0);
 }
 
-BOOST_AUTO_TEST_CASE(divcore_fixed_and_cell_cost)
+BOOST_AUTO_TEST_CASE(divcore_fixed_step_and_cell_cost)
 {
     const uint64_t fixed{varops::DivCoreCost(0, 0)};
-    const uint64_t cell{varops::DivCoreCost(1, 1) - fixed};
-    BOOST_CHECK_EQUAL(fixed, 1574);
-    BOOST_CHECK_EQUAL(cell, 267);
-    // Only a fixed setup term and a steps*divisor-limbs term remain.
+    const uint64_t step{varops::DivCoreCost(1, 0) - fixed};
+    const uint64_t cell{varops::DivCoreCost(1, 1) - fixed - step};
+    BOOST_CHECK_EQUAL(fixed, 11050);
+    BOOST_CHECK_EQUAL(step, 580);
+    BOOST_CHECK_EQUAL(cell, 255);
+    // A fixed setup term, a per-row term and a rows*divisor-limbs term.
     for (const size_t steps : {1U, 2U, 32U, 1024U}) {
-        BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, 0), fixed);
+        BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, 0), fixed + step * steps);
         for (const size_t limbs : {1U, 2U, 3U, 16U, 1024U}) {
-            BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, limbs), fixed + cell * steps * limbs);
+            BOOST_CHECK_EQUAL(varops::DivCoreCost(steps, limbs), fixed + step * steps + cell * steps * limbs);
         }
     }
     const uint64_t cost{varops::DivCoreCost(32, 1024)};
@@ -124,82 +138,44 @@ BOOST_AUTO_TEST_CASE(divcore_fixed_and_cell_cost)
     varops::Budget short_budget{cost - 1};
     BOOST_CHECK(!short_budget.Spend(cost));
     BOOST_CHECK_EQUAL(*short_budget.Remaining(), cost - 1);
+
+    // Rows cover every quotient limb plus a possible normalization carry limb,
+    // with one comparison row when the dividend is shorter.
+    BOOST_CHECK_EQUAL(varops::DivSteps(0, 0), 2);
+    BOOST_CHECK_EQUAL(varops::DivSteps(5, 0), 7);
+    BOOST_CHECK_EQUAL(varops::DivSteps(0, 1), 1);
+    BOOST_CHECK_EQUAL(varops::DivSteps(1, 2), 1);
+    BOOST_CHECK_EQUAL(varops::DivSteps(1, 9), 1);
+    BOOST_CHECK_EQUAL(varops::DivSteps(1, 1), 2);
+    BOOST_CHECK_EQUAL(varops::DivSteps(9, 1), 10);
+    BOOST_CHECK_EQUAL(varops::DivSteps(9, 8), 3);
+    BOOST_CHECK_EQUAL(varops::DivSteps(9, 9), 2);
 }
 
-static uint64_t ExpectedMulCost(size_t size_a, size_t size_b)
+BOOST_AUTO_TEST_CASE(maximum_superlinear_charges_fit_in_64_bits)
 {
-    const uint64_t a{static_cast<uint64_t>(size_a)};
-    const uint64_t b{static_cast<uint64_t>(size_b)};
-    const uint64_t wa{(a + 7) / 8 * 8};
-    const uint64_t wb{(b + 7) / 8 * 8};
-    return (a + b) * 3 + wa / 8 * wb * 27;
-}
+    BOOST_CHECK_EQUAL(varops::WordSpan(0), 0);
+    BOOST_CHECK_EQUAL(varops::WordSpan(1), 8);
+    BOOST_CHECK_EQUAL(varops::WordSpan(8), 8);
+    BOOST_CHECK_EQUAL(varops::WordSpan(9), 16);
 
-static uint64_t ExpectedDivModCost(size_t size_a, size_t size_b)
-{
-    const uint64_t a{(static_cast<uint64_t>(size_a) + 7) / 8 * 8};
-    const uint64_t b{(static_cast<uint64_t>(size_b) + 7) / 8 * 8};
-    return a * 18 + b * 4 + a * a * 2 / 3;
-}
+    // Recompute the largest OP_MUL and OP_DIV/OP_MOD charges in 128 bits: the
+    // uint64_t charges must equal them, so no intermediate wrapped.
+    using u128 = unsigned __int128;
+    const u128 limbs{varops::MAX_V2_LIMBS};
+    const u128 mul{1450 + 41 * limbs + 42 * limbs * limbs + varops::MAX_MUL_STORAGE_CHARGE};
+    BOOST_CHECK(mul == u128{varops::MulCost(varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS) + varops::MAX_MUL_STORAGE_CHARGE});
+    BOOST_CHECK(mul > std::numeric_limits<uint32_t>::max());
 
-BOOST_AUTO_TEST_CASE(bip441_multiply_and_divide_costs_are_64_bit)
-{
-    static_assert(std::is_same_v<decltype(varops::MulCost(size_t{0}, size_t{0})), uint64_t>);
-
-    BOOST_CHECK_EQUAL(varops::detail::WordSize(0), 0);
-    BOOST_CHECK_EQUAL(varops::detail::WordSize(1), 8);
-    BOOST_CHECK_EQUAL(varops::detail::WordSize(8), 8);
-    BOOST_CHECK_EQUAL(varops::detail::WordSize(9), 16);
-
-    for (const auto& [size_a, size_b] : {
-             std::pair<size_t, size_t>{0, 0},
-             std::pair<size_t, size_t>{1, 1},
-             std::pair<size_t, size_t>{7, 1},
-             std::pair<size_t, size_t>{8, 8},
-             std::pair<size_t, size_t>{9, 9},
-             std::pair<size_t, size_t>{4'000'000, 4'000'000},
-         }) {
-        BOOST_TEST_CONTEXT("sizes " << size_a << ", " << size_b)
-        {
-            BOOST_CHECK_EQUAL(varops::MulCost(size_a, size_b), ExpectedMulCost(size_a, size_b));
-            BOOST_CHECK_EQUAL(varops::DivCost(size_a, size_b), ExpectedDivModCost(size_a, size_b));
-            BOOST_CHECK_EQUAL(varops::ModCost(size_a, size_b), ExpectedDivModCost(size_a, size_b));
-        }
+    const u128 fixed{varops::DivCoreCost(0, 0)};
+    const u128 step{varops::DivCoreCost(1, 0) - varops::DivCoreCost(0, 0)};
+    const u128 cell{varops::DivCoreCost(1, 1) - varops::DivCoreCost(1, 0)};
+    for (const auto& [dividend, divisor] : {std::pair{varops::MAX_V2_LIMBS, uint64_t{1}},
+                                            std::pair{varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS / 2},
+                                            std::pair{varops::MAX_V2_LIMBS, varops::MAX_V2_LIMBS}}) {
+        const uint64_t steps{varops::DivSteps(dividend, divisor)};
+        BOOST_CHECK(fixed + step * steps + cell * steps * divisor == u128{varops::DivCoreCost(steps, divisor)});
     }
-
-    BOOST_CHECK_GT(varops::MulCost(4'000'000, 4'000'000), uint64_t{std::numeric_limits<uint32_t>::max()});
-    BOOST_CHECK_GT(varops::DivCost(4'000'000, 4'000'000), uint64_t{std::numeric_limits<uint32_t>::max()});
-}
-
-BOOST_AUTO_TEST_CASE(bip440_and_bip441_word_granular_cost_helpers)
-{
-    BOOST_CHECK_EQUAL(varops::LengthConversionCost(1), 8 * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::LengthConversionCost(8), 8 * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::LengthConversionCost(9), 16 * varops::COST_FAST);
-
-    BOOST_CHECK_EQUAL(varops::CompareZeroCost(3), 8 * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::ComparisonCost(1, 9), 16 * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::BoolAndCost(1, 9), (8 + 16) * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::BoolOrCost(9, 1), (16 + 8) * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::WithinCost(1, 9, 17), (16 + 24) * varops::COST_FAST);
-
-    BOOST_CHECK_EQUAL(varops::AddCost(1, 9), 16 * (varops::COST_ARITH + varops::COST_COPYING));
-    BOOST_CHECK_EQUAL(varops::SubCost(9, 1), 16 * varops::COST_ARITH);
-    BOOST_CHECK_EQUAL(varops::MinMaxCost(1, 9), 16 * varops::COST_OTHER);
-
-    BOOST_CHECK_EQUAL(varops::InvertCost(9), 16 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::ByteReverseCost(0), 0);
-    BOOST_CHECK_EQUAL(varops::ByteReverseCost(9), 16 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::AndCost(1, 9), (8 + 16) * varops::COST_FAST);
-    BOOST_CHECK_EQUAL(varops::OrCost(1, 9), 8 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::XorCost(9, 1), 8 * varops::COST_OTHER);
-
-    BOOST_CHECK_EQUAL(varops::TwoMulCost(9), 16 * (varops::COST_COPYING + varops::COST_OTHER));
-    BOOST_CHECK_EQUAL(varops::TwoDivCost(9), 16 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::UnalignedUpShiftCost(9, 0), 16 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::UnalignedUpShiftCost(1, 9), 16 * varops::COST_OTHER);
-    BOOST_CHECK_EQUAL(varops::ChecksigAddIncrementCost(0), 8 * (varops::COST_ARITH + varops::COST_COPYING));
-    BOOST_CHECK_EQUAL(varops::ChecksigAddIncrementCost(9), 16 * (varops::COST_ARITH + varops::COST_COPYING));
 }
 
 BOOST_AUTO_TEST_CASE(budget_does_not_overspend)

@@ -79,45 +79,40 @@ public:
     // Byte size of the value.
     size_t size() const { return m_size; }
 
-    // Unmetered helpers; consensus callers must charge separately.
+    // Unmetered, like every Val64 operation; consensus callers charge separately.
     bool IsZero() const;
+    // Return -1 if this < other, 0 if equal, and 1 if this > other.
     int Compare(const Val64& other) const;
 
     // Convert to uint64_t, returning max if the value is larger.
-    uint64_t ToU64Ceil(uint64_t max, uint64_t& varcost) const;
-
-    // Return whether this value is zero.
-    bool IsZero(uint64_t& varcost) const;
-
-    // Return -1 if this < other, 0 if equal, and 1 if this > other.
-    int Compare(const Val64& other, uint64_t& varcost) const;
+    uint64_t ToU64Ceil(uint64_t max) const;
 
     // Explicit opcode names distinguish these consensus-constrained operations
     // from generic arithmetic.
-    static void OpAdd(Val64& v1, Val64& v2, uint64_t& varcost);
-    static void Op1Add(Val64& v1, uint64_t& varcost);
+    static void OpAdd(Val64& v1, Val64& v2);
+    static void Op1Add(Val64& v1);
 
     // Return false and leave v1 unspecified if v1 < v2.
     // Otherwise set v1 to v1 - v2 and return true.
-    static bool OpSub(Val64& v1, const Val64& v2, uint64_t& varcost);
-    static bool Op1Sub(Val64& v1, uint64_t& varcost);
+    static bool OpSub(Val64& v1, const Val64& v2);
+    static bool Op1Sub(Val64& v1);
 
     // Returns false if v1 would exceed max_size.
-    static bool OpUpShift(Val64& v1, const Val64& v2, size_t max_size, uint64_t& varcost);
-    static void OpDownShift(Val64& v1, const Val64& v2, uint64_t& varcost);
+    static bool OpUpShift(Val64& v1, const Val64& v2, size_t max_size);
+    static void OpDownShift(Val64& v1, const Val64& v2);
 
     // Shift by one bit and normalize the result.
-    static void Op2Mul(Val64& v1, uint64_t& varcost);
-    static void Op2Div(Val64& v1, uint64_t& varcost);
+    static void Op2Mul(Val64& v1);
+    static void Op2Div(Val64& v1);
 
-    static void OpInvert(Val64& v1, uint64_t& varcost);
+    static void OpInvert(Val64& v1);
 
-    static void OpAnd(Val64& v1, Val64& v2, uint64_t& varcost);
-    static void OpOr(Val64& v1, Val64& v2, uint64_t& varcost);
-    static void OpXor(Val64& v1, Val64& v2, uint64_t& varcost);
+    static void OpAnd(Val64& v1, Val64& v2);
+    static void OpOr(Val64& v1, Val64& v2);
+    static void OpXor(Val64& v1, Val64& v2);
 
-    static void OpMin(Val64& v1, Val64& v2, uint64_t& varcost);
-    static void OpMax(Val64& v1, Val64& v2, uint64_t& varcost);
+    static void OpMin(Val64& v1, Val64& v2);
+    static void OpMax(Val64& v1, Val64& v2);
 
     // Operands may be swapped for efficiency.
     static Val64 OpMul(Val64& v1, Val64& v2);

@@ -28,7 +28,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
     Stack stack{initial_stack};
     Stack altstack;
     CScript script;
-    uint64_t cost{0};
+    uint64_t cost{InitialStackCost(initial_stack)};
     const size_t steps{provider.ConsumeIntegralInRange<size_t>(1, 64)};
 
     for (size_t step{0}; step < steps && stack.size() + altstack.size() <= 128; ++step) {
@@ -37,25 +37,28 @@ void RunStackProgram(FuzzedDataProvider& provider)
         case 0: {
             const Bytes value{ConsumeElement(provider, 64)};
             script << value;
+            cost += CopyingCost({value.size()});
             stack.push_back(value);
             break;
         }
         case 1:
             if (!stack.empty()) {
                 script << OP_DROP;
+                cost += F();
                 stack.pop_back();
             }
             break;
         case 2:
             if (stack.size() >= 2) {
                 script << OP_2DROP;
+                cost += F();
                 stack.resize(stack.size() - 2);
             }
             break;
         case 3:
             if (!stack.empty()) {
                 script << OP_DUP;
-                cost += CopyCost(stack.back().size());
+                cost += CopyingCost({stack.back().size()});
                 stack.push_back(stack.back());
             }
             break;
@@ -63,7 +66,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
             if (stack.size() >= 2) {
                 script << OP_OVER;
                 const Bytes value{stack[stack.size() - 2]};
-                cost += CopyCost(value.size());
+                cost += CopyingCost({value.size()});
                 stack.push_back(value);
             }
             break;
@@ -72,7 +75,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 script << OP_TUCK;
                 const Bytes a{stack[stack.size() - 2]};
                 const Bytes b{stack.back()};
-                cost += CopyCost(b.size());
+                cost += CopyingCost({b.size()});
                 stack.resize(stack.size() - 2);
                 stack.insert(stack.end(), {b, a, b});
             }
@@ -82,7 +85,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 script << OP_2DUP;
                 const Bytes a{stack[stack.size() - 2]};
                 const Bytes b{stack.back()};
-                cost += CopyCost(a.size()) + CopyCost(b.size());
+                cost += CopyingCost({a.size(), b.size()});
                 stack.insert(stack.end(), {a, b});
             }
             break;
@@ -92,7 +95,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 const Bytes a{stack[stack.size() - 3]};
                 const Bytes b{stack[stack.size() - 2]};
                 const Bytes c{stack.back()};
-                cost += CopyCost(a.size()) + CopyCost(b.size()) + CopyCost(c.size());
+                cost += CopyingCost({a.size(), b.size(), c.size()});
                 stack.insert(stack.end(), {a, b, c});
             }
             break;
@@ -101,43 +104,49 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 script << OP_2OVER;
                 const Bytes a{stack[stack.size() - 4]};
                 const Bytes b{stack[stack.size() - 3]};
-                cost += CopyCost(a.size()) + CopyCost(b.size());
+                cost += CopyingCost({a.size(), b.size()});
                 stack.insert(stack.end(), {a, b});
             }
             break;
         case 9:
             if (stack.size() >= 2) {
                 script << OP_NIP;
+                cost += F();
                 stack.erase(stack.end() - 2);
             }
             break;
         case 10:
             if (stack.size() >= 3) {
                 script << OP_ROT;
+                cost += MovingCost(3);
                 std::rotate(stack.end() - 3, stack.end() - 2, stack.end());
             }
             break;
         case 11:
             if (stack.size() >= 2) {
                 script << OP_SWAP;
+                cost += MovingCost(2);
                 std::swap(stack[stack.size() - 2], stack.back());
             }
             break;
         case 12:
             if (stack.size() >= 6) {
                 script << OP_2ROT;
+                cost += MovingCost(6);
                 std::rotate(stack.end() - 6, stack.end() - 4, stack.end());
             }
             break;
         case 13:
             if (stack.size() >= 4) {
                 script << OP_2SWAP;
+                cost += MovingCost(4);
                 std::rotate(stack.end() - 4, stack.end() - 2, stack.end());
             }
             break;
         case 14:
             if (!stack.empty()) {
                 script << OP_TOALTSTACK;
+                cost += MovingCost(1);
                 altstack.push_back(std::move(stack.back()));
                 stack.pop_back();
             }
@@ -145,6 +154,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
         case 15:
             if (!altstack.empty()) {
                 script << OP_FROMALTSTACK;
+                cost += MovingCost(1);
                 stack.push_back(std::move(altstack.back()));
                 altstack.pop_back();
             }
@@ -152,11 +162,13 @@ void RunStackProgram(FuzzedDataProvider& provider)
         case 16:
             if (!stack.empty()) {
                 script << OP_SIZE;
+                cost += F() + ScalarCost();
                 stack.push_back(ToLittleEndian(stack.back().size()));
             }
             break;
         case 17:
             script << OP_DEPTH;
+            cost += F() + ScalarCost();
             stack.push_back(ToLittleEndian(stack.size()));
             break;
         case 18:
@@ -175,7 +187,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 const opcodetype opcode{provider.ConsumeBool() ? OP_NOT : OP_0NOTEQUAL};
                 script << opcode;
                 const bool nonzero{ContainsNonZero(stack.back())};
-                cost += CompareZeroCost(stack.back().size());
+                cost += ZeroTestCost(stack.back().size());
                 stack.back() = (opcode == OP_NOT ? !nonzero : nonzero) ? Bytes{1} : Bytes{};
             }
             break;
@@ -183,7 +195,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
             if (!stack.empty()) {
                 script << OP_IFDUP;
                 const Bytes value{stack.back()};
-                cost += CompareZeroCost(value.size()) + CopyCost(value.size());
+                cost += IfdupCost(value.size(), ContainsNonZero(value));
                 if (ContainsNonZero(value)) stack.push_back(value);
             }
             break;
@@ -199,12 +211,12 @@ void RunStackProgram(FuzzedDataProvider& provider)
                 script << encoded << opcode;
                 const size_t index{stack.size() - 1 - depth};
                 const Bytes value{stack[index]};
-                cost += LengthCost(encoded.size());
+                cost += CopyingCost({encoded.size()});
                 if (opcode == OP_PICK) {
-                    cost += CopyCost(value.size());
+                    cost += PickCost(encoded.size(), value.size());
                     stack.push_back(value);
                 } else {
-                    cost += depth * COST_ROLL;
+                    cost += RollCost(encoded.size(), depth);
                     stack.erase(stack.begin() + index);
                     stack.push_back(value);
                 }
@@ -215,6 +227,7 @@ void RunStackProgram(FuzzedDataProvider& provider)
 
     while (!altstack.empty()) {
         script << OP_FROMALTSTACK;
+        cost += MovingCost(1);
         stack.push_back(std::move(altstack.back()));
         altstack.pop_back();
     }

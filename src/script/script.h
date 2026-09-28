@@ -50,6 +50,9 @@ static constexpr int MAX_TAPSCRIPT_V2_STACK_SIZE = 32'768;
 // and limits all stack and altstack elements to 8,000,000 bytes in total.
 static constexpr int MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE = 4'000'000;
 static constexpr int MAX_TAPSCRIPT_V2_TOTAL_STACK_SIZE = 2 * MAX_TAPSCRIPT_V2_STACK_ELEMENT_SIZE;
+// Maximum size of a Tapscript v2 script after unrolling its macro references
+// (reusable macros draft)
+static constexpr uint64_t MAX_TAPSCRIPT_V2_UNROLLED_SIZE = 4'000'000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
@@ -218,7 +221,7 @@ enum opcodetype
     // Opcode added by BIP 342 (Tapscript)
     OP_CHECKSIGADD = 0xba,
 
-    // Opcodes proposed by the covenant-support-opcodes draft.
+    // Opcodes proposed by the reusable macros draft.
     OP_MACRO = 0xbb,
     OP_CALLMACRO = 0xbc,
 
