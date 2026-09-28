@@ -43,6 +43,14 @@ enum UseImplementation : uint8_t {
  */
 std::string SHA256AutoDetect(sha256_implementation::UseImplementation use_implementation = sha256_implementation::USE_ALL);
 
+/** Apply the SHA-256 compression function to consecutive 64-byte chunks,
+ *  using the implementation selected by SHA256AutoDetect.
+ *  state:   the eight 32-bit state words, updated in place
+ *  chunks:  pointer to a blocks*64 byte input buffer
+ *  blocks:  the number of chunks to compress.
+ */
+void SHA256Transform(uint32_t* state, const unsigned char* chunks, size_t blocks);
+
 /** Compute multiple double-SHA256's of 64-byte blobs.
  *  output:  pointer to a blocks*32 byte output buffer
  *  input:   pointer to a blocks*64 byte input buffer

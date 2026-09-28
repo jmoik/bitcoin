@@ -5,10 +5,12 @@
 #include <key.h>
 
 #include <common/system.h>
+#include <crypto/sha256.h>
 #include <key_io.h>
 #include <span.h>
 #include <streams.h>
 #include <secp256k1_extrakeys.h>
+#include <secp256k1_schnorrsig.h>
 #include <test/util/common.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
@@ -393,6 +395,34 @@ BOOST_AUTO_TEST_CASE(key_schnorr_tweak_smoke_test)
     BOOST_CHECK_EQUAL(tweak_old, tweak_new);
 
     secp256k1_context_destroy(secp256k1_context_sign);
+}
+
+BOOST_AUTO_TEST_CASE(schnorr_variable_length_messages)
+{
+    // Signing hashes with libsecp256k1's own SHA256; verification uses Core's
+    // accelerated compression. Cover every padding boundary and multi-block messages.
+    SHA256AutoDetect();
+    secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
+    CKey key;
+    key.MakeNewKey(true);
+    secp256k1_keypair keypair;
+    BOOST_REQUIRE(secp256k1_keypair_create(ctx, &keypair, UCharCast(key.begin())));
+    const XOnlyPubKey pubkey{key.GetPubKey()};
+
+    std::vector<size_t> sizes{1000, 100'000};
+    for (size_t size{0}; size <= 200; ++size) sizes.push_back(size);
+    for (const size_t size : sizes) {
+        std::vector<unsigned char> msg(size);
+        for (size_t i{0}; i < size; ++i) msg[i] = static_cast<unsigned char>(i * 7 + size);
+        unsigned char sig[64];
+        BOOST_REQUIRE(secp256k1_schnorrsig_sign_custom(ctx, sig, msg.data(), msg.size(), &keypair, nullptr));
+        BOOST_CHECK(pubkey.VerifySchnorr(msg, sig));
+        if (size > 0) {
+            msg[size / 2] ^= 1;
+            BOOST_CHECK(!pubkey.VerifySchnorr(msg, sig));
+        }
+    }
+    secp256k1_context_destroy(ctx);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
