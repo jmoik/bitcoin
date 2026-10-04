@@ -310,6 +310,37 @@ BOOST_AUTO_TEST_CASE(byterev_kernel)
     }
 }
 
+BOOST_AUTO_TEST_CASE(leaf_signing)
+{
+    const CKey key{GenerateRandomKey()};
+    const CScript leaf_script{CScript{} << ToByteVector(XOnlyPubKey{key.GetPubKey()}) << OP_CHECKSIG};
+    TaprootBuilder builder;
+    builder.Add(0, leaf_script, TAPROOT_LEAF_0XC2, /*track=*/true);
+    builder.Finalize(XOnlyPubKey::NUMS_H);
+    const WitnessV1Taproot output{builder.GetOutput()};
+    const CTxOut spent_output{100'000, GetScriptForDestination(output)};
+
+    CMutableTransaction tx;
+    tx.version = 2;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    tx.vout.emplace_back(50'000, CScript{} << OP_TRUE);
+    const std::map<COutPoint, Coin> coins{{tx.vin[0].prevout, Coin{spent_output, 1, /*fCoinBaseIn=*/false}}};
+
+    // Without the key, the input stays unsigned.
+    FlatSigningProvider provider;
+    provider.tr_trees.emplace(output, builder);
+    std::map<int, bilingual_str> input_errors;
+    BOOST_CHECK(!SignTransaction(tx, &provider, coins, SignOptions{SIGHASH_DEFAULT}, input_errors));
+    BOOST_CHECK(tx.vin[0].scriptWitness.IsNull());
+
+    // With it, the leaf is signed, and SignTransaction verifies the spend.
+    provider.keys.emplace(key.GetPubKey().GetID(), key);
+    input_errors.clear();
+    BOOST_CHECK(SignTransaction(tx, &provider, coins, SignOptions{SIGHASH_DEFAULT}, input_errors));
+    BOOST_CHECK(input_errors.empty());
+    BOOST_CHECK_EQUAL(tx.vin[0].scriptWitness.stack.size(), 3U);
+}
+
 BOOST_AUTO_TEST_CASE(psbt_verification_sees_finalized_witnesses)
 {
     // OP_TX pushes the current input's witness item count, which is zero in the
