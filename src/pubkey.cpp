@@ -5,6 +5,7 @@
 
 #include <pubkey.h>
 
+#include <crypto/sha256.h>
 #include <hash.h>
 #include <secp256k1.h>
 #include <secp256k1_ellswift.h>
@@ -29,6 +30,19 @@ struct Secp256k1SelfTester
         secp256k1_selftest();
     }
 } SECP256K1_SELFTESTER;
+
+/** Schnorr verification context whose SHA256 (the BIP 340 challenge hash) uses
+ *  SHA256Transform instead of libsecp256k1's portable implementation. */
+const secp256k1_context* SchnorrVerifyContext()
+{
+    static const secp256k1_context* const ctx{[] {
+        secp256k1_context* ctx{secp256k1_context_create(SECP256K1_CONTEXT_NONE)};
+        assert(ctx);
+        secp256k1_context_set_sha256_compression(ctx, SHA256Transform);
+        return ctx;
+    }()};
+    return ctx;
+}
 
 } // namespace
 
@@ -246,7 +260,7 @@ bool XOnlyPubKey::VerifySchnorr(std::span<const unsigned char> msg, std::span<co
     assert(sigbytes.size() == 64);
     secp256k1_xonly_pubkey pubkey;
     if (!secp256k1_xonly_pubkey_parse(secp256k1_context_static, &pubkey, m_keydata.data())) return false;
-    return secp256k1_schnorrsig_verify(secp256k1_context_static, sigbytes.data(), msg.data(), msg.size(), &pubkey);
+    return secp256k1_schnorrsig_verify(SchnorrVerifyContext(), sigbytes.data(), msg.data(), msg.size(), &pubkey);
 }
 
 static const HashWriter HASHER_TAPTWEAK{TaggedHash("TapTweak")};
