@@ -271,7 +271,8 @@ public:
     bool VerifySchnorr(const uint256& msg, std::span<const unsigned char> sigbytes) const;
 
     /** Verify a Schnorr signature over a message of any length (BIP 340), as
-     * OP_CHECKSIGFROMSTACK does.
+     * OP_CHECKSIGFROMSTACK does. The challenge hash runs on Core's SHA256
+     * (SHA256Transform), not libsecp256k1's portable one.
      *
      * sigbytes must be exactly 64 bytes.
      */
